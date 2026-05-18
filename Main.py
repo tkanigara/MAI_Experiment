@@ -9,7 +9,14 @@ from tools import (
     get_sample_data,
     build_kpi_report_data,
 )
+import json
 import re
+import sys
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 SYSTEM_PROMPT = """
 You are an AI KPI and Business Intelligence Assistant.
@@ -424,55 +431,135 @@ def execute_tool(action_type, args):
     return f"ERROR: Unknown tool '{action_type}'"
 
 
+def _shorten_text(value, max_length=160):
+    text = str(value).replace("\n", " ").replace("\r", " ").strip()
+    if len(text) <= max_length:
+        return text
+    return text[:max_length].rstrip() + "..."
 
-while True:
 
-    user_input = input("\nYou: ")
+def _format_kpi_report_observation(report):
+    """Ringkas hasil BUILD_KPI_REPORT supaya request kedua ke LLM tidak kegedean."""
+    if not isinstance(report, dict):
+        return str(report)
 
-    if user_input.lower() == "exit":
-        break
+    if "error" in report:
+        return f"ERROR: {report['error']}"
 
-    messages.append({
-        "role": "user",
-        "content": user_input
-    })
+    overview = report.get("dataset_overview", {})
+    kpi_summary = report.get("kpi_summary", {})
+    sample_data = report.get("sample_data", [])
 
-    max_iterations = 8
-    for step in range(max_iterations):
+    lines = [
+        "KPI_REPORT_DATA",
+        f"Rows: {overview.get('total_rows')}",
+        f"Columns count: {overview.get('total_columns')}",
+        f"Columns: {', '.join(overview.get('columns', []))}",
+        "",
+        "KPI Summary:",
+    ]
 
-        print(f"\n================ STEP {step + 1} ================")
+    # ID terlihat numeric oleh pandas, tapi bukan KPI bisnis. Skip agar report tidak aneh.
+    ignored_columns = {"id", "post_id", "media_id"}
+    for column, stats in kpi_summary.items():
+        if column.lower() in ignored_columns:
+            continue
+        if not isinstance(stats, dict):
+            lines.append(f"- {column}: {stats}")
+            continue
+        lines.append(
+            "- "
+            f"{column}: total={stats.get('total')}, "
+            f"avg={stats.get('average')}, "
+            f"min={stats.get('minimum')}, "
+            f"max={stats.get('maximum')}"
+        )
 
-        try:
-            assistant_output = call_llm(messages)
-        except Exception as e:
-            print("\n[LLM ERROR]")
-            print(str(e))
+    if sample_data:
+        lines.extend(["", "Sample rows:"])
+        for index, row in enumerate(sample_data[:3], start=1):
+            compact_row = {
+                key: _shorten_text(value, 80)
+                for key, value in row.items()
+                if key
+                in {
+                    "timestamp",
+                    "created_time",
+                    "media_type",
+                    "media_product_type",
+                    "caption",
+                    "message",
+                    "insight_reach",
+                    "insight_views",
+                    "insight_total_interactions",
+                    "like_count",
+                    "comments_count",
+                }
+            }
+            lines.append(f"{index}. {json.dumps(compact_row, ensure_ascii=False)}")
+
+    return "\n".join(lines)
+
+
+def format_tool_result(action_type, tool_result):
+    if action_type == "BUILD_KPI_REPORT":
+        return _format_kpi_report_observation(tool_result)
+
+    if isinstance(tool_result, (dict, list)):
+        return json.dumps(tool_result, ensure_ascii=False, indent=2)[:4000]
+
+    return str(tool_result)[:4000]
+
+
+
+def main():
+    while True:
+        user_input = input("\nYou: ")
+
+        if user_input.lower() == "exit":
             break
-
-        print("\n[LLM OUTPUT]")
-        print(assistant_output)
 
         messages.append({
-            "role": "assistant",
-            "content": assistant_output
+            "role": "user",
+            "content": user_input
         })
 
-        action_type, action_args = parse_action(assistant_output)
+        max_iterations = 8
+        for step in range(max_iterations):
+            print(f"\n================ STEP {step + 1} ================")
 
-        if not action_type:
-            print("\nAssistant:")
+            try:
+                assistant_output = call_llm(messages)
+            except Exception as e:
+                print("\n[LLM ERROR]")
+                print(str(e))
+                break
+
+            print("\n[LLM OUTPUT]")
             print(assistant_output)
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-            break
 
-        print(f"\n[TOOL EXECUTION] {action_type}({action_args})")
+            messages.append({
+                "role": "assistant",
+                "content": assistant_output
+            })
 
-        tool_result = execute_tool(action_type, action_args or {})
+            action_type, action_args = parse_action(assistant_output)
 
-        observation = f"""
+            if not action_type:
+                print("\nAssistant:")
+                print(assistant_output)
+                messages[:] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                break
+
+            print(f"\n[TOOL EXECUTION] {action_type}({action_args})")
+
+            tool_result = execute_tool(action_type, action_args or {})
+            compact_tool_result = format_tool_result(action_type, tool_result)
+
+            observation = f"""
 OBSERVATION:
 
-{tool_result}
+{compact_tool_result}
 
 Tool execution completed.
 
@@ -483,13 +570,17 @@ IMPORTANT:
 - NEVER hallucinate
 """
 
-        print("\n[OBSERVATION]")
-        print(observation)
+            print("\n[OBSERVATION]")
+            print(observation)
 
-        messages.append({
-            "role": "user",
-            "content": observation
-        })
+            messages.append({
+                "role": "user",
+                "content": observation
+            })
 
-    else:
-        print("\n[WARNING] Max iterations reached.")
+        else:
+            print("\n[WARNING] Max iterations reached.")
+
+
+if __name__ == "__main__":
+    main()

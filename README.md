@@ -28,6 +28,11 @@ META_ACCESS_TOKEN=isi_token_meta_di_sini
 IG_BUSINESS_ID=isi_instagram_business_id_di_sini
 FB_PAGE_ID=isi_facebook_page_id_di_sini
 META_API_VERSION=v23.0
+
+HF_API_KEY=isi_token_huggingface_di_sini
+HF_MODEL=meta-llama/Meta-Llama-3-8B-Instruct
+HF_PROVIDER=auto
+HF_MAX_TOKENS=700
 ```
 
 Catatan:
@@ -36,8 +41,29 @@ Catatan:
 - `IG_BUSINESS_ID` dipakai untuk export Instagram.
 - `FB_PAGE_ID` dipakai untuk export Facebook.
 - `META_API_VERSION` boleh diganti kalau versi API yang dipakai berbeda.
+- `HF_API_KEY` dipakai prototype KPI report di `Main.py`.
+- `HF_MODEL` adalah model Hugging Face yang dipakai untuk chat.
+- `HF_PROVIDER` default `auto`, bisa diganti kalau provider tertentu diperlukan.
+- `HF_MAX_TOKENS` mengatur panjang maksimal jawaban LLM.
 
 Script akan membaca `.env` otomatis saat dijalankan.
+
+## Test Prototype KPI Report
+
+Prototype KPI report dijalankan lewat terminal:
+
+```powershell
+python .\Main.py
+```
+
+Contoh prompt:
+
+```text
+buatkan KPI report dari instagram_media_20260513_105532.csv
+```
+
+Kalau berhasil, report akan muncul sebagai jawaban chat di terminal. Prototype ini
+belum menyimpan hasil report ke file.
 
 ## Cek Token dan ID
 
@@ -203,3 +229,20 @@ Metric kosong atau muncul di `metric_errors`
 
 Biasanya karena permission token kurang, metric tidak tersedia untuk jenis media
 tersebut, atau nama metric sudah berubah di versi Meta API yang sedang dipakai.
+
+`[LLM ERROR] Bad request`
+
+Artinya request ke Hugging Face gagal sebelum tool CSV dijalankan. Kemungkinan:
+
+- `HF_API_KEY` salah atau sudah tidak aktif;
+- token belum punya akses ke model yang dipakai;
+- nama `HF_MODEL` tidak cocok;
+- provider Hugging Face tidak mendukung model tersebut untuk chat completion;
+- response model terlalu panjang atau request melebihi limit.
+
+Langkah cek:
+
+1. Pastikan `.env` punya `HF_API_KEY`.
+2. Pastikan akun Hugging Face punya akses ke model di `HF_MODEL`.
+3. Coba ganti `HF_PROVIDER=auto`.
+4. Coba turunkan `HF_MAX_TOKENS=300` kalau request terlalu besar.
