@@ -65,6 +65,96 @@ buatkan KPI report dari instagram_media_20260513_105532.csv
 Kalau berhasil, report akan muncul sebagai jawaban chat di terminal. Prototype ini
 belum menyimpan hasil report ke file.
 
+## Contoh Generate Google Slides
+
+File `generate_slides_example.py` adalah contoh awal untuk mengisi Google Slides
+template dari CSV Instagram.
+
+Flow script:
+
+```text
+CSV Instagram
+-> hitung KPI sederhana
+-> buat mapping {{PLACEHOLDER}}
+-> copy Google Slides template
+-> replace placeholder di file copy
+```
+
+Template default yang dipakai:
+
+```text
+https://docs.google.com/presentation/d/1ZeYnxJOVIjjEbHqa6BJBh30JE3m2SVQuyEcOu4WaiMY/edit?usp=sharing
+```
+
+Tes mapping tanpa akses Google:
+
+```powershell
+python .\generate_slides_example.py --dry-run
+```
+
+Tes dengan CSV tertentu:
+
+```powershell
+python .\generate_slides_example.py --dry-run --csv .\data\processed\instagram_media_20260513_105532.csv
+```
+
+Tes dengan media CSV dan account CSV tertentu:
+
+```powershell
+python .\generate_slides_example.py --dry-run --csv .\data\processed\instagram_media_YYYYMMDD_HHMMSS.csv --account-csv .\data\processed\instagram_account_YYYYMMDD_HHMMSS.csv
+```
+
+Untuk benar-benar membuat Google Slides baru, pakai OAuth user login:
+
+1. Buat OAuth Client ID di Google Cloud.
+2. Download file OAuth credential.
+3. Simpan sebagai `credentials.json` di folder project, atau set path-nya di `.env`.
+4. Jalankan script.
+5. Browser akan terbuka untuk login Google.
+6. Setelah login berhasil, script otomatis membuat `token.json`.
+
+Contoh `.env`:
+
+```env
+GOOGLE_CREDENTIALS_FILE=credentials.json
+GOOGLE_TOKEN_FILE=token.json
+REPORT_CLIENT_NAME=Demo Client
+REPORT_AGENCY_NAME=MAI
+REPORT_PERIOD=May 2026 Week 2
+IG_REACH_TARGET_MONTH=10000
+IG_REACH_TARGET_YEAR=120000
+```
+
+Generate report:
+
+```powershell
+python .\generate_slides_example.py
+```
+
+Kalau berhasil, terminal akan menampilkan link Google Slides baru.
+
+Catatan OAuth:
+
+- `credentials.json` berasal dari Google Cloud Console.
+- `token.json` tidak didownload manual. File ini dibuat otomatis setelah login pertama.
+- Kalau credential kamu bertipe `web`, pastikan Authorized redirect URI berisi:
+
+```text
+http://localhost:8080/
+```
+
+- Kalau muncul `redirect_uri_mismatch`, tambahkan URI di atas atau buat OAuth Client ID tipe Desktop App.
+- `credentials.json` dan `token.json` sudah masuk `.gitignore`.
+
+Catatan: prototype ini baru replace text placeholder. Untuk image placeholder
+seperti `{{TOP_POST_1_IMAGE}}`, script sementara mengisi URL gambar. Tahap
+berikutnya bisa dikembangkan menjadi insert image langsung ke posisi placeholder.
+
+Placeholder script ini sudah disesuaikan dengan template PDF `Social Media KPI
+Report - Template.pdf`. Data yang bisa dihitung dari CSV Instagram akan diisi,
+sedangkan bagian yang belum punya data seperti demographics, competitor, YouTube,
+TikTok, web, SEO, dan ads akan diisi `-` atau teks prototype.
+
 ## Cek Token dan ID
 
 Jalankan ini dulu sebelum export data:
@@ -96,11 +186,16 @@ python .\meta_export.py --platform instagram --limit 25
 Output:
 
 ```text
+data/processed/instagram_account_YYYYMMDD_HHMMSS.csv
 data/processed/instagram_media_YYYYMMDD_HHMMSS.csv
+data/processed/instagram_account_daily.csv
 ```
 
 Data yang dicoba diambil:
 
+- account profile: username, followers count, follows count, media count;
+- account-level insight seperti reach, views/impressions, profile views, website clicks, accounts engaged, total interactions jika tersedia;
+- audience demographics jika tersedia dari Meta API;
 - id media;
 - caption;
 - timestamp;
@@ -113,6 +208,12 @@ Data yang dicoba diambil:
 
 Tidak semua metric pasti tersedia. Kalau Meta menolak metric tertentu, error-nya
 akan disimpan di kolom `metric_errors`.
+
+Catatan:
+
+- `instagram_account_*.csv` dipakai untuk mengisi placeholder seperti `{{IG_TOTAL_FOLLOWERS}}`.
+- `instagram_account_daily.csv` menyimpan snapshot harian agar nanti bisa menghitung growth.
+- Demographics bisa tetap kosong jika Meta tidak mengembalikan data karena permission, threshold privacy, atau metric tidak tersedia untuk akun tersebut.
 
 ## Export Facebook
 

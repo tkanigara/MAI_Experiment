@@ -3,3 +3,5 @@ data/
 *.pyc
 __pycache__/
 venv/
+credentials.json
+token.json

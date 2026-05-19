@@ -188,6 +188,26 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
+def upsert_csv_row(path, row, key_columns):
+    """Append/update CSV kecil untuk snapshot historis harian.
+
+    Dipakai untuk `instagram_account_daily.csv`, supaya follower count dan
+    account-level KPI bisa dibandingkan antar hari/bulan di tahap berikutnya.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    if path.exists() and path.stat().st_size > 0:
+        with path.open("r", newline="", encoding="utf-8-sig") as file:
+            rows = list(csv.DictReader(file))
+
+    def same_key(existing):
+        return all(str(existing.get(key, "")) == str(row.get(key, "")) for key in key_columns)
+
+    rows = [existing for existing in rows if not same_key(existing)]
+    rows.append(row)
+    write_csv(path, rows)
+
+
 def diagnose(client, fb_page_id=None, ig_business_id=None):
     """Cek token dan ID yang diberikan bisa akses data apa saja."""
     checks = []
@@ -270,6 +290,105 @@ def diagnose(client, fb_page_id=None, ig_business_id=None):
             checks.append({"check": "ig_business_id", "ok": False, "error": str(exc)})
 
     return checks
+
+
+def fetch_instagram_demographic(client, ig_business_id, metric, breakdown):
+    """Coba ambil demographic insight.
+
+    Endpoint demographic IG cukup sensitif ke permission, threshold, dan versi
+    API. Kalau tidak tersedia, error disimpan ke CSV tanpa menggagalkan export.
+    """
+    return client.get(
+        f"{ig_business_id}/insights",
+        {
+            "metric": metric,
+            "period": "lifetime",
+            "metric_type": "total_value",
+            "breakdown": breakdown,
+        },
+    )
+
+
+def export_instagram_account(client, ig_business_id, since=None, until=None):
+    print("Instagram: mengambil account profile dan account-level insights...", flush=True)
+    snapshot_time = datetime.now(timezone.utc).isoformat()
+    snapshot_date = snapshot_time[:10]
+
+    profile = client.get(
+        ig_business_id,
+        {
+            "fields": (
+                "id,username,name,biography,followers_count,"
+                "follows_count,media_count,profile_picture_url"
+            )
+        },
+    )
+
+    # Metric account-level yang umum dipakai untuk report. Tidak semua akun/token
+    # punya akses ke semua metric, jadi tetap memakai fallback per metric.
+    account_metric_candidates = [
+        "reach",
+        "impressions",
+        "views",
+        "profile_views",
+        "website_clicks",
+        "accounts_engaged",
+        "total_interactions",
+        "likes",
+        "comments",
+        "shares",
+        "saves",
+        "follower_count",
+    ]
+    metrics, errors = fetch_supported_metrics(
+        client,
+        ig_business_id,
+        account_metric_candidates,
+        period="day",
+        since=since,
+        until=until,
+    )
+
+    demographic_payloads = {}
+    for key, metric, breakdown in [
+        ("demographic_age_gender", "follower_demographics", "age,gender"),
+        ("demographic_city", "follower_demographics", "city"),
+        ("reached_demographic_age_gender", "reached_audience_demographics", "age,gender"),
+        ("reached_demographic_city", "reached_audience_demographics", "city"),
+    ]:
+        try:
+            demographic_payloads[key] = fetch_instagram_demographic(
+                client,
+                ig_business_id,
+                metric,
+                breakdown,
+            )
+        except MetaApiError as exc:
+            errors[key] = str(exc)
+
+    row = {
+        "platform": "instagram",
+        "object_level": "account",
+        "snapshot_date": snapshot_date,
+        "snapshot_time": snapshot_time,
+        "id": profile.get("id", ""),
+        "username": profile.get("username", ""),
+        "name": profile.get("name", ""),
+        "biography": clean_text(profile.get("biography")),
+        "followers_count": profile.get("followers_count", ""),
+        "follows_count": profile.get("follows_count", ""),
+        "media_count": profile.get("media_count", ""),
+        "profile_picture_url": profile.get("profile_picture_url", ""),
+        "metric_errors": json.dumps(errors, ensure_ascii=False, sort_keys=True),
+    }
+    row.update({f"insight_{key}": value for key, value in metrics.items()})
+    row.update(
+        {
+            f"raw_{key}": json.dumps(value, ensure_ascii=False, sort_keys=True)
+            for key, value in demographic_payloads.items()
+        }
+    )
+    return [row]
 
 
 def export_instagram(client, ig_business_id, limit, since=None, until=None):
@@ -454,6 +573,21 @@ def main():
             if not ig_business_id:
                 print("Skip Instagram: IG_BUSINESS_ID is not set.", file=sys.stderr)
             else:
+                account_rows = export_instagram_account(
+                    client,
+                    ig_business_id,
+                    args.since,
+                    args.until,
+                )
+                account_path = output_dir / f"instagram_account_{run_stamp}.csv"
+                write_csv(account_path, account_rows)
+                exported.append(account_path)
+                upsert_csv_row(
+                    output_dir / "instagram_account_daily.csv",
+                    account_rows[0],
+                    key_columns=["id", "snapshot_date"],
+                )
+
                 rows = export_instagram(client, ig_business_id, args.limit, args.since, args.until)
                 path = output_dir / f"instagram_media_{run_stamp}.csv"
                 write_csv(path, rows)
