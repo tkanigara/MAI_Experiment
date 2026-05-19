@@ -65,6 +65,58 @@ buatkan KPI report dari instagram_media_20260513_105532.csv
 Kalau berhasil, report akan muncul sebagai jawaban chat di terminal. Prototype ini
 belum menyimpan hasil report ke file.
 
+## Test Agentic Slides Generator
+
+Folder `agentic/` adalah prototype agent berbasis LangGraph/LangChain. Agent ini
+sekarang punya tool:
+
+```text
+generate_google_slides_report
+```
+
+Tool tersebut akan memanggil pipeline Google Slides yang sama dengan
+`generate_slides_example.py`. Insight dan recommendation akan dibuat dengan
+Gemini jika `GOOGLE_API_KEY` tersedia.
+
+Pastikan `.env` punya:
+
+```env
+GOOGLE_API_KEY=isi_google_gemini_api_key_di_sini
+GEMINI_MODEL=gemini-2.5-flash
+GOOGLE_CREDENTIALS_FILE=credentials.json
+GOOGLE_TOKEN_FILE=token.json
+```
+
+Jalankan agent:
+
+```powershell
+python .\agentic\orchestration.py
+```
+
+Contoh prompt:
+
+```text
+generate google slides report dari data instagram terbaru untuk client Demo Client periode May 2026
+```
+
+Preview tanpa membuat Slides baru:
+
+```text
+preview mapping google slides report dari data instagram terbaru
+```
+
+Untuk mematikan AI insight dan memakai teks fallback template:
+
+```powershell
+python .\generate_slides_example.py --dry-run --no-ai-insights
+```
+
+Kalau dependency belum ada:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
 ## Contoh Generate Google Slides
 
 File `generate_slides_example.py` adalah contoh awal untuk mengisi Google Slides

@@ -1,5 +1,11 @@
 from brain import llm
-from tools import list_csv_files, build_kpi_report, compare_target_vs_actual, get_top_performers
+from tools import (
+    list_csv_files,
+    build_kpi_report,
+    compare_target_vs_actual,
+    get_top_performers,
+    generate_google_slides_report,
+)
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode, create_react_agent
@@ -12,12 +18,14 @@ discovery_files_tools = list_csv_files
 build_kpi_report_tools = build_kpi_report
 kpi_achievement_tools= compare_target_vs_actual
 top_performance_tools = get_top_performers
+generate_google_slides_report_tools = generate_google_slides_report
 
 TOOLS = [
     discovery_files_tools,
     build_kpi_report_tools,
     kpi_achievement_tools,
-    top_performance_tools
+    top_performance_tools,
+    generate_google_slides_report_tools,
 ]
 
 #Initialization  Graph with state
@@ -70,6 +78,21 @@ utility: Ranking analysis, Comparative Analytics, Business Intelligence
 
 Arguments:filename: str, category_column, value_column, top_n
 
+5) Tool name:
+generate_google_slides_report
+
+Description: Generate a Google Slides social media KPI report from Instagram CSV data.
+
+Utility: Copy Google Slides template, calculate Instagram KPIs, replace template placeholders, and return the generated presentation URL.
+
+Arguments:
+- csv_filename: str, optional. Use a file from data/processed. If empty, newest Instagram media CSV is used.
+- account_csv_filename: str, optional. If empty, newest Instagram account CSV is used when available.
+- client_name: str
+- report_period: str
+- dry_run: bool. Use true to preview mapping without creating a new Slides file.
+- use_ai_insights: bool. Use true to generate insight and recommendation text with Gemini.
+
 
 ============================
 RULES
@@ -78,6 +101,9 @@ RULES
 2. Great in planning to take step by step and use the tools and have nice reasoning
 3. Never use your own knowledge
 4. Never Hallucinations
+5. If the user asks to generate/create/fill Google Slides, use generate_google_slides_report.
+6. If the user only wants to preview slide data, call generate_google_slides_report with dry_run=true.
+7. For slide reports, use_ai_insights should be true unless the user explicitly asks for template-only text.
 
 """
 #Initialization Graph nodes

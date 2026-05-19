@@ -25,6 +25,29 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+AI_PLACEHOLDER_KEYS = {
+    "ig_reach_insight_summary": "{{IG_REACH_INSIGHT_SUMMARY}}",
+    "ig_performance_insight": "{{IG_PERFORMANCE_INSIGHT}}",
+    "engagement_trend_text": "{{ENGAGEMENT_TREND_TEXT}}",
+    "benchmark_note": "{{BENCHMARK_NOTE}}",
+    "top_content_success_driver": "{{TOP_CONTENT_SUCCESS_DRIVER}}",
+    "content_type_insight": "{{CONTENT_TYPE_INSIGHT}}",
+    "competitor_strategy_insight": "{{COMPETITOR_STRATEGY_INSIGHT}}",
+    "summary_point_1": "{{SUMMARY_POINT_1}}",
+    "summary_point_2": "{{SUMMARY_POINT_2}}",
+    "summary_point_3": "{{SUMMARY_POINT_3}}",
+    "summary_point_4": "{{SUMMARY_POINT_4}}",
+    "recommendation_1": "{{RECOMMENDATION_1}}",
+    "recommendation_2": "{{RECOMMENDATION_2}}",
+    "recommendation_3": "{{RECOMMENDATION_3}}",
+    "ai_insight_1": "{{AI_INSIGHT_1}}",
+    "ai_insight_2": "{{AI_INSIGHT_2}}",
+    "ai_insight_3": "{{AI_INSIGHT_3}}",
+    "ai_recommendation_1": "{{AI_RECOMMENDATION_1}}",
+    "ai_recommendation_2": "{{AI_RECOMMENDATION_2}}",
+    "ai_recommendation_3": "{{AI_RECOMMENDATION_3}}",
+}
+
 
 def extract_presentation_id(value):
     """Ambil presentation ID dari URL Google Slides atau ID polos."""
@@ -53,6 +76,25 @@ def number(value):
         return float(value)
     except (TypeError, ValueError):
         return 0
+
+
+def json_safe(value):
+    """Convert pandas/numpy values into JSON-serializable Python values."""
+    if isinstance(value, dict):
+        return {str(key): json_safe(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(child) for child in value]
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
 
 
 def fmt_number(value):
@@ -417,6 +459,115 @@ def blank_template_defaults():
     return {f"{{{{{name}}}}}": "-" for name in placeholders}
 
 
+def compact_kpi_for_ai(kpi, client_name, report_period):
+    account = kpi.get("account", {})
+    top_posts = []
+    for post in kpi.get("top_posts", [])[:3]:
+        top_posts.append(
+            {
+                "caption": str(post.get("caption", ""))[:220],
+                "reach": number(post.get("reach", 0)),
+                "views": number(post.get("views", 0)),
+                "interactions": number(post.get("interactions", 0)),
+                "engagement_rate": round(
+                    safe_divide_percent(post.get("interactions", 0), post.get("reach", 0)),
+                    2,
+                ),
+            }
+        )
+
+    return json_safe({
+        "client_name": client_name,
+        "report_period": report_period,
+        "instagram": {
+            "followers_count": account.get("followers_count", 0),
+            "total_posts": kpi.get("total_posts", 0),
+            "total_reach": kpi.get("total_reach", 0),
+            "total_views": kpi.get("total_views", 0),
+            "total_interactions": kpi.get("total_interactions", 0),
+            "total_likes": kpi.get("total_likes", 0),
+            "total_comments": kpi.get("total_comments", 0),
+            "total_shares": kpi.get("total_shares", 0),
+            "total_saved": kpi.get("total_saved", 0),
+            "average_engagement_rate": round(kpi.get("avg_engagement_rate", 0), 2),
+            "post_type_counts": kpi.get("post_type_counts", {}),
+            "content_type_summary": kpi.get("content_type_summary", {}),
+            "monthly_rows": kpi.get("monthly_rows", []),
+            "top_posts": top_posts,
+        },
+    })
+
+
+def extract_json_object(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"```$", "", text).strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        raise ValueError("AI response does not contain a JSON object.")
+    return json.loads(match.group(0))
+
+
+def generate_ai_insights(kpi, client_name, report_period):
+    """Minta Gemini menulis insight/recommendation dalam JSON terstruktur."""
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return {}
+
+    import google.generativeai as genai
+
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+    kpi_payload = compact_kpi_for_ai(kpi, client_name, report_period)
+
+    prompt = f"""
+You are a senior social media analyst for a digital marketing agency.
+
+Create concise, client-ready insights and recommendations for a Google Slides
+social media KPI report. Use ONLY the KPI data below. Do not invent metrics,
+benchmarks, competitors, demographics, or paid ads data.
+
+Return ONLY valid JSON with exactly these keys:
+{json.dumps(list(AI_PLACEHOLDER_KEYS.keys()), ensure_ascii=False)}
+
+Rules:
+- Indonesian language.
+- Professional but concise.
+- Each value must be a string.
+- Each summary/recommendation should fit inside a slide text box.
+- Mention concrete numbers when useful.
+- If competitor/benchmark data is unavailable, say that it needs additional data.
+- Do not use Markdown bullets.
+
+KPI_DATA:
+{json.dumps(kpi_payload, ensure_ascii=False, indent=2)}
+"""
+
+    response = model.generate_content(prompt)
+    parsed = extract_json_object(response.text or "")
+    return {
+        key: str(parsed.get(key, "")).strip()
+        for key in AI_PLACEHOLDER_KEYS
+        if str(parsed.get(key, "")).strip()
+    }
+
+
+def apply_ai_insights(mapping, ai_insights):
+    for key, placeholder in AI_PLACEHOLDER_KEYS.items():
+        value = ai_insights.get(key)
+        if value:
+            mapping[placeholder] = value
+    return mapping
+
+
 def build_placeholder_mapping(kpi, client_name, report_period, agency_name):
     """Ubah hasil KPI menjadi mapping placeholder Google Slides."""
     top_posts = kpi["top_posts"] + [{} for _ in range(3)]
@@ -686,36 +837,73 @@ def parse_args():
         action="store_true",
         help="Tampilkan mapping placeholder tanpa membuat Google Slides.",
     )
+    parser.add_argument(
+        "--no-ai-insights",
+        action="store_true",
+        help="Matikan AI insight generation dan pakai fallback template.",
+    )
     return parser.parse_args()
 
 
-def main():
-    load_dotenv()
-    args = parse_args()
+def generate_slides_report(
+    template=DEFAULT_TEMPLATE_URL,
+    csv=None,
+    account_csv=None,
+    client_name=None,
+    agency_name=None,
+    report_period=None,
+    credentials="credentials.json",
+    token="token.json",
+    oauth_port=0,
+    dry_run=False,
+    use_ai_insights=True,
+):
+    """Generate Google Slides report dan return hasil sebagai dict.
 
-    template_id = extract_presentation_id(args.template)
-    csv_path = Path(args.csv) if args.csv else latest_instagram_csv(DEFAULT_DATA_DIR)
+    Fungsi ini dipakai oleh CLI dan juga bisa dipanggil sebagai tool agentic.
+    """
+    template_id = extract_presentation_id(template)
+    csv_path = Path(csv) if csv else latest_instagram_csv(DEFAULT_DATA_DIR)
     account_csv_path = (
-        Path(args.account_csv)
-        if args.account_csv
+        Path(account_csv)
+        if account_csv
         else latest_optional_csv(DEFAULT_DATA_DIR, "instagram_account_*.csv")
     )
+
     kpi = calculate_instagram_kpi(csv_path, account_csv_path)
     mapping = build_placeholder_mapping(
         kpi,
-        client_name=args.client_name,
-        report_period=args.report_period,
-        agency_name=args.agency_name,
+        client_name=client_name or os.getenv("REPORT_CLIENT_NAME", "Demo Client"),
+        report_period=report_period or os.getenv("REPORT_PERIOD", datetime.now().strftime("%B %Y")),
+        agency_name=agency_name or os.getenv("REPORT_AGENCY_NAME", "MAI"),
     )
+    ai_insights = {}
+    if use_ai_insights:
+        try:
+            ai_insights = generate_ai_insights(
+                kpi,
+                client_name=client_name or os.getenv("REPORT_CLIENT_NAME", "Demo Client"),
+                report_period=report_period or os.getenv("REPORT_PERIOD", datetime.now().strftime("%B %Y")),
+            )
+            apply_ai_insights(mapping, ai_insights)
+        except Exception as exc:
+            mapping["{{BENCHMARK_NOTE}}"] = (
+                f"AI insight generation failed; using rule-based fallback. Error: {exc}"
+            )
 
-    if args.dry_run:
-        print("Template ID:", template_id)
-        print("CSV:", csv_path)
-        print("Account CSV:", account_csv_path or "-")
-        print(json.dumps(mapping, indent=2, ensure_ascii=False))
-        return
+    result = {
+        "template_id": template_id,
+        "csv": str(csv_path),
+        "account_csv": str(account_csv_path) if account_csv_path else None,
+        "placeholder_count": len(mapping),
+        "ai_insights_used": bool(ai_insights),
+    }
 
-    credentials_file = Path(args.credentials)
+    if dry_run:
+        result["mapping"] = mapping
+        return result
+
+    credentials_file = Path(credentials)
     if not credentials_file.exists():
         raise FileNotFoundError(
             f"File OAuth credentials tidak ditemukan: {credentials_file}. "
@@ -724,15 +912,49 @@ def main():
 
     slides_service, drive_service = get_google_services(
         credentials_file,
-        args.token,
-        args.oauth_port,
+        token,
+        oauth_port,
     )
-    report_name = f"SNS Report - {args.client_name} - {args.report_period}"
+    report_name = (
+        f"SNS Report - {client_name or os.getenv('REPORT_CLIENT_NAME', 'Demo Client')} - "
+        f"{report_period or os.getenv('REPORT_PERIOD', datetime.now().strftime('%B %Y'))}"
+    )
     presentation_id = copy_template(drive_service, template_id, report_name)
     replace_placeholders(slides_service, presentation_id, mapping)
 
+    result["presentation_id"] = presentation_id
+    result["presentation_url"] = f"https://docs.google.com/presentation/d/{presentation_id}/edit"
+    return result
+
+
+def main():
+    load_dotenv()
+    args = parse_args()
+
+    result = generate_slides_report(
+        template=args.template,
+        csv=args.csv,
+        account_csv=args.account_csv,
+        client_name=args.client_name,
+        agency_name=args.agency_name,
+        report_period=args.report_period,
+        credentials=args.credentials,
+        token=args.token,
+        oauth_port=args.oauth_port,
+        dry_run=args.dry_run,
+        use_ai_insights=not args.no_ai_insights,
+    )
+
+    if args.dry_run:
+        print("Template ID:", result["template_id"])
+        print("CSV:", result["csv"])
+        print("Account CSV:", result["account_csv"] or "-")
+        print("AI insights used:", result["ai_insights_used"])
+        print(json.dumps(result["mapping"], indent=2, ensure_ascii=False))
+        return
+
     print("Generated presentation:")
-    print(f"https://docs.google.com/presentation/d/{presentation_id}/edit")
+    print(result["presentation_url"])
 
 
 if __name__ == "__main__":

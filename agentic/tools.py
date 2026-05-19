@@ -1,6 +1,7 @@
 from langchain_core.tools import tool
 import os
 import math
+import sys
 import pandas as pd
 from typing import Dict, List, Any
 
@@ -9,6 +10,10 @@ from typing import Dict, List, Any
 # =========================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
+
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
 
 DATA_FOLDER = os.path.abspath(
     os.path.join(
@@ -18,6 +23,8 @@ DATA_FOLDER = os.path.abspath(
         "processed"
     )
 )
+
+from generate_slides_example import generate_slides_report
 
 # =========================================
 # Helper Functions
@@ -220,6 +227,64 @@ def get_top_performers(
         }
 
 
+@tool
+def generate_google_slides_report(
+    csv_filename: str = "",
+    account_csv_filename: str = "",
+    client_name: str = "Demo Client",
+    report_period: str = "",
+    dry_run: bool = False,
+    use_ai_insights: bool = True
+) -> Dict[str, Any]:
+    """
+    Generate Google Slides report from Instagram KPI CSV files.
+
+    Use this when the user asks to create, generate, or fill a Google Slides
+    social media report. If csv_filename is empty, the newest Instagram media CSV
+    will be used. If account_csv_filename is empty, the newest Instagram account
+    CSV will be used when available.
+    """
+
+    try:
+        csv_path = (
+            os.path.join(DATA_FOLDER, csv_filename)
+            if csv_filename
+            else None
+        )
+        account_csv_path = (
+            os.path.join(DATA_FOLDER, account_csv_filename)
+            if account_csv_filename
+            else None
+        )
+
+        result = generate_slides_report(
+            csv=csv_path,
+            account_csv=account_csv_path,
+            client_name=client_name,
+            report_period=report_period or None,
+            credentials=os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json"),
+            token=os.getenv("GOOGLE_TOKEN_FILE", "token.json"),
+            oauth_port=int(os.getenv("GOOGLE_OAUTH_PORT", "0")),
+            dry_run=dry_run,
+            use_ai_insights=use_ai_insights,
+        )
+
+        if dry_run and "mapping" in result:
+            result["mapping_preview"] = {
+                key: result["mapping"][key]
+                for key in list(result["mapping"].keys())[:25]
+            }
+            result.pop("mapping", None)
+
+        return clean_nan(result)
+
+    except Exception as e:
+
+        return {
+            "error": str(e)
+        }
+
+
 # =========================================
 # Internal Analytics Functions
 # =========================================
@@ -300,5 +365,6 @@ TOOLS = [
     list_csv_files,
     build_kpi_report,
     compare_target_vs_actual,
-    get_top_performers
+    get_top_performers,
+    generate_google_slides_report
 ]
