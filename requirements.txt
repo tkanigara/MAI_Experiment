@@ -5,4 +5,8 @@ google-api-python-client
 google-auth
 google-auth-httplib2
 google-auth-oauthlib
-huggingface_hub
+langgraph
+langchain
+langchain-core
+langchain-google-genai
+google-generativeai
