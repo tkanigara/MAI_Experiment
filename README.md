@@ -1,23 +1,36 @@
 # MAI_Experiment
 
 Eksperimen kecil untuk mengambil data dari Instagram Business dan Facebook Page
-melalui Meta Graph API, lalu menyimpannya ke file CSV lokal.
+melalui Meta Graph API, lalu menyimpannya ke file CSV lokal, Google Sheets
+intermediate, dan opsional Google Slides.
 
-Untuk tahap ini belum ada Google Sheets, Google Slides, scheduler, atau AI
-report. Fokusnya hanya:
+V1 scheduler fokus ke Instagram dan memakai Windows Task Scheduler. Entrypoint
+scheduler adalah `run_pipeline.py`, bukan `agentic/orchestration.py`.
 
-- cek token dan ID bisa akses apa saja;
-- ambil data media/post;
-- ambil insight yang tersedia;
-- simpan hasil bersih ke CSV.
+Flow v1:
+
+```text
+Meta Instagram API
+-> CSV backup lokal
+-> KPI processed
+-> Gemini AI insight atau fallback rule-based
+-> Google Sheets intermediate
+-> opsional Google Slides
+```
 
 ## File Penting
 
 - `meta_export.py`: script utama untuk mengambil data dari Meta Graph API.
+- `analytics_pipeline.py`: hitung KPI Instagram dari CSV.
+- `ai_insight_pipeline.py`: buat insight JSON dari KPI via Gemini atau fallback.
+- `push_to_sheets.py`: tulis raw/KPI/AI insight/report run ke Google Sheets intermediate.
+- `run_pipeline.py`: entrypoint scheduler-ready.
 - `.env`: tempat token dan ID disimpan secara lokal.
 - `data/processed/`: folder output CSV dan hasil diagnosis.
 
-Folder `data/` dan file `.env` sudah masuk `.gitignore`, jadi tidak ikut commit.
+Folder `data/`, file `.env`, `token.json`, `credentials.json`, dan `*.json`
+sudah masuk `.gitignore`, jadi credential service account seperti
+`optimum-essence-497706-i6-1c879e7ef3bd.json` tidak ikut commit.
 
 ## Isi `.env`
 
@@ -28,11 +41,20 @@ META_ACCESS_TOKEN=isi_token_meta_di_sini
 IG_BUSINESS_ID=isi_instagram_business_id_di_sini
 FB_PAGE_ID=isi_facebook_page_id_di_sini
 META_API_VERSION=v23.0
+META_EXPORT_LIMIT=5
 
-HF_API_KEY=isi_token_huggingface_di_sini
-HF_MODEL=meta-llama/Meta-Llama-3-8B-Instruct
-HF_PROVIDER=auto
-HF_MAX_TOKENS=700
+GOOGLE_API_KEY=isi_google_gemini_api_key_di_sini
+GEMINI_API_KEY=isi_google_gemini_api_key_di_sini
+GEMINI_MODEL=gemini-2.5-flash
+
+INTERMEDIATE_SPREADSHEET_ID=1Bp-msgx3dieEHyfw0xHDPYLGHTA47_or2PTPJJVbiCA
+MASTER_SPREADSHEET_ID=18B6jAIq-A55o7lpRrHX2xDOQ33eLiNuIUQNTRzjOG5I
+GOOGLE_SERVICE_ACCOUNT_FILE=optimum-essence-497706-i6-1c879e7ef3bd.json
+
+SLIDES_TEMPLATE_ID=isi_google_slides_template_id_atau_url
+GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE=optimum-essence-497706-i6-1c879e7ef3bd.json
+GOOGLE_CREDENTIALS_FILE=credentials.json
+GOOGLE_TOKEN_FILE=token.json
 ```
 
 Catatan:
@@ -41,12 +63,58 @@ Catatan:
 - `IG_BUSINESS_ID` dipakai untuk export Instagram.
 - `FB_PAGE_ID` dipakai untuk export Facebook.
 - `META_API_VERSION` boleh diganti kalau versi API yang dipakai berbeda.
-- `HF_API_KEY` dipakai prototype KPI report di `Main.py`.
-- `HF_MODEL` adalah model Hugging Face yang dipakai untuk chat.
-- `HF_PROVIDER` default `auto`, bisa diganti kalau provider tertentu diperlukan.
-- `HF_MAX_TOKENS` mengatur panjang maksimal jawaban LLM.
+- `INTERMEDIATE_SPREADSHEET_ID` wajib untuk pipeline normal.
+- `MASTER_SPREADSHEET_ID` disimpan untuk tahap berikutnya, belum dibaca di v1.
+- `GOOGLE_SERVICE_ACCOUNT_FILE` dipakai untuk tulis Google Sheets intermediate.
+- `GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE` diprioritaskan untuk Google Slides scheduler.
+- `GOOGLE_CREDENTIALS_FILE` dan `GOOGLE_TOKEN_FILE` tetap bisa dipakai untuk Google Slides via OAuth.
 
 Script akan membaca `.env` otomatis saat dijalankan.
+
+## Scheduler Pipeline V1
+
+Dry-run aman tanpa menulis Google Sheets dan tanpa membuat Slides:
+
+```powershell
+python .\run_pipeline.py --client-id demo_client --frequency weekly --dry-run
+```
+
+Run normal tanpa Slides:
+
+```powershell
+python .\run_pipeline.py --client-id demo_client --frequency weekly --no-slides
+```
+
+Run normal dengan Google Slides:
+
+```powershell
+python .\run_pipeline.py --client-id demo_client --frequency weekly --generate-slides
+```
+
+Tab Google Sheets intermediate yang dibuat/dipastikan oleh pipeline:
+
+```text
+instagram_account_raw
+instagram_media_raw
+instagram_kpi_processed
+ai_insights
+report_runs
+```
+
+Contoh Windows Task Scheduler action:
+
+```text
+Program/script: python
+Add arguments: .\run_pipeline.py --client-id demo_client --frequency weekly --no-slides
+Start in: C:\Gawe\MAI\MAI_Experiment
+```
+
+Failure policy:
+
+- Meta gagal: status `failed`.
+- AI gagal: pipeline lanjut dengan fallback dan `warning`.
+- Sheets gagal: pipeline berhenti.
+- Slides gagal: status `partial_success`.
 
 ## Test Prototype KPI Report
 

@@ -26,6 +26,7 @@ SCOPES = [
 ]
 
 AI_PLACEHOLDER_KEYS = {
+    "executive_summary": "{{EXECUTIVE_SUMMARY}}",
     "ig_reach_insight_summary": "{{IG_REACH_INSIGHT_SUMMARY}}",
     "ig_performance_insight": "{{IG_PERFORMANCE_INSIGHT}}",
     "engagement_trend_text": "{{ENGAGEMENT_TREND_TEXT}}",
@@ -783,6 +784,24 @@ def replace_placeholders(slides_service, presentation_id, mapping):
 
 
 def get_google_services(credentials_file, token_file, oauth_port):
+    credentials_path = Path(credentials_file)
+    try:
+        credential_type = json.loads(credentials_path.read_text(encoding="utf-8")).get("type", "")
+    except (OSError, json.JSONDecodeError):
+        credential_type = ""
+
+    if credential_type == "service_account":
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+
+        credentials = service_account.Credentials.from_service_account_file(
+            credentials_path,
+            scopes=SCOPES,
+        )
+        slides_service = build("slides", "v1", credentials=credentials)
+        drive_service = build("drive", "v3", credentials=credentials)
+        return slides_service, drive_service
+
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -798,7 +817,7 @@ def get_google_services(credentials_file, token_file, oauth_port):
         if credentials and credentials.expired and credentials.refresh_token:
             credentials.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(credentials_file, SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             credentials = flow.run_local_server(port=oauth_port)
 
         token_path.write_text(credentials.to_json(), encoding="utf-8")
@@ -857,6 +876,7 @@ def generate_slides_report(
     oauth_port=0,
     dry_run=False,
     use_ai_insights=True,
+    ai_insights=None,
 ):
     """Generate Google Slides report dan return hasil sebagai dict.
 
@@ -877,8 +897,10 @@ def generate_slides_report(
         report_period=report_period or os.getenv("REPORT_PERIOD", datetime.now().strftime("%B %Y")),
         agency_name=agency_name or os.getenv("REPORT_AGENCY_NAME", "MAI"),
     )
-    ai_insights = {}
-    if use_ai_insights:
+    ai_insights = ai_insights or {}
+    if ai_insights:
+        apply_ai_insights(mapping, ai_insights)
+    elif use_ai_insights:
         try:
             ai_insights = generate_ai_insights(
                 kpi,
