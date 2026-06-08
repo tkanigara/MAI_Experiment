@@ -16,54 +16,111 @@ DEFAULT_INTERMEDIATE_SPREADSHEET_ID = "1Bp-msgx3dieEHyfw0xHDPYLGHTA47_or2PTPJJVb
 DEFAULT_SERVICE_ACCOUNT_FILE = "optimum-essence-497706-i6-1c879e7ef3bd.json"
 
 INTERMEDIATE_HEADERS = {
-    "instagram_account_raw": [
+    "instagram": [
         "run_id",
         "client_id",
-        "frequency",
-        "ingested_at",
-        "source_file",
-        "raw_json",
-    ],
-    "instagram_media_raw": [
-        "run_id",
-        "client_id",
-        "frequency",
-        "ingested_at",
-        "source_file",
-        "media_id",
-        "timestamp",
-        "permalink",
-        "raw_json",
-    ],
-    "instagram_kpi_processed": [
-        "run_id",
-        "client_id",
+        "client_name",
         "frequency",
         "processed_at",
-        "source_file",
-        "account_source_file",
-        "total_posts",
-        "total_reach",
-        "total_views",
-        "total_likes",
-        "total_comments",
-        "total_shares",
-        "total_saved",
-        "total_interactions",
-        "avg_engagement_rate",
+        "platform",
+        "account_id",
+        "account_username",
+        "account_name",
+        "followers_count",
+        "media_id",
+        "posted_at",
+        "caption",
+        "content_type",
+        "media_type",
+        "media_product_type",
+        "permalink",
+        "media_url",
+        "thumbnail_url",
+        "reach",
+        "views",
+        "likes",
+        "comments",
+        "shares",
+        "saved",
+        "interactions",
+        "engagement_rate",
+        "post_rank_by_interactions",
+        "is_top_3_content",
+        "period_total_posts",
+        "period_total_reach",
+        "period_total_views",
+        "period_total_likes",
+        "period_total_comments",
+        "period_total_shares",
+        "period_total_saved",
+        "period_total_interactions",
+        "period_avg_engagement_rate",
         "best_content_type",
-        "feed_stats_json",
-        "reels_stats_json",
-        "top_3_content_json",
-        "kpi_json",
-    ],
-    "ai_insights": [
-        "run_id",
-        "client_id",
-        "frequency",
-        "generated_at",
+        "feed_posts",
+        "feed_reach",
+        "feed_interactions",
+        "reels_posts",
+        "reels_reach",
+        "reels_interactions",
         *REQUIRED_FIELDS,
         "warning",
+        "media_source_file",
+        "account_source_file",
+        "post_json",
+        "insight_json",
+    ],
+    "facebook": [
+        "run_id",
+        "client_id",
+        "client_name",
+        "frequency",
+        "processed_at",
+        "platform",
+        "post_id",
+        "posted_at",
+        "content_type",
+        "caption",
+        "permalink",
+        "reach",
+        "views",
+        "interactions",
+        "insight_json",
+    ],
+    "youtube": [
+        "run_id",
+        "client_id",
+        "client_name",
+        "frequency",
+        "processed_at",
+        "platform",
+        "video_id",
+        "posted_at",
+        "title",
+        "content_type",
+        "permalink",
+        "views",
+        "likes",
+        "comments",
+        "interactions",
+        "insight_json",
+    ],
+    "tiktok": [
+        "run_id",
+        "client_id",
+        "client_name",
+        "frequency",
+        "processed_at",
+        "platform",
+        "video_id",
+        "posted_at",
+        "caption",
+        "content_type",
+        "permalink",
+        "views",
+        "likes",
+        "comments",
+        "shares",
+        "interactions",
         "insight_json",
     ],
     "report_runs": [
@@ -174,69 +231,135 @@ def read_csv_dicts(path):
         return list(csv.DictReader(file))
 
 
-def build_media_rows(run_id, client_id, frequency, media_csv):
+def number(value):
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def first_value(row, keys, default=""):
+    for key in keys:
+        value = row.get(key, "")
+        if value not in ("", None):
+            return value
+    return default
+
+
+def normalize_content_type(row):
+    product_type = str(row.get("media_product_type", "")).strip().upper()
+    media_type = str(row.get("media_type", "")).strip().upper()
+    if product_type:
+        return product_type
+    if media_type == "VIDEO":
+        return "REELS"
+    return media_type or "UNKNOWN"
+
+
+def post_metrics(row):
+    likes = number(first_value(row, ["insight_likes", "like_count"], 0))
+    comments = number(first_value(row, ["insight_comments", "comments_count"], 0))
+    shares = number(row.get("insight_shares", 0))
+    saved = number(first_value(row, ["insight_saved", "insight_saves"], 0))
+    interactions = number(first_value(row, ["insight_total_interactions", "insight_engagement"], 0))
+    if not interactions:
+        interactions = likes + comments + shares + saved
+    reach = number(row.get("insight_reach", 0))
+    views = number(first_value(row, ["insight_views", "insight_impressions", "insight_video_views"], 0))
+    engagement_rate = interactions / reach * 100 if reach else 0.0
+    return {
+        "reach": reach,
+        "views": views,
+        "likes": likes,
+        "comments": comments,
+        "shares": shares,
+        "saved": saved,
+        "interactions": interactions,
+        "engagement_rate": engagement_rate,
+    }
+
+
+def build_instagram_ready_rows(run_id, client_id, frequency, media_csv, kpi_summary, ai_insights):
     rows = []
-    ingested_at = utc_now()
-    for row in read_csv_dicts(media_csv):
+    processed_at = utc_now()
+    media_rows = read_csv_dicts(media_csv)
+    account = kpi_summary.get("account", {})
+    client_name = (
+        os.getenv("REPORT_CLIENT_NAME", "").strip()
+        or account.get("name")
+        or account.get("username")
+        or client_id
+    )
+    feed_stats = kpi_summary.get("feed_stats", {})
+    reels_stats = kpi_summary.get("reels_stats", {})
+    ranked_media = []
+    for row in media_rows:
+        metrics = post_metrics(row)
+        ranked_media.append((row, metrics))
+    ranked_media.sort(key=lambda item: (item[1]["interactions"], item[1]["reach"]), reverse=True)
+    rank_by_id = {str(row.get("id", "")): index for index, (row, _) in enumerate(ranked_media, start=1)}
+
+    for row, metrics in ranked_media:
+        media_id = str(row.get("id", ""))
+        rank = rank_by_id.get(media_id, "")
         rows.append(
             [
                 run_id,
                 client_id,
+                client_name,
                 frequency,
-                ingested_at,
-                str(media_csv),
-                row.get("id", ""),
+                processed_at,
+                "instagram",
+                account.get("id", ""),
+                account.get("username", ""),
+                account.get("name", ""),
+                account.get("followers_count", 0),
+                media_id,
                 row.get("timestamp", ""),
+                row.get("caption", ""),
+                normalize_content_type(row),
+                row.get("media_type", ""),
+                row.get("media_product_type", ""),
                 row.get("permalink", ""),
+                row.get("media_url", ""),
+                row.get("thumbnail_url", ""),
+                metrics["reach"],
+                metrics["views"],
+                metrics["likes"],
+                metrics["comments"],
+                metrics["shares"],
+                metrics["saved"],
+                metrics["interactions"],
+                metrics["engagement_rate"],
+                rank,
+                "yes" if rank and rank <= 3 else "no",
+                kpi_summary.get("total_posts", 0),
+                kpi_summary.get("total_reach", 0),
+                kpi_summary.get("total_views", 0),
+                kpi_summary.get("total_likes", 0),
+                kpi_summary.get("total_comments", 0),
+                kpi_summary.get("total_shares", 0),
+                kpi_summary.get("total_saved", 0),
+                kpi_summary.get("total_interactions", 0),
+                kpi_summary.get("avg_engagement_rate", 0),
+                kpi_summary.get("best_content_type", ""),
+                feed_stats.get("posts", 0),
+                feed_stats.get("reach", 0),
+                feed_stats.get("total_interactions", 0),
+                reels_stats.get("posts", 0),
+                reels_stats.get("reach", 0),
+                reels_stats.get("total_interactions", 0),
+                *[ai_insights.get(field, "") for field in REQUIRED_FIELDS],
+                ai_insights.get("warning", ""),
+                kpi_summary.get("source_file", str(media_csv or "")),
+                kpi_summary.get("account_source_file", ""),
                 dumps_compact(row),
+                dumps_compact(ai_insights),
             ]
         )
     return rows
-
-
-def build_account_rows(run_id, client_id, frequency, account_csv):
-    rows = []
-    ingested_at = utc_now()
-    for row in read_csv_dicts(account_csv):
-        rows.append([run_id, client_id, frequency, ingested_at, str(account_csv), dumps_compact(row)])
-    return rows
-
-
-def build_kpi_row(run_id, client_id, frequency, kpi_summary):
-    return [
-        run_id,
-        client_id,
-        frequency,
-        utc_now(),
-        kpi_summary.get("source_file", ""),
-        kpi_summary.get("account_source_file", ""),
-        kpi_summary.get("total_posts", 0),
-        kpi_summary.get("total_reach", 0),
-        kpi_summary.get("total_views", 0),
-        kpi_summary.get("total_likes", 0),
-        kpi_summary.get("total_comments", 0),
-        kpi_summary.get("total_shares", 0),
-        kpi_summary.get("total_saved", 0),
-        kpi_summary.get("total_interactions", 0),
-        kpi_summary.get("avg_engagement_rate", 0),
-        kpi_summary.get("best_content_type", ""),
-        dumps_compact(kpi_summary.get("feed_stats", {})),
-        dumps_compact(kpi_summary.get("reels_stats", {})),
-        dumps_compact(kpi_summary.get("top_3_content", [])),
-        dumps_compact(kpi_summary),
-    ]
-
-
-def build_insight_row(run_id, client_id, frequency, ai_insights):
-    return [
-        run_id,
-        client_id,
-        frequency,
-        utc_now(),
-        *[ai_insights.get(field, "") for field in REQUIRED_FIELDS],
-        ai_insights.get("warning", ""),
-        dumps_compact(ai_insights),
-    ]
 
 
 def build_report_run_row(
@@ -283,10 +406,19 @@ def push_intermediate_run(
     )
     service = get_sheets_service(credentials_file)
     ensure_tabs(service, spreadsheet_id)
-    append_rows(service, spreadsheet_id, "instagram_account_raw", build_account_rows(run_id, client_id, frequency, account_csv))
-    append_rows(service, spreadsheet_id, "instagram_media_raw", build_media_rows(run_id, client_id, frequency, media_csv))
-    append_rows(service, spreadsheet_id, "instagram_kpi_processed", [build_kpi_row(run_id, client_id, frequency, kpi_summary)])
-    append_rows(service, spreadsheet_id, "ai_insights", [build_insight_row(run_id, client_id, frequency, ai_insights)])
+    append_rows(
+        service,
+        spreadsheet_id,
+        "instagram",
+        build_instagram_ready_rows(
+            run_id,
+            client_id,
+            frequency,
+            media_csv,
+            kpi_summary,
+            ai_insights,
+        ),
+    )
     return service
 
 

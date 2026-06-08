@@ -1,7 +1,10 @@
+import json
+
 from models.gemini import gemini
 from ..prompts.tes_prompt import SYSTEM_PROMPT
 from .state import ReportState
 from models.parser import parse_reasoning
+from tools.registry import TOOLS_BY_NAME
 
 def user_query(state: ReportState) -> ReportState:
     state["messages"].append({
@@ -67,3 +70,37 @@ def routing(state: ReportState) ->ReportState:
     if state["action"]:
         return "action"
     return "final"
+
+
+def action(state: ReportState) -> ReportState:
+    tool_name = state.get("action")
+    tool = TOOLS_BY_NAME.get(tool_name)
+
+    if not tool:
+        observation = f"Tool not found: {tool_name}"
+    else:
+        action_input = state.get("action_input") or {}
+        if isinstance(action_input, str):
+            try:
+                action_input = json.loads(action_input)
+            except json.JSONDecodeError:
+                action_input = {}
+        try:
+            observation = tool.invoke(action_input)
+        except TypeError:
+            observation = tool.invoke({})
+        except Exception as exc:
+            observation = f"Tool failed: {exc}"
+
+    return {
+        "messages": state["messages"] + [{
+            "role": "tool",
+            "content": str(observation),
+        }],
+        "user_query": state.get("user_query", ""),
+        "thought": state.get("thought"),
+        "action": None,
+        "action_input": None,
+        "observation": str(observation),
+        "final_answer": None,
+    }

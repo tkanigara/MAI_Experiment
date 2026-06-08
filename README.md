@@ -94,12 +94,18 @@ python .\run_pipeline.py --client-id demo_client --frequency weekly --generate-s
 Tab Google Sheets intermediate yang dibuat/dipastikan oleh pipeline:
 
 ```text
-instagram_account_raw
-instagram_media_raw
-instagram_kpi_processed
-ai_insights
+instagram
+facebook
+youtube
+tiktok
 report_runs
 ```
+
+V1 baru mengisi tab `instagram`. Isi tab ini adalah data siap pakai dalam satu
+baris per post: metadata run/client, account Instagram, posting ID, waktu post,
+jenis konten, permalink/media URL, KPI post, KPI total periode, ranking top
+content, dan AI insight/recommendation. Tab `facebook`, `youtube`, dan `tiktok`
+dibuat sebagai struktur awal untuk fase berikutnya.
 
 Contoh Windows Task Scheduler action:
 
