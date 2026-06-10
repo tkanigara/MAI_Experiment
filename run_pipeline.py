@@ -7,20 +7,17 @@ from pathlib import Path
 
 from ai_insight_pipeline import fallback_insights, generate_ai_insight
 from analytics_pipeline import calculate_instagram_kpi, dumps_compact, latest_csv
+from ETL_Pipeline.extract.instagram import extract_instagram_raw
+from ETL_Pipeline.load.load import save_processed_json
+from ETL_Pipeline.transform.instagram import transform_instagram_raw
 from meta_export import (
-    DEFAULT_API_VERSION,
     MetaApiError,
-    MetaClient,
-    env_required,
-    export_instagram,
-    export_instagram_account,
     load_dotenv,
-    write_csv,
 )
 from push_to_sheets import append_report_run, push_intermediate_run
 
 
-DEFAULT_OUTPUT_DIR = Path("data/processed")
+DEFAULT_OUTPUT_DIR = Path("data")
 
 
 def utc_now():
@@ -48,26 +45,27 @@ def parse_args():
 
 
 def fetch_instagram_to_csv(args, run_id):
-    token = env_required("META_ACCESS_TOKEN")
-    ig_business_id = env_required("IG_BUSINESS_ID")
-    api_version = os.environ.get("META_API_VERSION", DEFAULT_API_VERSION).strip()
-    output_dir = Path(args.output_dir)
-    client = MetaClient(token, api_version)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
-    account_rows = export_instagram_account(client, ig_business_id, args.since, args.until)
-    account_csv = output_dir / f"instagram_account_{stamp}_{run_id}.csv"
-    write_csv(account_csv, account_rows)
-
-    media_rows = export_instagram(client, ig_business_id, args.limit, args.since, args.until)
-    media_csv = output_dir / f"instagram_media_{stamp}_{run_id}.csv"
-    write_csv(media_csv, media_rows)
-    return media_csv, account_csv
+    extracted = extract_instagram_raw(
+        client_id=args.client_id,
+        run_id=run_id,
+        frequency=args.frequency,
+        limit=args.limit,
+        since=args.since,
+        until=args.until,
+        output_root=args.output_dir,
+    )
+    return extracted["media_csv"], extracted["account_csv"]
 
 
 def dry_run_sources(output_dir):
-    media_csv = latest_csv(output_dir, "instagram_media_*.csv")
-    account_csv = latest_csv(output_dir, "instagram_account_*.csv")
+    media_csv = latest_csv(output_dir, "**/instagram_media_raw_*.csv") or latest_csv(
+        "data/processed",
+        "instagram_media_*.csv",
+    )
+    account_csv = latest_csv(output_dir, "**/instagram_account_raw_*.csv") or latest_csv(
+        "data/processed",
+        "instagram_account_*.csv",
+    )
     return media_csv, account_csv
 
 
@@ -142,6 +140,7 @@ def main():
     account_csv = None
     slides_url = ""
     warning = ""
+    processed_json = ""
 
     if args.generate_slides and args.no_slides:
         raise SystemExit("Use either --generate-slides or --no-slides, not both.")
@@ -159,6 +158,16 @@ def main():
         else:
             ai_insights = generate_ai_insight(kpi_summary, args.client_id, args.frequency)
         warning = ai_insights.get("warning", "")
+        processed_data = transform_instagram_raw(
+            media_csv=media_csv,
+            account_csv=account_csv,
+            client_id=args.client_id,
+            client_name=os.getenv("REPORT_CLIENT_NAME", ""),
+            run_id=run_id,
+            frequency=args.frequency,
+            ai_insights=ai_insights,
+        )
+        kpi_summary = processed_data["kpi_summary"]
 
         payload = {
             "run_id": run_id,
@@ -168,11 +177,17 @@ def main():
             "account_csv": account_csv,
             "kpi_summary": kpi_summary,
             "ai_insights": ai_insights,
+            "processed_data": processed_data,
         }
 
         if args.dry_run:
             print_dry_run_summary(payload)
             return
+
+        processed_json = save_processed_json(
+            processed_data,
+            output_folder=Path(args.output_dir) / args.client_id / "instagram",
+        )
 
         service = push_intermediate_run(
             run_id,
@@ -211,6 +226,7 @@ def main():
                     "status": status,
                     "media_csv": str(media_csv),
                     "account_csv": str(account_csv),
+                    "processed_json": str(processed_json),
                     "slides_url": slides_url,
                     "warning": warning,
                     "kpi_summary": json.loads(dumps_compact(kpi_summary)),

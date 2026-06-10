@@ -115,21 +115,15 @@ def parse_metric_errors(df: pd.DataFrame) -> pd.DataFrame:
 
 def read_csv_from_folder(
     folder_path: Path,
-    subfolder: str,
+    data_kind: str,
     platform: str,
     schema: dict,
     client_name: str,
 ) -> list[pd.DataFrame]:
-    """Baca semua CSV dari satu subfolder, map ke schema standar."""
-    subfolder_path = folder_path / subfolder
-
-    if not subfolder_path.exists():
-        print(f"    Skipping '{subfolder}': folder tidak ditemukan")
-        return []
-
-    csv_files = list(subfolder_path.glob("*.csv"))
+    """Baca CSV raw dari folder platform, map ke schema standar."""
+    csv_files = sorted(folder_path.glob(f"{platform}_{data_kind}_raw_*.csv"))
     if not csv_files:
-        print(f"    Tidak ada file CSV di '{subfolder}'")
+        print(f"    Tidak ada file CSV raw untuk '{data_kind}'")
         return []
 
     dfs = []
@@ -149,7 +143,7 @@ def read_csv_from_folder(
         std_df = parse_metric_errors(std_df)
 
         std_df["client"]        = client_name
-        std_df["source_folder"] = subfolder
+        std_df["source_folder"] = data_kind
         std_df["source_file"]   = file.name
         std_df["platform"]      = platform
 
@@ -175,7 +169,7 @@ def transform_client(client_folder: Path) -> dict[str, dict[str, pd.DataFrame]]:
     result = {}
 
     for platform, config in PLATFORM_CONFIG.items():
-        platform_path = client_folder / "raw_data" / platform
+        platform_path = client_folder / platform
 
         if not platform_path.exists():
             print(f"  [{platform}] Folder tidak ditemukan, skipping")
@@ -209,7 +203,11 @@ def transform_all_clients() -> dict[str, dict[str, dict[str, pd.DataFrame]]]:
     """
     transformed_data = {}
 
-    client_folders = [f for f in DATA_FOLDER.iterdir() if f.is_dir()]
+    ignored = {"processed", "format_data", "__pycache__"}
+    client_folders = [
+        f for f in DATA_FOLDER.iterdir()
+        if f.is_dir() and f.name not in ignored
+    ]
     if not client_folders:
         print(f"Tidak ada folder client di {DATA_FOLDER}")
         return transformed_data

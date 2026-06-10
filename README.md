@@ -11,16 +11,34 @@ Flow v1:
 
 ```text
 Meta Instagram API
--> CSV backup lokal
--> KPI processed
--> Gemini AI insight atau fallback rule-based
+-> raw CSV per client/platform
+-> processed JSON per client/platform
 -> Google Sheets intermediate
 -> opsional Google Slides
 ```
 
+Struktur ETL lokal:
+
+```text
+data/
+  demo_client/
+    instagram/
+      instagram_account_raw_<run_id>.csv
+      instagram_media_raw_<run_id>.csv
+      instagram_processed_<run_id>.json
+```
+
+File `*_raw_*.csv` adalah hasil extract dari source API. File
+`*_processed_*.json` adalah hasil transform yang sudah siap dipakai untuk
+analysis/reporting. Google Sheets diperlakukan sebagai consumer dari data
+processed, bukan tempat utama untuk membersihkan data.
+
 ## File Penting
 
 - `meta_export.py`: script utama untuk mengambil data dari Meta Graph API.
+- `ETL_Pipeline/extract/instagram.py`: extract Instagram raw CSV ke `data/<client>/instagram/`.
+- `ETL_Pipeline/transform/instagram.py`: transform raw CSV menjadi processed payload.
+- `ETL_Pipeline/load/load.py`: simpan processed payload sebagai JSON.
 - `analytics_pipeline.py`: hitung KPI Instagram dari CSV.
 - `ai_insight_pipeline.py`: buat insight JSON dari KPI via Gemini atau fallback.
 - `push_to_sheets.py`: tulis raw/KPI/AI insight/report run ke Google Sheets intermediate.

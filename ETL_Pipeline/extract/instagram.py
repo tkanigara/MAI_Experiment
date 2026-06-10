@@ -1,0 +1,62 @@
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+from meta_export import (
+    DEFAULT_API_VERSION,
+    MetaClient,
+    env_required,
+    export_instagram,
+    export_instagram_account,
+    write_csv,
+)
+
+
+def platform_folder(output_root, client_id, platform="instagram"):
+    safe_client = "".join(char if char.isalnum() or char in "-_" else "_" for char in client_id)
+    folder = Path(output_root) / safe_client / platform
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def extract_instagram_raw(
+    client_id,
+    run_id,
+    frequency,
+    limit=5,
+    since=None,
+    until=None,
+    output_root="data",
+    ig_business_id=None,
+):
+    """Extract Instagram account and media data to raw CSV files.
+
+    Output structure:
+    data/<client_id>/instagram/instagram_account_raw_<run_id>.csv
+    data/<client_id>/instagram/instagram_media_raw_<run_id>.csv
+    """
+    token = env_required("META_ACCESS_TOKEN")
+    ig_business_id = ig_business_id or env_required("IG_BUSINESS_ID")
+    api_version = os.environ.get("META_API_VERSION", DEFAULT_API_VERSION).strip()
+    client = MetaClient(token, api_version)
+    output_dir = platform_folder(output_root, client_id, "instagram")
+    extracted_at = datetime.now(timezone.utc).isoformat()
+
+    account_rows = export_instagram_account(client, ig_business_id, since, until)
+    account_csv = output_dir / f"instagram_account_raw_{run_id}.csv"
+    write_csv(account_csv, account_rows)
+
+    media_rows = export_instagram(client, ig_business_id, limit, since, until)
+    media_csv = output_dir / f"instagram_media_raw_{run_id}.csv"
+    write_csv(media_csv, media_rows)
+
+    return {
+        "client_id": client_id,
+        "platform": "instagram",
+        "frequency": frequency,
+        "run_id": run_id,
+        "extracted_at": extracted_at,
+        "account_csv": account_csv,
+        "media_csv": media_csv,
+        "output_dir": output_dir,
+    }

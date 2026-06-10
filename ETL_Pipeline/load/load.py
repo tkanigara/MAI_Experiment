@@ -5,11 +5,8 @@ from datetime import datetime, timezone
 from ..transform.transform_csv import transform_all_clients
 
 
-BASE_OUTPUT = (
-    Path(__file__).resolve().parents[2]
-    / "data"
-    / "format_data"
-)
+BASE_DATA = Path(__file__).resolve().parents[2] / "data"
+BASE_OUTPUT = BASE_DATA
 
 BASE_OUTPUT.mkdir(
     parents=True,
@@ -42,6 +39,23 @@ def df_to_records(df):
         records.append(clean)
 
     return records
+
+
+def save_processed_json(processed_data, output_folder=None, filename=None):
+    """Save one processed platform payload next to the raw CSV files."""
+    client_id = processed_data.get("client_id") or processed_data.get("client") or "unknown_client"
+    platform = processed_data.get("platform") or "unknown_platform"
+    run_id = processed_data.get("run_id") or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    output_folder = Path(output_folder) if output_folder else BASE_OUTPUT / client_id / platform
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    filename = filename or f"{platform}_processed_{run_id}.json"
+    output_file = output_folder / filename
+    with output_file.open("w", encoding="utf-8") as file:
+        json.dump(processed_data, file, ensure_ascii=False, indent=4)
+
+    print(f"Saved processed JSON -> {output_file}")
+    return output_file
 
 
 def generate_summary(platforms):
@@ -147,7 +161,7 @@ def save_metadata(
     }
 
     with open(
-        snapshot_folder / "metadata.json",
+        snapshot_folder / f"metadata_processed_{snapshot_id}.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -161,16 +175,14 @@ def save_metadata(
 
 
 def save_platform_data(
-    snapshot_folder,
-    platforms
+    client_folder,
+    platforms,
+    snapshot_id,
 ):
 
     for platform, subfolders in platforms.items():
 
-        platform_folder = (
-            snapshot_folder
-            / platform
-        )
+        platform_folder = client_folder / platform
 
         platform_folder.mkdir(
             parents=True,
@@ -181,7 +193,7 @@ def save_platform_data(
 
             output_file = (
                 platform_folder
-                / f"{subfolder}.json"
+                / f"{platform}_{subfolder}_processed_{snapshot_id}.json"
             )
 
             with open(
@@ -230,16 +242,7 @@ def load_to_json():
             )
         )
 
-        snapshot_folder = (
-            BASE_OUTPUT
-            / client_name
-            / snapshot_id
-        )
-
-        snapshot_folder.mkdir(
-            parents=True,
-            exist_ok=True
-        )
+        snapshot_folder = BASE_OUTPUT / client_name
 
         save_metadata(
             snapshot_folder,
@@ -252,7 +255,8 @@ def load_to_json():
 
         save_platform_data(
             snapshot_folder,
-            platforms
+            platforms,
+            snapshot_id
         )
 
         print(
