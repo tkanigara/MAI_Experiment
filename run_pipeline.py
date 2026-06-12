@@ -8,8 +8,6 @@ from pathlib import Path
 from ai_insight_pipeline import fallback_insights, generate_ai_insight
 from analytics_pipeline import calculate_instagram_kpi, dumps_compact, latest_csv
 from ETL_Pipeline.extract.instagram import extract_instagram_raw
-from ETL_Pipeline.load.load import save_processed_json
-from ETL_Pipeline.transform.instagram import transform_instagram_raw
 from meta_export import (
     MetaApiError,
     load_dotenv,
@@ -158,16 +156,8 @@ def main():
         else:
             ai_insights = generate_ai_insight(kpi_summary, args.client_id, args.frequency)
         warning = ai_insights.get("warning", "")
-        processed_data = transform_instagram_raw(
-            media_csv=media_csv,
-            account_csv=account_csv,
-            client_id=args.client_id,
-            client_name=os.getenv("REPORT_CLIENT_NAME", ""),
-            run_id=run_id,
-            frequency=args.frequency,
-            ai_insights=ai_insights,
-        )
-        kpi_summary = processed_data["kpi_summary"]
+        
+        processed_data = {}
 
         payload = {
             "run_id": run_id,
@@ -183,11 +173,6 @@ def main():
         if args.dry_run:
             print_dry_run_summary(payload)
             return
-
-        processed_json = save_processed_json(
-            processed_data,
-            output_folder=Path(args.output_dir) / args.client_id / "instagram",
-        )
 
         service = push_intermediate_run(
             run_id,
