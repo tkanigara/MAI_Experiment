@@ -8,7 +8,7 @@ from pathlib import Path
 from ai_insight_pipeline import fallback_insights, generate_ai_insight
 from analytics_pipeline import calculate_instagram_kpi, dumps_compact, latest_csv
 from ETL_Pipeline.extract.instagram import extract_instagram_raw
-from meta_export import (
+from ETL_Pipeline.extract.meta_instagram import (
     MetaApiError,
     load_dotenv,
 )

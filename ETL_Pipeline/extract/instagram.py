@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from meta_export import (
+from ETL_Pipeline.extract.meta_instagram import (
     DEFAULT_API_VERSION,
     MetaClient,
     env_required,
@@ -47,6 +47,23 @@ def extract_instagram_raw(
     write_csv(account_csv, account_rows)
 
     media_rows = export_instagram(client, ig_business_id, limit, since, until)
+    if account_rows:
+        audience_columns = [
+            "raw_demographic_age_gender",
+            "raw_demographic_country",
+            "raw_reached_demographic_age_gender",
+            "raw_reached_demographic_country",
+        ]
+        audience_data = {
+            f"account_{column}": account_rows[0].get(column, "")
+            for column in audience_columns
+            if account_rows[0].get(column, "")
+        }
+        if audience_data:
+            audience_data["audience_demographic_source"] = "instagram_account_insights"
+            for row in media_rows:
+                row.update(audience_data)
+
     media_csv = output_dir / f"instagram_media_raw_{run_id}.csv"
     write_csv(media_csv, media_rows)
 
