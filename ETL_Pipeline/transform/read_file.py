@@ -2,9 +2,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 import pandas as pd
 import os
+from datetime import datetime
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env.example")
 DATA_FOLDER = BASE_DIR / os.getenv("RAW_DATA")
 
 class ReadCsv:
@@ -29,8 +30,9 @@ class ReadCsv:
     def _attach_metadata(self, df: pd.DataFrame, file: Path) -> pd.DataFrame:
         df["client"] = self.client_name
         df["platform"] = self.platform
-        df["source_folder"] = self.data_kind
+        df["data_kind"] = self.data_kind
         df["source_file"] = file.name
+        df["scrapped_at"] = self._extract_scrapped_at(file)
         return df
     
     def read_all(self) -> list[pd.DataFrame]:
@@ -40,33 +42,19 @@ class ReadCsv:
             return []
         return [self._read_one(f) for f in files]
     
+    def _extract_scrapped_at(self, file: Path):
+        try:
+            parts = file.stem.split("_")
 
+            date_str = parts[-2]
+            time_str = parts[-1]
 
-for client_dir in DATA_FOLDER.iterdir():
-    if not client_dir.is_dir():
-        continue
-
-    client_name = client_dir.name
-    print(f"Processing {client_name} \n")
-
-    for platform_dir in client_dir.iterdir():
-        if not platform_dir.is_dir():
-            continue
-
-        print(f"Platform finding: {platform_dir.name}")
-        platform = platform_dir.name
-
-        for kind_dir in platform_dir.iterdir():
-            if not kind_dir.is_dir():
-                continue
-            data_kind = kind_dir.name
-
-            reader = ReadCsv(
-                folder_path=kind_dir,
-                platform=platform,
-                data_kind=data_kind,
-                client_name=client_name
+            return datetime.strptime(
+                f"{date_str}_{time_str}",
+                "%Y%m%d_%H%M%S"
             )
 
-            dfs = reader.read_all()
-            print(f"Loaded {len(dfs)} files")
+        except Exception as e:
+            print(f"Cannot parse date from {file.name}: {e}")
+            return None
+
