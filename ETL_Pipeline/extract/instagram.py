@@ -10,6 +10,7 @@ from ETL_Pipeline.extract.meta_instagram import (
     export_instagram_account,
     write_csv,
 )
+from ETL_Pipeline.extract.report_period import resolve_period
 
 
 def platform_folder(output_root, client_id, platform="instagram"):
@@ -26,6 +27,7 @@ def extract_instagram_raw(
     limit=5,
     since=None,
     until=None,
+    month=None,
     output_root="data",
     ig_business_id=None,
 ):
@@ -35,6 +37,16 @@ def extract_instagram_raw(
     data/<client_id>/instagram/instagram_account_raw_<run_id>.csv
     data/<client_id>/instagram/instagram_media_raw_<run_id>.csv
     """
+    period = resolve_period(month=month, since=since, until=until)
+    since = period.since or None
+    until = period.until or None
+    file_period = f"_{period.month}" if period.month else ""
+    period_columns = {
+        "report_month": period.month,
+        "report_since": period.since,
+        "report_until": period.until,
+    }
+
     token = env_required("META_ACCESS_TOKEN")
     ig_business_id = ig_business_id or env_required("IG_BUSINESS_ID")
     api_version = os.environ.get("META_API_VERSION", DEFAULT_API_VERSION).strip()
@@ -43,10 +55,14 @@ def extract_instagram_raw(
     extracted_at = datetime.now(timezone.utc).isoformat()
 
     account_rows = export_instagram_account(client, ig_business_id, since, until)
-    account_csv = output_dir / f"instagram_account_raw_{run_id}.csv"
+    for row in account_rows:
+        row.update(period_columns)
+    account_csv = output_dir / f"instagram_account_raw{file_period}_{run_id}.csv"
     write_csv(account_csv, account_rows)
 
     media_rows = export_instagram(client, ig_business_id, limit, since, until)
+    for row in media_rows:
+        row.update(period_columns)
     if account_rows:
         audience_columns = [
             "raw_demographic_age_gender",
@@ -64,7 +80,7 @@ def extract_instagram_raw(
             for row in media_rows:
                 row.update(audience_data)
 
-    media_csv = output_dir / f"instagram_media_raw_{run_id}.csv"
+    media_csv = output_dir / f"instagram_media_raw{file_period}_{run_id}.csv"
     write_csv(media_csv, media_rows)
 
     return {
@@ -73,6 +89,9 @@ def extract_instagram_raw(
         "frequency": frequency,
         "run_id": run_id,
         "extracted_at": extracted_at,
+        "report_month": period.month,
+        "report_since": period.since,
+        "report_until": period.until,
         "account_csv": account_csv,
         "media_csv": media_csv,
         "output_dir": output_dir,

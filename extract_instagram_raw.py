@@ -18,6 +18,7 @@ def parse_args():
     parser.add_argument("--client-id", required=True)
     parser.add_argument("--frequency", default="weekly", choices=["daily", "weekly", "monthly"])
     parser.add_argument("--limit", type=int, default=int(os.getenv("META_EXPORT_LIMIT", "25")))
+    parser.add_argument("--month", help="Bulan laporan, contoh 2026-05, june, atau mei 2026.")
     parser.add_argument("--since", help="Tanggal awal atau Unix timestamp untuk media insight Meta.")
     parser.add_argument("--until", help="Tanggal akhir atau Unix timestamp untuk media insight Meta.")
     parser.add_argument("--output-dir", default="data")
@@ -34,6 +35,7 @@ def main():
         run_id=run_id,
         frequency=args.frequency,
         limit=args.limit,
+        month=args.month,
         since=args.since,
         until=args.until,
         output_root=args.output_dir,
@@ -45,6 +47,9 @@ def main():
                 "run_id": result["run_id"],
                 "client_id": result["client_id"],
                 "platform": result["platform"],
+                "report_month": result.get("report_month", ""),
+                "report_since": result.get("report_since", ""),
+                "report_until": result.get("report_until", ""),
                 "account_csv": str(result["account_csv"]),
                 "media_csv": str(result["media_csv"]),
             },

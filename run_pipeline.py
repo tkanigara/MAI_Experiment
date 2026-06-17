@@ -12,6 +12,7 @@ from ETL_Pipeline.extract.meta_instagram import (
     MetaApiError,
     load_dotenv,
 )
+from ETL_Pipeline.extract.report_period import resolve_period
 from push_to_sheets import append_report_run, push_intermediate_run
 
 
@@ -33,6 +34,7 @@ def parse_args():
     parser.add_argument("--client-id", required=True)
     parser.add_argument("--frequency", required=True, choices=["daily", "weekly", "monthly"])
     parser.add_argument("--limit", type=int, default=int(os.getenv("META_EXPORT_LIMIT", "5")))
+    parser.add_argument("--month", help="Bulan laporan, contoh 2026-05, june, atau mei 2026.")
     parser.add_argument("--since", help="Tanggal awal atau Unix timestamp untuk insight Meta.")
     parser.add_argument("--until", help="Tanggal akhir atau Unix timestamp untuk insight Meta.")
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
@@ -43,16 +45,16 @@ def parse_args():
 
 
 def fetch_instagram_to_csv(args, run_id):
-    extracted = extract_instagram_raw(
+    return extract_instagram_raw(
         client_id=args.client_id,
         run_id=run_id,
         frequency=args.frequency,
         limit=args.limit,
+        month=args.month,
         since=args.since,
         until=args.until,
         output_root=args.output_dir,
     )
-    return extracted["media_csv"], extracted["account_csv"]
 
 
 def dry_run_sources(output_dir):
@@ -112,6 +114,9 @@ def print_dry_run_summary(payload):
         "account_csv": str(payload.get("account_csv") or ""),
         "would_write_sheets": False,
         "would_generate_slides": False,
+        "report_month": payload.get("report_month", ""),
+        "report_since": payload.get("report_since", ""),
+        "report_until": payload.get("report_until", ""),
         "kpi": {
             "total_posts": payload["kpi_summary"].get("total_posts", 0),
             "total_reach": payload["kpi_summary"].get("total_reach", 0),
@@ -139,6 +144,14 @@ def main():
     slides_url = ""
     warning = ""
     processed_json = ""
+    report_month = ""
+    report_since = ""
+    report_until = ""
+
+    period = resolve_period(month=args.month, since=args.since, until=args.until)
+    report_month = period.month
+    report_since = period.since
+    report_until = period.until
 
     if args.generate_slides and args.no_slides:
         raise SystemExit("Use either --generate-slides or --no-slides, not both.")
@@ -148,7 +161,12 @@ def main():
             media_csv, account_csv = dry_run_sources(args.output_dir)
             kpi_summary = empty_kpi(media_csv, account_csv)
         else:
-            media_csv, account_csv = fetch_instagram_to_csv(args, run_id)
+            extracted = fetch_instagram_to_csv(args, run_id)
+            media_csv = extracted["media_csv"]
+            account_csv = extracted["account_csv"]
+            report_month = extracted.get("report_month", "")
+            report_since = extracted.get("report_since", "")
+            report_until = extracted.get("report_until", "")
             kpi_summary = calculate_instagram_kpi(media_csv, account_csv)
 
         if args.dry_run:
@@ -163,6 +181,9 @@ def main():
             "run_id": run_id,
             "client_id": args.client_id,
             "frequency": args.frequency,
+            "report_month": report_month,
+            "report_since": report_since,
+            "report_until": report_until,
             "media_csv": media_csv,
             "account_csv": account_csv,
             "kpi_summary": kpi_summary,
@@ -211,6 +232,9 @@ def main():
                     "status": status,
                     "media_csv": str(media_csv),
                     "account_csv": str(account_csv),
+                    "report_month": report_month,
+                    "report_since": report_since,
+                    "report_until": report_until,
                     "processed_json": str(processed_json),
                     "slides_url": slides_url,
                     "warning": warning,

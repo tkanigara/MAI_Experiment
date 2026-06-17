@@ -338,6 +338,18 @@ Dengan filter periode insight:
 python .\extract_instagram_raw.py --client-id japaholic --limit 25 --since 2026-06-01 --until 2026-06-14
 ```
 
+Dengan filter bulan laporan:
+
+```powershell
+python .\extract_instagram_raw.py --client-id japaholic --limit 100 --month 2026-05
+```
+
+`--month` menerima format `YYYY-MM`, nama bulan Inggris seperti `june`, atau
+nama bulan Indonesia seperti `mei 2026`. Untuk bulan berjalan, tanggal akhir
+otomatis berhenti di hari extract; untuk bulan yang sudah lewat, tanggal akhir
+otomatis memakai hari terakhir bulan tersebut. Nama file raw akan membawa bulan
+laporan, misalnya `instagram_media_raw_2026-05_<run_id>.csv`.
+
 Output:
 
 ```text
@@ -446,7 +458,12 @@ Untuk Facebook post, `--since` dan `--until` bisa dipakai:
 python .\meta_export.py --platform facebook --since 2026-05-01 --until 2026-05-13
 ```
 
-Untuk Instagram raw extract, `--since` dan `--until` diteruskan ke request media insight. Daftar media tetap dibatasi oleh `--limit`; filter tanggal post bisa ditambahkan di tahap berikutnya kalau dibutuhkan.
+Untuk Instagram raw extract, `--since` dan `--until` diteruskan ke request media insight dan dipakai untuk filter timestamp media. Daftar media hasil akhir tetap dibatasi oleh `--limit`.
+
+Untuk Instagram raw extract, `--month` bisa dipakai sebagai pengganti
+`--since/--until`. Jika `--month 2026-05`, extractor memakai periode
+`2026-05-01` sampai `2026-05-31` dan hanya menulis media yang timestamp-nya ada
+di bulan tersebut. Jangan gabungkan `--month` dengan `--since/--until`.
 
 ## Masalah Umum
 

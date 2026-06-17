@@ -162,7 +162,12 @@ def write_csv(path, rows):
     preferred = [
         "platform",
         "object_level",
+        "report_month",
+        "report_since",
+        "report_until",
         "id",
+        "snapshot_date",
+        "snapshot_time",
         "timestamp",
         "media_type",
         "media_product_type",
@@ -172,13 +177,19 @@ def write_csv(path, rows):
         "like_count",
         "comments_count",
         "insight_views",
+        "insight_impressions",
         "insight_reach",
+        "insight_profile_views",
+        "insight_website_clicks",
+        "insight_accounts_engaged",
         "insight_likes",
         "insight_comments",
         "insight_reposts",
         "insight_shares",
         "insight_saved",
+        "insight_saves",
         "insight_total_interactions",
+        "insight_follower_count",
         "audience_demographic_source",
         "account_raw_demographic_age_gender",
         "account_raw_demographic_country",
@@ -221,7 +232,29 @@ def export_instagram_account(client, ig_business_id, since=None, until=None):
         },
     )
 
-    errors = {}
+    account_metric_candidates = [
+        "reach",
+        "impressions",
+        "views",
+        "profile_views",
+        "website_clicks",
+        "accounts_engaged",
+        "total_interactions",
+        "likes",
+        "comments",
+        "shares",
+        "saves",
+        "follower_count",
+    ]
+    metrics, errors, _raw_metric_payloads = fetch_supported_metrics(
+        client,
+        ig_business_id,
+        account_metric_candidates,
+        period="day",
+        since=since,
+        until=until,
+    )
+
     demographic_payloads = {}
     for key, metric, breakdown, timeframe in [
         ("demographic_age_gender", "follower_demographics", "age,gender", None),
@@ -252,9 +285,31 @@ def export_instagram_account(client, ig_business_id, since=None, until=None):
         "follows_count": profile.get("follows_count", ""),
         "media_count": profile.get("media_count", ""),
         "profile_picture_url": profile.get("profile_picture_url", ""),
+        "metric_errors": dumps_raw(errors),
     }
+    row.update({f"insight_{key}": value for key, value in metrics.items()})
     row.update({f"raw_{key}": dumps_raw(value) for key, value in demographic_payloads.items()})
     return [row]
+
+
+def media_in_period(item, since=None, until=None):
+    if not since and not until:
+        return True
+
+    timestamp = item.get("timestamp", "")
+    if not timestamp:
+        return False
+
+    try:
+        posted_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date()
+    except ValueError:
+        return False
+
+    if since and posted_date < datetime.fromisoformat(since).date():
+        return False
+    if until and posted_date > datetime.fromisoformat(until).date():
+        return False
+    return True
 
 
 def export_instagram(client, ig_business_id, limit, since=None, until=None):
@@ -266,7 +321,10 @@ def export_instagram(client, ig_business_id, limit, since=None, until=None):
     media = client.get_all_pages(
         f"{ig_business_id}/media",
         params={"fields": media_fields, "limit": min(limit, 100)},
-    )[:limit]
+    )
+    if since or until:
+        media = [item for item in media if media_in_period(item, since, until)]
+    media = media[:limit]
     total = len(media)
     print(f"Instagram: ditemukan {total} media. Mulai ambil insight per media.", flush=True)
 
