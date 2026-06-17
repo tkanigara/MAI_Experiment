@@ -177,19 +177,13 @@ def write_csv(path, rows):
         "like_count",
         "comments_count",
         "insight_views",
-        "insight_impressions",
         "insight_reach",
-        "insight_profile_views",
-        "insight_website_clicks",
-        "insight_accounts_engaged",
         "insight_likes",
         "insight_comments",
         "insight_reposts",
         "insight_shares",
         "insight_saved",
-        "insight_saves",
         "insight_total_interactions",
-        "insight_follower_count",
         "audience_demographic_source",
         "account_raw_demographic_age_gender",
         "account_raw_demographic_country",
@@ -232,29 +226,7 @@ def export_instagram_account(client, ig_business_id, since=None, until=None):
         },
     )
 
-    account_metric_candidates = [
-        "reach",
-        "impressions",
-        "views",
-        "profile_views",
-        "website_clicks",
-        "accounts_engaged",
-        "total_interactions",
-        "likes",
-        "comments",
-        "shares",
-        "saves",
-        "follower_count",
-    ]
-    metrics, errors, _raw_metric_payloads = fetch_supported_metrics(
-        client,
-        ig_business_id,
-        account_metric_candidates,
-        period="day",
-        since=since,
-        until=until,
-    )
-
+    errors = {}
     demographic_payloads = {}
     for key, metric, breakdown, timeframe in [
         ("demographic_age_gender", "follower_demographics", "age,gender", None),
@@ -285,9 +257,7 @@ def export_instagram_account(client, ig_business_id, since=None, until=None):
         "follows_count": profile.get("follows_count", ""),
         "media_count": profile.get("media_count", ""),
         "profile_picture_url": profile.get("profile_picture_url", ""),
-        "metric_errors": dumps_raw(errors),
     }
-    row.update({f"insight_{key}": value for key, value in metrics.items()})
     row.update({f"raw_{key}": dumps_raw(value) for key, value in demographic_payloads.items()})
     return [row]
 
