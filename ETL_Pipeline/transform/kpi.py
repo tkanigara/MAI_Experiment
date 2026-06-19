@@ -7,208 +7,198 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 class BaseKPIProcessor(ABC):
-    column_map: dict[str, str] = {}
-    required_column: list[str] = []
+    def __init__(
+        self,
+        overview_df: pd.DataFrame,
+        followers_df: pd.DataFrame,
+        engagement_df: pd.DataFrame,
+        target_df: pd.DataFrame,
+        client_name: str,
+        platform: str,
+    ):
+        self.overview_df = overview_df.copy()
+        self.followers_df = followers_df.copy()
+        self.engagement_df = engagement_df.copy()
+        self.target_df = target_df.copy()
+        self.client_name = client_name
+        self.platform = platform
 
     @abstractmethod
-    def generate_kpi(self) -> pd.DataFrame:
+    def run(self) -> pd.DataFrame:
         pass
 
-#SOCIAL MEDIA TRANSFORMER
 class InstagramKPIProcessor(BaseKPIProcessor):
 
-    KPI_CONFIG = {
-        "Followers": {
-            "source": "account",
-            "type": "single",
-            "column": "followers_count"
-        },
-
-        "Reach": {
-            "source": "media",
-            "type": "sum",
-            "column": "insight_reach"
-        },
-
-        "Engagement": {
-            "source": "media",
-            "type": "sum",
-            "column": "insight_total_interactions"
-        }
+    KPI_MAPPING = {
+        "followers": "net_growth",
+        "engagement": "total_engagement",
+        "reach": "reach",
     }
 
-    def __init__(self, account_df, media_df):
-        self.account_df = account_df
-        self.media_df = media_df
+    def _latest_period(self):
 
-    def get_metadata(self):
+        latest = (
+            self.overview_df[
+                ["scrapped_at"]
+            ]
+            .drop_duplicates()
+            .sort_values("scrapped_at")
+            .tail(1)
+        )
 
-        if not self.account_df.empty:
-            source = self.account_df
+        return latest.iloc[0]["scrapped_at"]
 
-        elif not self.media_df.empty:
-            source = self.media_df
+    def _get_target(self, metric):
+        if self.target_df.empty:
+            return 0, 0
+
+        required_cols = [
+            "client",
+            "platform",
+            "metric",
+            "target_month",
+            "target_year"
+        ]
+
+        if not all(
+            col in self.target_df.columns
+            for col in required_cols
+        ):
+            return 0, 0
+
+        row = self.target_df[
+            (self.target_df["client"] == self.client_name)
+            &
+            (self.target_df["platform"] == self.platform)
+            &
+            (self.target_df["metric"] == metric)
+        ]
+
+        if row.empty:
+            return 0, 0
+
+        return (
+            float(row.iloc[0]["target_month"]),
+            float(row.iloc[0]["target_year"])
+        )
+    def _get_current_month(self, metric):
+        source_metric = self.KPI_MAPPING[metric]
+        latest_period = self._latest_period()
+
+        row = self.overview_df[
+            (self.overview_df["metric"] == source_metric)
+            &
+            (
+                pd.to_datetime(
+                    self.overview_df["scrapped_at"]
+                )
+                ==
+                pd.to_datetime(latest_period)
+            )
+        ]
+
+        print(
+            f"[KPI] Metric: {source_metric}"
+        )
+
+        print(row)
+        if row.empty:
+            return 0
+
+        value = pd.to_numeric(
+            row.iloc[0]["value"],
+            errors="coerce"
+        )
+
+        return 0 if pd.isna(value) else float(value)
+    def _get_current_year(self, metric):
+
+        source_metric = (
+            self.KPI_MAPPING[metric]
+        )
+
+        if metric == "followers":
+
+            row = self.followers_df[
+                self.followers_df["metric"]
+                == source_metric
+            ]
 
         else:
-            raise ValueError("No DataFrame Available")
 
-        return {
-            "client": source["client"].iloc[0],
-            "platform": source["platform"].iloc[0],
-            "scrapped_at": source["scrapped_at"].iloc[0]
-        }
+            row = self.engagement_df[
+                self.engagement_df["metric"]
+                == source_metric
+            ]
 
-    def generate_kpi(self):
-        meta = self.get_metadata()
+        if row.empty:
+            return 0
+
+        return (
+            pd.to_numeric(
+                row["value"],
+                errors="coerce"
+            )
+            .fillna(0)
+            .sum()
+        )
+
+    def run(self):
+
         rows = []
-        for metric, config in self.KPI_CONFIG.items():
-            current_value = 0
-            source_df = (
-                self.account_df
-                if config["source"] == "account"
-                else self.media_df
+
+        scrapped_at = (
+            self._latest_period()
+        )
+
+        for metric in self.KPI_MAPPING.keys():
+
+            target_month, target_year = (
+                self._get_target(metric)
             )
 
-            if source_df.empty:
-                continue
+            current_month = (
+                self._get_current_month(metric)
+            )
 
-            if config["type"] == "single":
+            current_year = (
+                self._get_current_year(metric)
+            )
 
-                current_value = (
-                    source_df[config["column"]]
-                    .iloc[0]
-                )
+            achievement_month = (
+                (current_month / target_month) * 100
+                if target_month
+                else 0
+            )
 
-            elif config["type"] == "sum":
-
-                current_value = (
-                    source_df[config["column"]]
-                    .fillna(0)
-                    .sum()
-                )
+            achievement_year = (
+                (current_year / target_year) * 100
+                if target_year
+                else 0
+            )
 
             rows.append(
                 {
-                    "client": meta["client"],
-                    "platform": meta["platform"],
-                    "scrapped_at": meta["scrapped_at"],
+                    "client": self.client_name,
+                    "platform": self.platform,
+                    "scrapped_at": scrapped_at,
                     "metric": metric,
-                    "target_month": None,
-                    "current_month": current_value,
-                    "achievement_month": None,
-                    "target_year": None,
-                    "current_year": current_value,
-                    "achievement_year": None
+                    "target_month": round(target_month, 2),
+                    "current_month": round(current_month, 2),
+                    "achievement_month": round(
+                        achievement_month,
+                        2
+                    ),
+                    "target_year": round(target_year, 2),
+                    "current_year": round(current_year, 2),
+                    "achievement_year": round(
+                        achievement_year,
+                        2
+                    ),
                 }
             )
 
         return pd.DataFrame(rows)
 
-class KPIProcessorFactory:
-    registry = {
-        "instagram":InstagramKPIProcessor
-    }
+KPI_PROCESSOR = {"instagram": InstagramKPIProcessor}
 
-    @classmethod
-    def get(cls, platform: str, account_df: pd.DataFrame, media_df: pd.DataFrame):
-        key = platform.strip().lower()
-        processor_cls = cls.registry.get(key)
-
-        if processor_cls is None:
-            raise ValueError(
-                f"KPI Processor for {platform} not available"
-            )
-        return processor_cls(
-        account_df,
-        media_df
-        )
-#Class ini sementara taroh sini dulu, nanti bakal taroh di load phase, dan class ini harus bisa capable handle semua komponen
-class GSpreadWritter:
-    def __init__(self, credentials_path: str, spreadsheet_id: str):
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-
-        creds = Credentials.from_service_account_file(credentials_path, scopes=scopes)
-        self.client = gspread.authorize(creds)
-        self.spreadsheet = self.client.open_by_key(spreadsheet_id)
-    
-    def write(self, df:pd.DataFrame, sheet_name: str, mode: str = "replace"):
-        try:
-            worksheet = self.spreadsheet.worksheet(sheet_name)
-        except gspread.exceptions.WorksheetNotFound:
-            worksheet = self.spreadsheet.add_worksheet(
-                title=sheet_name, rows=str(len(df) + 10), cols=str(len(df.columns) + 5)
-            )
-        
-        if mode == "replace":
-            worksheet.clear()
-            set_with_dataframe(worksheet, df, include_index=False, include_column_header=True)
-        
-        elif mode == "append":
-            existing = worksheet.get_all_values()
-            start_row = len(existing) + 1
-            if start_row == 1:
-                set_with_dataframe(worksheet, df, include_index=False, include_column_header=True)
-            else:
-                set_with_dataframe(
-                    worksheet, df, row=start_row,
-                    include_index=False, include_column_header=False
-                )
-        else:
-            raise ValueError(f"Mode Unrecognized: {mode}")
-        print(f"[GSpreadWriter] succesfully write to sheet {sheet_name} (mode={mode})")
-
-class KPIProcessor:
-    def __init__(self, account_df: pd.DataFrame, media_df: pd.DataFrame, gspread_writer: Optional[GSpreadWritter] =None):
-        self.account_df = account_df
-        self.media_df = media_df
-        self.writter = gspread_writer
-
-    def generate(self):
-        if not self.account_df.empty:
-            platform = (
-                self.account_df["platform"]
-                .iloc[0]
-            )
-        elif not self.media_df.empty:
-            platform = (
-                self.media_df["platform"]
-                .iloc[0]
-            )
-        else:
-            return pd.DataFrame()
-
-        processor = KPIProcessorFactory.get(
-            platform=platform,
-            account_df=self.account_df,
-            media_df=self.media_df
-        )
-        return processor.generate_kpi()
-        
-    def process_and_export(
-        self,
-        sheet_name: str,
-        mode: str = "replace"
-    ):
-
-        result_df = self.generate()
-
-        if result_df.empty:
-
-            print(
-                "[KPIProcessor] Tidak ada data untuk diekspor."
-            )
-
-            return result_df
-
-        if self.writer:
-
-            self.writter.write(
-                result_df,
-                sheet_name=sheet_name,
-                mode=mode
-            )
-
-        return result_df

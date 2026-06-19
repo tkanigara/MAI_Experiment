@@ -15,7 +15,7 @@ class MetaApiError(Exception):
     """Raised when Meta Graph API returns an unusable response."""
 
 
-def load_dotenv(path=".env"):
+def load_dotenv(path=".env.example"):
     """Load a small .env file without overriding existing environment values."""
     dotenv_path = Path(path)
     if not dotenv_path.exists():
@@ -263,22 +263,41 @@ def export_instagram_account(client, ig_business_id, since=None, until=None):
 
 
 def media_in_period(item, since=None, until=None):
+
     if not since and not until:
+
         return True
 
     timestamp = item.get("timestamp", "")
+
     if not timestamp:
+
         return False
 
     try:
-        posted_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date()
-    except ValueError:
+
+        posted_date = datetime.strptime(
+
+            timestamp,
+
+            "%Y-%m-%dT%H:%M:%S%z"
+
+        ).date()
+
+    except Exception as e:
+
+        print("TIMESTAMP ERROR:", timestamp, e)
+
         return False
 
     if since and posted_date < datetime.fromisoformat(since).date():
+
         return False
+
     if until and posted_date > datetime.fromisoformat(until).date():
+
         return False
+
     return True
 
 
@@ -292,6 +311,14 @@ def export_instagram(client, ig_business_id, limit, since=None, until=None):
         f"{ig_business_id}/media",
         params={"fields": media_fields, "limit": min(limit, 100)},
     )
+    print("=========== DEBUG ============")
+    for item in media[:10]:
+        print(
+            "MEDIA: ",
+            item.get("id"),
+            item.get("timestamp"),
+            item.get("media_type")
+        )
     if since or until:
         media = [item for item in media if media_in_period(item, since, until)]
     media = media[:limit]
