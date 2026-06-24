@@ -10,3 +10,6 @@ langchain
 langchain-core
 langchain-google-genai
 google-generativeai
+google-cloud-secret-manager
+gspread
+gspread_dataframe

@@ -3,23 +3,68 @@ from dotenv import load_dotenv
 import pandas as pd
 import os
 from datetime import datetime
+import re
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(BASE_DIR / ".env.example")
-DATA_FOLDER = BASE_DIR / os.getenv("RAW_DATA")
+load_dotenv(BASE_DIR / ".env")
+DATA_FOLDER = BASE_DIR / os.getenv("DATA_FOLDER", "data")
 
 class ReadCsv:
-    def __init__(self, folder_path, platform, data_kind, client_name):
+    def __init__(
+        self,
+        folder_path,
+        platform,
+        data_kind,
+        client_name,
+        latest_per_period=True,
+    ):
         self.folder_path = Path(folder_path)
         self.platform = platform
         self.data_kind = data_kind
         self.client_name = client_name
+        self.latest_per_period = latest_per_period
     
     def _find_files(self) ->list[Path]:
         print(f"Current folder: {self.folder_path}" )
         print(f"Exists: {self.folder_path.exists()}")
         print(f"Absolute: {self.folder_path.resolve()}")
-        return sorted(self.folder_path.glob("*.csv"))
+        if not self.folder_path.exists():
+            return []
+
+        pattern = self._file_pattern()
+        files = sorted(self.folder_path.glob(pattern))
+        if self.latest_per_period:
+            files = self._latest_files_by_period(files)
+        return files
+
+    def _file_pattern(self):
+        if self.data_kind in ("account", "media"):
+            return f"{self.platform}_{self.data_kind}_raw*.csv"
+        return "*.csv"
+
+    def _report_period_from_name(self, file: Path):
+        match = re.search(r"_raw_(\d{4}-\d{2})_", file.name)
+        if match:
+            return match.group(1)
+        scrapped_at = self._extract_scrapped_at(file)
+        if scrapped_at:
+            return scrapped_at.strftime("%Y-%m")
+        return file.stem
+
+    def _latest_files_by_period(self, files):
+        latest = {}
+        for file in files:
+            period = self._report_period_from_name(file)
+            scrapped_at = self._extract_scrapped_at(file) or datetime.fromtimestamp(
+                file.stat().st_mtime
+            )
+            current = latest.get(period)
+            if not current or scrapped_at > current[0]:
+                latest[period] = (scrapped_at, file)
+        return [
+            item[1]
+            for item in sorted(latest.values(), key=lambda value: value[0])
+        ]
     
     def _read_one(self, file: Path) -> pd.DataFrame:
         print(f"Reading: {file.name}")

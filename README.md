@@ -59,6 +59,9 @@ Buat atau isi file `.env` di folder ini:
 
 ```env
 META_ACCESS_TOKEN=isi_token_meta_di_sini
+META_ACCESS_TOKEN_SECRET_ID=mai-meta-access-token
+SECRET_MANAGER_PROJECT_ID=optimum-essence-497706-i6
+SECRET_MANAGER_SERVICE_ACCOUNT_FILE=optimum-essence-497706-i6-1c879e7ef3bd.json
 IG_BUSINESS_ID=isi_instagram_business_id_di_sini
 FB_PAGE_ID=isi_facebook_page_id_di_sini
 META_API_VERSION=v23.0
@@ -81,6 +84,7 @@ GOOGLE_TOKEN_FILE=token.json
 Catatan:
 
 - `META_ACCESS_TOKEN` wajib ada.
+- Kalau `META_ACCESS_TOKEN` dikosongkan, script bisa mengambilnya dari Google Secret Manager lewat `META_ACCESS_TOKEN_SECRET_ID`.
 - `IG_BUSINESS_ID` dipakai untuk export Instagram.
 - `FB_PAGE_ID` dipakai untuk export Facebook.
 - `META_API_VERSION` boleh diganti kalau versi API yang dipakai berbeda.
@@ -91,6 +95,27 @@ Catatan:
 - `GOOGLE_CREDENTIALS_FILE` dan `GOOGLE_TOKEN_FILE` tetap bisa dipakai untuk Google Slides via OAuth.
 
 Script akan membaca `.env` otomatis saat dijalankan.
+
+### Meta token dari Google Secret Manager
+
+Untuk menyimpan token Meta di Google Secret Manager, kosongkan
+`META_ACCESS_TOKEN` dan isi:
+
+```env
+META_ACCESS_TOKEN=
+META_ACCESS_TOKEN_SECRET_ID=mai-meta-access-token
+SECRET_MANAGER_PROJECT_ID=optimum-essence-497706-i6
+SECRET_MANAGER_SERVICE_ACCOUNT_FILE=optimum-essence-497706-i6-1c879e7ef3bd.json
+```
+
+Buat secret bernama `mai-meta-access-token` di Google Cloud Secret Manager,
+lalu isi secret value dengan Meta access token. Service account yang dipakai di
+`SECRET_MANAGER_SERVICE_ACCOUNT_FILE` harus punya role Secret Manager Secret
+Accessor untuk secret/project tersebut. Kalau `SECRET_MANAGER_SERVICE_ACCOUNT_FILE`
+kosong, script fallback ke `GOOGLE_APPLICATION_CREDENTIALS`, lalu Application
+Default Credentials dari `gcloud auth application-default login`. Saat
+`META_ACCESS_TOKEN` kosong, pipeline akan mengambil token dari secret itu saat
+runtime.
 
 ## Scheduler Pipeline V1
 
