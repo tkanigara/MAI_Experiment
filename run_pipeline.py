@@ -84,11 +84,18 @@ def maybe_generate_slides(args, media_csv, account_csv, ai_insights):
 
     python_dotenv()
     template = os.getenv("SLIDES_TEMPLATE_ID") or os.getenv("GOOGLE_SLIDES_TEMPLATE_ID")
-    credentials = (
-        os.getenv("GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE")
-        or os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-        or os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
-    )
+    if os.getenv("GOOGLE_SLIDES_AUTH", "").strip().lower() in (
+        "adc",
+        "application_default",
+        "application-default",
+    ):
+        credentials = ""
+    else:
+        credentials = (
+            os.getenv("GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE")
+            or os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
+            or os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+        )
     token = os.getenv("GOOGLE_TOKEN_FILE", "token.json")
     result = generate_slides_report(
         template=template if template else "https://docs.google.com/presentation/d/1ZeYnxJOVIjjEbHqa6BJBh30JE3m2SVQuyEcOu4WaiMY/edit?usp=sharing",

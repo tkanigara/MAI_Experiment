@@ -172,6 +172,7 @@ def write_csv(path, rows):
         "snapshot_date",
         "snapshot_time",
         "timestamp",
+        "caption",
         "media_type",
         "media_product_type",
         "permalink",
@@ -307,7 +308,7 @@ def media_in_period(item, since=None, until=None):
 def export_instagram(client, ig_business_id, limit, since=None, until=None):
     print(f"Instagram: mengambil daftar media, maksimal {limit} item...", flush=True)
     media_fields = (
-        "id,media_type,media_product_type,media_url,permalink,"
+        "id,caption,media_type,media_product_type,media_url,permalink,"
         "thumbnail_url,timestamp,username,like_count,comments_count"
     )
     media = client.get_all_pages(
@@ -357,6 +358,7 @@ def export_instagram(client, ig_business_id, limit, since=None, until=None):
             "object_level": "media",
             "id": item.get("id", ""),
             "timestamp": item.get("timestamp", ""),
+            "caption": clean_text(item.get("caption", "")),
             "username": item.get("username", ""),
             "media_type": item.get("media_type", ""),
             "media_product_type": item.get("media_product_type", ""),
