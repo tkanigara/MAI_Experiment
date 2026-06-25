@@ -107,6 +107,44 @@ def filter_period(df, period):
     parsed = pd.to_datetime(df["scrapped_at"], errors="coerce")
     return df[parsed.dt.strftime("%Y-%m") == period].copy()
 
+
+def period_pairs(df):
+    if df.empty or not {"year", "month"}.issubset(df.columns):
+        return set()
+    periods = df[["year", "month"]].dropna().drop_duplicates()
+    return {
+        (int(row["year"]), int(row["month"]))
+        for _, row in periods.iterrows()
+    }
+
+
+def filter_metric_periods(df, periods):
+    if df.empty or not periods or not {"year", "month"}.issubset(df.columns):
+        return df
+    normalized = df.copy()
+    normalized["year"] = pd.to_numeric(normalized["year"], errors="coerce")
+    normalized["month"] = pd.to_numeric(normalized["month"], errors="coerce")
+    mask = [
+        (int(year), int(month)) in periods
+        if not pd.isna(year) and not pd.isna(month)
+        else False
+        for year, month in zip(normalized["year"], normalized["month"])
+    ]
+    return df.loc[mask].copy()
+
+
+def filter_overview_periods(df, periods):
+    if df.empty or not periods or "scrapped_at" not in df.columns:
+        return df
+    parsed = pd.to_datetime(df["scrapped_at"], errors="coerce")
+    mask = [
+        (date.year, date.month) in periods
+        if not pd.isna(date)
+        else False
+        for date in parsed
+    ]
+    return df.loc[mask].copy()
+
 #========= GOOGLE SHEETS ACTION ============
 #===========================================
 sheet_reader = GSpreadReader(
@@ -346,6 +384,7 @@ for client_dir in DATA_FOLDER.iterdir():
                 "metric",
             ],
         )
+        current_periods = period_pairs(final_df) | period_pairs(final_engagement_df)
 
         #================ OVERVIEW SECTION =============
         overview_cls = (
@@ -398,11 +437,19 @@ for client_dir in DATA_FOLDER.iterdir():
                 followers_sheet["client_id"]
                 == client_name
             ]
+            followers_sheet = filter_metric_periods(
+                followers_sheet,
+                current_periods,
+            )
 
             engagement_sheet = engagement_sheet[
                 engagement_sheet["client_id"]
                 == client_name
             ]
+            engagement_sheet = filter_metric_periods(
+                engagement_sheet,
+                current_periods,
+            )
 
             overview_processor = (
                 overview_cls(
@@ -519,16 +566,28 @@ for client_dir in DATA_FOLDER.iterdir():
                 overview_sheet["client"]
                 == client_name
             ]
+            overview_sheet = filter_overview_periods(
+                overview_sheet,
+                current_periods,
+            )
 
             followers_sheet = followers_sheet[
                 followers_sheet["client_id"]
                 == client_name
             ]
+            followers_sheet = filter_metric_periods(
+                followers_sheet,
+                current_periods,
+            )
 
             engagement_sheet = engagement_sheet[
                 engagement_sheet["client_id"]
                 == client_name
             ]
+            engagement_sheet = filter_metric_periods(
+                engagement_sheet,
+                current_periods,
+            )
 
             target_sheet = pd.DataFrame()
             kpi_processor = (
