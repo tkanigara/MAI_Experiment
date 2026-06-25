@@ -17,7 +17,7 @@ class MetaApiError(Exception):
     """Raised when Meta Graph API returns an unusable response."""
 
 
-def load_dotenv(path=".env.example"):
+def load_dotenv(path=".env"):
     """Load a small .env file without overriding existing environment values."""
     dotenv_path = Path(path)
     if not dotenv_path.exists():
@@ -117,6 +117,28 @@ def metric_value(insights_payload, metric_name):
     return ""
 
 
+def metric_values(insights_payload, metric_name):
+    """Extract all daily values from a Meta /insights metric response."""
+    for item in insights_payload.get("data", []):
+        if item.get("name") != metric_name:
+            continue
+        return item.get("values", [])
+    return []
+
+
+def sum_metric_values(insights_payload, metric_name):
+    total = 0
+    has_value = False
+    for item in metric_values(insights_payload, metric_name):
+        value = item.get("value", 0)
+        try:
+            total += int(float(value))
+            has_value = True
+        except (TypeError, ValueError):
+            continue
+    return total if has_value else ""
+
+
 def fetch_metric_group(client, object_id, metrics, period=None, since=None, until=None):
     params = {"metric": ",".join(metrics)}
     if period:
@@ -171,6 +193,13 @@ def write_csv(path, rows):
         "id",
         "snapshot_date",
         "snapshot_time",
+        "followers_count",
+        "follows_count",
+        "following_count",
+        "media_count",
+        "profile_picture_url",
+        "raw_follower_count_daily",
+        "raw_account_errors",
         "timestamp",
         "caption",
         "media_type",
@@ -215,6 +244,20 @@ def fetch_instagram_demographic(client, ig_business_id, metric, breakdown, timef
     return client.get(f"{ig_business_id}/insights", params=params)
 
 
+def fetch_monthly_follows_count(client, ig_business_id, since=None, until=None):
+    if not since or not until:
+        return "", {}
+    payload = fetch_metric_group(
+        client,
+        ig_business_id,
+        ["follower_count"],
+        period="day",
+        since=since,
+        until=until,
+    )
+    return sum_metric_values(payload, "follower_count"), payload
+
+
 def export_instagram_account(client, ig_business_id, since=None, until=None):
     print("Instagram: mengambil account profile dan account-level insights...", flush=True)
     snapshot_time = datetime.now(timezone.utc).isoformat()
@@ -231,6 +274,18 @@ def export_instagram_account(client, ig_business_id, since=None, until=None):
     )
 
     errors = {}
+    monthly_follows_count = ""
+    follower_count_payload = {}
+    try:
+        monthly_follows_count, follower_count_payload = fetch_monthly_follows_count(
+            client,
+            ig_business_id,
+            since,
+            until,
+        )
+    except MetaApiError as exc:
+        errors["follower_count"] = str(exc)
+
     demographic_payloads = {}
     for key, metric, breakdown, timeframe in [
         ("demographic_age_gender", "follower_demographics", "age,gender", None),
@@ -258,9 +313,12 @@ def export_instagram_account(client, ig_business_id, since=None, until=None):
         "username": profile.get("username", ""),
         "name": profile.get("name", ""),
         "followers_count": profile.get("followers_count", ""),
-        "follows_count": profile.get("follows_count", ""),
+        "follows_count": monthly_follows_count,
+        "following_count": profile.get("follows_count", ""),
         "media_count": profile.get("media_count", ""),
         "profile_picture_url": profile.get("profile_picture_url", ""),
+        "raw_follower_count_daily": dumps_raw(follower_count_payload),
+        "raw_account_errors": dumps_raw(errors),
     }
     row.update({f"raw_{key}": dumps_raw(value) for key, value in demographic_payloads.items()})
     return [row]
