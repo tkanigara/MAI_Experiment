@@ -8,6 +8,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from secret_manager import hydrate_env_from_secret
+
 DEFAULT_API_VERSION = "v23.0"
 
 
@@ -21,7 +23,7 @@ def load_dotenv(path=".env.example"):
     if not dotenv_path.exists():
         return
 
-    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+    for line in dotenv_path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -77,6 +79,7 @@ class MetaClient:
 
 
 def env_required(name):
+    hydrate_env_from_secret(name)
     value = os.environ.get(name, "").strip()
     if not value:
         raise SystemExit(f"Missing environment variable: {name}")
@@ -169,6 +172,7 @@ def write_csv(path, rows):
         "snapshot_date",
         "snapshot_time",
         "timestamp",
+        "caption",
         "media_type",
         "media_product_type",
         "permalink",
@@ -304,7 +308,7 @@ def media_in_period(item, since=None, until=None):
 def export_instagram(client, ig_business_id, limit, since=None, until=None):
     print(f"Instagram: mengambil daftar media, maksimal {limit} item...", flush=True)
     media_fields = (
-        "id,media_type,media_product_type,media_url,permalink,"
+        "id,caption,media_type,media_product_type,media_url,permalink,"
         "thumbnail_url,timestamp,username,like_count,comments_count"
     )
     media = client.get_all_pages(
@@ -354,6 +358,7 @@ def export_instagram(client, ig_business_id, limit, since=None, until=None):
             "object_level": "media",
             "id": item.get("id", ""),
             "timestamp": item.get("timestamp", ""),
+            "caption": clean_text(item.get("caption", "")),
             "username": item.get("username", ""),
             "media_type": item.get("media_type", ""),
             "media_product_type": item.get("media_product_type", ""),

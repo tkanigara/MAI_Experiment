@@ -10,6 +10,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from secret_manager import hydrate_env_from_secret
+
 
 DEFAULT_API_VERSION = "v23.0"
 
@@ -34,7 +36,7 @@ def load_dotenv(path=".env"):
     if not dotenv_path.exists():
         return
 
-    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+    for line in dotenv_path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -91,6 +93,7 @@ class MetaClient:
 
 
 def env_required(name):
+    hydrate_env_from_secret(name)
     value = os.environ.get(name, "").strip()
     if not value:
         raise SystemExit(f"Missing environment variable: {name}")

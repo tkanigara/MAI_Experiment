@@ -23,22 +23,58 @@ from ETL_Pipeline.transform.overview import (
 #==================================================
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(
-    BASE_DIR / ".env.example"
+    BASE_DIR / ".env"
 )
 DATA_FOLDER = (
     BASE_DIR
-    / os.getenv("RAW_DATA")
+    / os.getenv("DATA_FOLDER", "data").strip()
 )
-CREDENTIAL_PATH = str(
-    BASE_DIR
-    / "config"
-    / os.getenv(
-        "GOOGLE_SERVICE_ACCOUNT_FILE"
-    )
-)
+credential_file = os.getenv(
+    "GOOGLE_SERVICE_ACCOUNT_FILE",
+    "optimum-essence-497706-i6-1c879e7ef3bd.json"
+).strip()
+credential_path = Path(credential_file)
+if not credential_path.is_absolute():
+    credential_path = BASE_DIR / credential_path
+CREDENTIAL_PATH = str(credential_path)
 SPREADSHEET_ID = os.getenv(
     "INTERMEDIATE_SPREADSHEET_ID"
 )
+
+
+def dedupe_sheet_rows(df, keys):
+    if df.empty:
+        return df
+
+    available_keys = [
+        key for key in keys
+        if key in df.columns
+    ]
+    if not available_keys:
+        return df
+
+    normalized = df.copy()
+    for key in available_keys:
+        if key in ("scrapped_at", "date", "timestamp"):
+            parsed = pd.to_datetime(
+                normalized[key],
+                errors="coerce"
+            )
+            normalized[key] = parsed.dt.strftime(
+                "%Y-%m-%d"
+            ).fillna(normalized[key].astype(str))
+        else:
+            normalized[key] = normalized[key].astype(str)
+
+    dedupe_key = normalized[available_keys].agg(
+        "\x1f".join,
+        axis=1
+    )
+    return (
+        df.assign(_dedupe_key=dedupe_key)
+        .drop_duplicates("_dedupe_key", keep="last")
+        .drop(columns=["_dedupe_key"])
+    )
 
 #========= GOOGLE SHEETS ACTION ============
 #===========================================
@@ -67,14 +103,20 @@ for client_dir in DATA_FOLDER.iterdir():
         if not platform_dir.is_dir():
             continue
 
+        has_raw_files = any(platform_dir.glob("*_account_raw*.csv")) or any(
+            platform_dir.glob("*_media_raw*.csv")
+        )
+        if not has_raw_files:
+            continue
+
         platform = platform_dir.name
         print(f"\nPlatform: {platform}")
 
         account_folder = (
-            platform_dir / "account"
+            platform_dir
         )
         media_folder = (
-            platform_dir / "media"
+            platform_dir
         )
 
         #=========== READING FILE SECTION =========
@@ -199,7 +241,14 @@ for client_dir in DATA_FOLDER.iterdir():
         writer.write(
             df=final_df,
             sheet_name="foll_growth",
-            mode="append"
+            mode="upsert",
+            dedupe_keys=[
+                "client_id",
+                "platform",
+                "year",
+                "month",
+                "metric",
+            ],
         )
 
         #================ ENGAGEMENT PERFORMANCE SECTION =============
@@ -253,7 +302,14 @@ for client_dir in DATA_FOLDER.iterdir():
         writer.write(
             df=final_engagement_df,
             sheet_name="engagement_performance",
-            mode="append"
+            mode="upsert",
+            dedupe_keys=[
+                "client_id",
+                "platform",
+                "year",
+                "month",
+                "metric",
+            ],
         )
 
         #================ OVERVIEW SECTION =============
@@ -276,11 +332,31 @@ for client_dir in DATA_FOLDER.iterdir():
                     "foll_growth"
                 )
             )
+            followers_sheet = dedupe_sheet_rows(
+                followers_sheet,
+                [
+                    "client_id",
+                    "platform",
+                    "year",
+                    "month",
+                    "metric",
+                ],
+            )
 
             engagement_sheet = (
                 sheet_reader.read(
                     "engagement_performance"
                 )
+            )
+            engagement_sheet = dedupe_sheet_rows(
+                engagement_sheet,
+                [
+                    "client_id",
+                    "platform",
+                    "year",
+                    "month",
+                    "metric",
+                ],
             )
 
             followers_sheet = followers_sheet[
@@ -323,7 +399,14 @@ for client_dir in DATA_FOLDER.iterdir():
                 writer.write(
                     df=overview_df,
                     sheet_name="content_overview",
-                    mode="append"
+                    mode="upsert",
+                    dedupe_keys=[
+                        "client",
+                        "platform",
+                        "scrapped_at",
+                        "category",
+                        "metric",
+                    ],
                 )
 
                         #================ KPI SECTION =============
@@ -348,17 +431,47 @@ for client_dir in DATA_FOLDER.iterdir():
                     "content_overview"
                 )
             )
+            overview_sheet = dedupe_sheet_rows(
+                overview_sheet,
+                [
+                    "client",
+                    "platform",
+                    "scrapped_at",
+                    "category",
+                    "metric",
+                ],
+            )
 
             followers_sheet = (
                 sheet_reader.read(
                     "foll_growth"
                 )
             )
+            followers_sheet = dedupe_sheet_rows(
+                followers_sheet,
+                [
+                    "client_id",
+                    "platform",
+                    "year",
+                    "month",
+                    "metric",
+                ],
+            )
 
             engagement_sheet = (
                 sheet_reader.read(
                     "engagement_performance"
                 )
+            )
+            engagement_sheet = dedupe_sheet_rows(
+                engagement_sheet,
+                [
+                    "client_id",
+                    "platform",
+                    "year",
+                    "month",
+                    "metric",
+                ],
             )
 
             target_sheet = (
@@ -418,7 +531,13 @@ for client_dir in DATA_FOLDER.iterdir():
                 writer.write(
                     df=kpi_df,
                     sheet_name="kpi",
-                    mode="append"
+                    mode="upsert",
+                    dedupe_keys=[
+                        "client",
+                        "platform",
+                        "scrapped_at",
+                        "metric",
+                    ],
                 )
 
 print("\n=================================")
