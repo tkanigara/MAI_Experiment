@@ -9,7 +9,6 @@ class FollowersGrowthBase:
     DATA_KIND   = "account"
     DATE_COLUMN = "Month"
     DATE_FORMAT = "%b %Y"
-
     CSV_COLUMNS: list[str]            = []
     METRICS: dict[str, callable]      = {}
 
@@ -80,8 +79,8 @@ class FollowersGrowthBase:
         print(f"[{self.__class__.__name__}] Total → {len(result)} rows")
         return result
 
+#Metric calculation 
 class FollowersGrowthMetricProcessor:
-
     def __init__(
         self,
         current_df: pd.DataFrame,
@@ -91,18 +90,16 @@ class FollowersGrowthMetricProcessor:
         self.historical_df = historical_df.copy()
 
     def calculate_net_growth(self) -> pd.DataFrame:
-
         followers_df = self.current_df[
             self.current_df["metric"] == "total_followers"
         ].copy()
 
         if followers_df.empty:
             return pd.DataFrame()
-
+        
         results = []
 
         for _, row in followers_df.iterrows():
-
             current_year = int(row["year"])
             current_month = int(row["month"])
 
@@ -139,15 +136,11 @@ class FollowersGrowthMetricProcessor:
                 f"Searching previous period: "
                 f"{previous_date.year}-{previous_date.month}"
             )
-
             print(prev_row)
 
             if prev_row.empty:
-
                 net_growth = 0
-
             else:
-
                 previous_followers = pd.to_numeric(
                     prev_row.iloc[0]["value"],
                     errors="coerce"
@@ -171,7 +164,6 @@ class FollowersGrowthMetricProcessor:
                 "metric": "net_growth",
                 "value": net_growth
             })
-
         return pd.DataFrame(results)
     
     def calculate_unfollows(self, growth_df: pd.DataFrame) -> pd.DataFrame:
@@ -227,7 +219,6 @@ class FollowersGrowthMetricProcessor:
         })
     
     def run(self) -> pd.DataFrame:
-
         growth_df = self.calculate_net_growth()
         unfollows_df = self.calculate_unfollows(growth_df)
         if growth_df.empty:
@@ -254,9 +245,6 @@ class InstagramFollowersGrowth(FollowersGrowthBase):
     METRICS = {
         "total_followers": lambda c: c["followers_count"],
         "follows":         lambda c: c["follows_count"],
-        # Net growth tidak bisa dihitung dari 1 baris snapshot,
-        # perlu dibandingkan antar snapshot — tambahkan jika sudah ada kolom selisihnya
-        # "follow_rate":  lambda c: c["follows_count"] / c["followers_count"] * 100,
     }
 
 #class tiktok
@@ -266,6 +254,7 @@ class InstagramFollowersGrowth(FollowersGrowthBase):
 FOLLOWERS_GROWTH_PROCESSOR = {
     "instagram": InstagramFollowersGrowth
 }
+
 class GSpreadWriter:
     def __init__(
         self,
@@ -353,8 +342,8 @@ class GSpreadWriter:
             f"to '{sheet_name}' "
             f"(mode={mode})"
         )
-class GSpreadReader:
 
+class GSpreadReader:
     def __init__(
         self,
         credentials_path: str,
@@ -371,23 +360,17 @@ class GSpreadReader:
         )
 
         self.client = gspread.authorize(creds)
-
         self.spreadsheet = self.client.open_by_key(
             spreadsheet_id
         )
 
     def read(self, sheet_name):
-
         try:
-
             worksheet = self.spreadsheet.worksheet(
                 sheet_name
             )
-
             records = worksheet.get_all_records()
-
             if not records:
-
                 return pd.DataFrame(
                     columns=[
                         "client_id",
@@ -400,7 +383,6 @@ class GSpreadReader:
                 )
 
             return pd.DataFrame(records)
-
         except gspread.exceptions.WorksheetNotFound:
 
             return pd.DataFrame(
