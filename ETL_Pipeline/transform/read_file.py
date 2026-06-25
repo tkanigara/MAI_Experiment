@@ -17,12 +17,14 @@ class ReadCsv:
         data_kind,
         client_name,
         latest_per_period=True,
+        latest_only=False,
     ):
         self.folder_path = Path(folder_path)
         self.platform = platform
         self.data_kind = data_kind
         self.client_name = client_name
         self.latest_per_period = latest_per_period
+        self.latest_only = latest_only
     
     def _find_files(self) ->list[Path]:
         print(f"Current folder: {self.folder_path}" )
@@ -35,6 +37,8 @@ class ReadCsv:
         files = sorted(self.folder_path.glob(pattern))
         if self.latest_per_period:
             files = self._latest_files_by_period(files)
+        if self.latest_only:
+            files = self._latest_files(files)
         return files
 
     def _file_pattern(self):
@@ -64,6 +68,17 @@ class ReadCsv:
         return [
             item[1]
             for item in sorted(latest.values(), key=lambda value: value[0])
+        ]
+
+    def _latest_files(self, files):
+        if not files:
+            return []
+        return [
+            max(
+                files,
+                key=lambda file: self._extract_scrapped_at(file)
+                or datetime.fromtimestamp(file.stat().st_mtime),
+            )
         ]
     
     def _read_one(self, file: Path) -> pd.DataFrame:

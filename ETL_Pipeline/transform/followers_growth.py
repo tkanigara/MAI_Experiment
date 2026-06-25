@@ -9,6 +9,7 @@ class FollowersGrowthBase:
     DATA_KIND   = "account"
     DATE_COLUMN = "Month"
     DATE_FORMAT = "%b %Y"
+
     CSV_COLUMNS: list[str]            = []
     METRICS: dict[str, callable]      = {}
 
@@ -76,11 +77,11 @@ class FollowersGrowthBase:
             return pd.DataFrame()
 
         result = self._to_long_format()
-        print(f"[{self.__class__.__name__}] Total → {len(result)} rows")
+        print(f"[{self.__class__.__name__}] Total -> {len(result)} rows")
         return result
 
-#Metric calculation 
 class FollowersGrowthMetricProcessor:
+
     def __init__(
         self,
         current_df: pd.DataFrame,
@@ -90,16 +91,18 @@ class FollowersGrowthMetricProcessor:
         self.historical_df = historical_df.copy()
 
     def calculate_net_growth(self) -> pd.DataFrame:
+
         followers_df = self.current_df[
             self.current_df["metric"] == "total_followers"
         ].copy()
 
         if followers_df.empty:
             return pd.DataFrame()
-        
+
         results = []
 
         for _, row in followers_df.iterrows():
+
             current_year = int(row["year"])
             current_month = int(row["month"])
 
@@ -136,11 +139,15 @@ class FollowersGrowthMetricProcessor:
                 f"Searching previous period: "
                 f"{previous_date.year}-{previous_date.month}"
             )
+
             print(prev_row)
 
             if prev_row.empty:
+
                 net_growth = 0
+
             else:
+
                 previous_followers = pd.to_numeric(
                     prev_row.iloc[0]["value"],
                     errors="coerce"
@@ -164,6 +171,7 @@ class FollowersGrowthMetricProcessor:
                 "metric": "net_growth",
                 "value": net_growth
             })
+
         return pd.DataFrame(results)
     
     def calculate_unfollows(self, growth_df: pd.DataFrame) -> pd.DataFrame:
@@ -219,6 +227,7 @@ class FollowersGrowthMetricProcessor:
         })
     
     def run(self) -> pd.DataFrame:
+
         growth_df = self.calculate_net_growth()
         unfollows_df = self.calculate_unfollows(growth_df)
         if growth_df.empty:
@@ -245,6 +254,9 @@ class InstagramFollowersGrowth(FollowersGrowthBase):
     METRICS = {
         "total_followers": lambda c: c["followers_count"],
         "follows":         lambda c: c["follows_count"],
+        # Net growth tidak bisa dihitung dari 1 baris snapshot,
+        # perlu dibandingkan antar snapshot — tambahkan jika sudah ada kolom selisihnya
+        # "follow_rate":  lambda c: c["follows_count"] / c["followers_count"] * 100,
     }
 
 #class tiktok
@@ -254,7 +266,6 @@ class InstagramFollowersGrowth(FollowersGrowthBase):
 FOLLOWERS_GROWTH_PROCESSOR = {
     "instagram": InstagramFollowersGrowth
 }
-
 class GSpreadWriter:
     def __init__(
         self,
@@ -276,11 +287,24 @@ class GSpreadWriter:
             spreadsheet_id
         )
 
+    def _dedupe_key_frame(self, df, keys):
+        key_df = df[keys].copy()
+        for key in keys:
+            if key in ("scrapped_at", "date", "timestamp"):
+                parsed = pd.to_datetime(key_df[key], errors="coerce")
+                key_df[key] = parsed.dt.strftime("%Y-%m-%d").fillna(
+                    key_df[key].astype(str)
+                )
+            else:
+                key_df[key] = key_df[key].astype(str)
+        return key_df
+
     def write(
         self,
         df: pd.DataFrame,
         sheet_name: str,
-        mode: str = "replace"
+        mode: str = "replace",
+        dedupe_keys=None,
     ):
 
         if df.empty:
@@ -332,6 +356,58 @@ class GSpreadWriter:
                     include_index=False,
                     include_column_header=False
                 )
+        elif mode == "upsert":
+            existing = worksheet.get_all_records()
+            existing_df = pd.DataFrame(existing)
+            output_df = df.copy()
+
+            if not existing_df.empty:
+                if not dedupe_keys:
+                    dedupe_keys = list(output_df.columns)
+
+                missing_keys = [
+                    key for key in dedupe_keys
+                    if key not in existing_df.columns or key not in output_df.columns
+                ]
+                if missing_keys:
+                    raise ValueError(
+                        f"Cannot upsert '{sheet_name}', missing keys: {missing_keys}"
+                    )
+
+                existing_cmp = self._dedupe_key_frame(existing_df, dedupe_keys)
+                new_cmp = self._dedupe_key_frame(output_df, dedupe_keys)
+                new_keys = {
+                    tuple(row)
+                    for row in new_cmp.to_numpy()
+                }
+                keep_mask = [
+                    tuple(row) not in new_keys
+                    for row in existing_cmp.to_numpy()
+                ]
+                output_df = pd.concat(
+                    [existing_df.loc[keep_mask], output_df],
+                    ignore_index=True,
+                )
+
+            if dedupe_keys:
+                key_values = self._dedupe_key_frame(
+                    output_df,
+                    dedupe_keys,
+                ).agg("\x1f".join, axis=1)
+                output_df = (
+                    output_df.assign(_dedupe_key=key_values)
+                    .drop_duplicates("_dedupe_key", keep="last")
+                    .drop(columns=["_dedupe_key"])
+                )
+
+            worksheet.clear()
+            set_with_dataframe(
+                worksheet,
+                output_df,
+                include_index=False,
+                include_column_header=True,
+                resize=True,
+            )
         else:
             raise ValueError(
                 f"Mode unrecognized: {mode}"
@@ -342,8 +418,8 @@ class GSpreadWriter:
             f"to '{sheet_name}' "
             f"(mode={mode})"
         )
-
 class GSpreadReader:
+
     def __init__(
         self,
         credentials_path: str,
@@ -360,17 +436,23 @@ class GSpreadReader:
         )
 
         self.client = gspread.authorize(creds)
+
         self.spreadsheet = self.client.open_by_key(
             spreadsheet_id
         )
 
     def read(self, sheet_name):
+
         try:
+
             worksheet = self.spreadsheet.worksheet(
                 sheet_name
             )
+
             records = worksheet.get_all_records()
+
             if not records:
+
                 return pd.DataFrame(
                     columns=[
                         "client_id",
@@ -383,6 +465,7 @@ class GSpreadReader:
                 )
 
             return pd.DataFrame(records)
+
         except gspread.exceptions.WorksheetNotFound:
 
             return pd.DataFrame(

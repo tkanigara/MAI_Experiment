@@ -1,5 +1,6 @@
 from pathlib import Path
 from dotenv import load_dotenv
+import argparse
 import pandas as pd
 import os
 from ETL_Pipeline.transform.kpi import (
@@ -42,6 +43,25 @@ SPREADSHEET_ID = os.getenv(
 )
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run local CSV ETL into intermediate Google Sheets."
+    )
+    parser.add_argument(
+        "--all-periods",
+        action="store_true",
+        help="Process the latest CSV for every available report period.",
+    )
+    parser.add_argument(
+        "--period",
+        help="Process a specific report period, for example 2026-05.",
+    )
+    return parser.parse_args()
+
+
+ARGS = parse_args()
+
+
 def dedupe_sheet_rows(df, keys):
     if df.empty:
         return df
@@ -75,6 +95,17 @@ def dedupe_sheet_rows(df, keys):
         .drop_duplicates("_dedupe_key", keep="last")
         .drop(columns=["_dedupe_key"])
     )
+
+
+def filter_period(df, period):
+    if not period or df.empty:
+        return df
+    if "report_month" in df.columns:
+        return df[df["report_month"].astype(str) == period].copy()
+    if "scrapped_at" not in df.columns:
+        return df
+    parsed = pd.to_datetime(df["scrapped_at"], errors="coerce")
+    return df[parsed.dt.strftime("%Y-%m") == period].copy()
 
 #========= GOOGLE SHEETS ACTION ============
 #===========================================
@@ -124,7 +155,8 @@ for client_dir in DATA_FOLDER.iterdir():
             folder_path=account_folder,
             platform=platform,
             data_kind="account",
-            client_name=client_name
+            client_name=client_name,
+            latest_only=not ARGS.all_periods and not ARGS.period,
         )
 
         account_files = (
@@ -139,12 +171,14 @@ for client_dir in DATA_FOLDER.iterdir():
             if account_files
             else pd.DataFrame()
         )
+        account_df = filter_period(account_df, ARGS.period)
 
         media_reader = ReadCsv(
             folder_path=media_folder,
             platform=platform,
             data_kind="media",
-            client_name=client_name
+            client_name=client_name,
+            latest_only=not ARGS.all_periods and not ARGS.period,
         )
 
         media_files = (
@@ -159,6 +193,7 @@ for client_dir in DATA_FOLDER.iterdir():
             if media_files
             else pd.DataFrame()
         )
+        media_df = filter_period(media_df, ARGS.period)
 
         if account_df.empty and media_df.empty:
             print(
