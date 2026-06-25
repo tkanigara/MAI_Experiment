@@ -12,7 +12,6 @@ class OutputCol:
     METRIC     = "metric"
     VALUE      = "value"
 
-
 class MetricName:
     NUM_POST          = "number_of_post"
     IMPRESSIONS       = "impressions"
