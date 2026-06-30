@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MAI Social Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">M</span>
+        <div>
+          <strong>MAI Dashboard</strong>
+          <small>Social Media Report</small>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-item active" data-view="clients">Clients</button>
+        <button class="nav-item" data-view="kpi">KPI Input</button>
+      </nav>
+    </aside>
+
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Reporting workspace</p>
+          <h1 id="page-title">Clients</h1>
+        </div>
+        <div class="status" id="connection-status">Connecting</div>
+      </header>
+
+      <section class="view active" id="clients-view">
+        <div class="section-head">
+          <div>
+            <h2>Client List</h2>
+            <p>Pilih client, lalu pilih social platform yang ingin dilihat.</p>
+          </div>
+        </div>
+        <div class="client-grid" id="client-grid"></div>
+      </section>
+
+      <section class="view" id="platform-view">
+        <button class="back-button" id="back-to-clients">Back to clients</button>
+        <div class="section-head">
+          <div>
+            <h2 id="client-name">Client</h2>
+            <p id="client-detail">Connected platforms</p>
+          </div>
+        </div>
+        <div class="platform-row" id="platform-row"></div>
+      </section>
+
+      <section class="view" id="overview-view">
+        <button class="back-button" id="back-to-platforms">Back to platforms</button>
+        <div class="overview-title">
+          <div>
+            <p class="eyebrow" id="overview-period">Latest period</p>
+            <h2 id="overview-heading">Platform Overview</h2>
+          </div>
+          <a class="profile-link" id="profile-link" target="_blank" rel="noreferrer">Open profile</a>
+        </div>
+        <div class="metric-grid" id="metric-grid"></div>
+        <div class="content-grid">
+          <section class="panel">
+            <h3>KPI Results</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Actual</th>
+                    <th>Target</th>
+                    <th>Achievement</th>
+                  </tr>
+                </thead>
+                <tbody id="kpi-results-body"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <h3>Top Content</h3>
+            <div class="post-list" id="top-posts"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="kpi-view">
+        <div class="section-head">
+          <div>
+            <h2>KPI Input</h2>
+            <p>Masukkan target KPI per client dan platform. Data akan masuk ke tabel kpi_targets.</p>
+          </div>
+        </div>
+        <form class="kpi-form" id="kpi-form">
+          <label>
+            Client
+            <select id="kpi-client" required></select>
+          </label>
+          <label>
+            Platform
+            <select id="kpi-platform" required>
+              <option value="instagram">Instagram</option>
+              <option value="facebook">Facebook</option>
+              <option value="tiktok">TikTok</option>
+              <option value="youtube">YouTube</option>
+            </select>
+          </label>
+          <label>
+            Metric
+            <select id="kpi-metric" required></select>
+          </label>
+          <label>
+            Year
+            <input id="kpi-year" type="number" min="2020" max="2100" required />
+          </label>
+          <label>
+            Monthly Target
+            <input id="kpi-target-month" type="number" step="0.01" />
+          </label>
+          <label>
+            Yearly Target
+            <input id="kpi-target-year" type="number" step="0.01" />
+          </label>
+          <label>
+            Unit
+            <input id="kpi-unit" placeholder="count, %, views" />
+          </label>
+          <label class="wide">
+            Notes
+            <input id="kpi-notes" placeholder="Optional notes" />
+          </label>
+          <button type="submit">Save KPI Target</button>
+        </form>
+        <div class="toast" id="toast"></div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

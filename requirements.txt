@@ -13,3 +13,5 @@ google-generativeai
 google-cloud-secret-manager
 gspread
 gspread_dataframe
+SQLAlchemy
+psycopg[binary]

@@ -1,0 +1,13 @@
+.git
+__pycache__/
+*.pyc
+.env
+*.json
+token*.json
+credentials.json
+venv/
+data/
+data_example/
+dashboard/*.log
+dashboard/__pycache__/
+ETL_Pipeline/**/__pycache__/
