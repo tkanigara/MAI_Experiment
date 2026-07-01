@@ -1,8 +1,9 @@
-from typing_extensions import TypeDict
+from typing_extensions import TypedDict
 
-class AgentState(TypeDict):
+class AgentState(TypedDict):
     messages: list[dict]
     user_query: str
     agent_answer: str
 
+    
     

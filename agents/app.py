@@ -1,15 +1,15 @@
 from ReAct.React import app
-from graph.state import AgentState
 
 messages = []
 while True:
     user_input = input("Chat With AI: ")
-    AgentState = {
+    state = {
         "messages": messages,
         "user_query": user_input,
-        "agent_answer": None
+        "agent_answer": [],
     }
 
-    run = app.invoke(AgentState)
-    output = run["agent_answer"]
-    print(output.content)
+    run = app.invoke(state)
+    messages = run["messages"]
+    output = run["agent_answer"][-1]
+    print(output)
