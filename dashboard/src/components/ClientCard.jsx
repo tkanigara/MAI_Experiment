@@ -4,7 +4,7 @@ import { platformFlags } from "../lib/format";
 export default function ClientCard({ client, onOpen, onDelete }) {
   const platforms = platformFlags(client);
   return (
-    <article className="client-card" onClick={() => onOpen(client.id)}>
+    <article className="client-card">
       <div className="card-main">
         <div className="client-head">
           <div>
@@ -20,14 +20,11 @@ export default function ClientCard({ client, onOpen, onDelete }) {
         </div>
       </div>
       <div className="card-footer">
-        <button className="text-link" type="button">Open client</button>
+        <button className="text-link" type="button" onClick={() => onOpen(client.id)}>Open client</button>
         <button
           className="danger-link"
           type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onDelete(client);
-          }}
+          onClick={() => onDelete(client)}
         >
           Delete
         </button>

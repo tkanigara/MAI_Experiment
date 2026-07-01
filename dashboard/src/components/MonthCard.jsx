@@ -2,7 +2,7 @@ import { PlatformBadges, StatusBadge } from "./Badges";
 
 export default function MonthCard({ month, platforms, onOpen }) {
   return (
-    <article className="month-card" onClick={() => onOpen(month.slug)}>
+    <article className="month-card">
       <div className="card-main">
         <div className="month-head">
           <div className="month-title">{month.label}</div>
@@ -11,7 +11,7 @@ export default function MonthCard({ month, platforms, onOpen }) {
         <PlatformBadges platforms={platforms} />
       </div>
       <div className="card-footer">
-        <button className="text-link" type="button">Open report</button>
+        <button className="text-link" type="button" onClick={() => onOpen(month.slug)}>Open report</button>
       </div>
     </article>
   );

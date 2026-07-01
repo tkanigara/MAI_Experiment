@@ -9,7 +9,7 @@ export default function PlatformOverviewCard({ platform, data, profile, stats, o
   const ready = total > 0 && met === total;
 
   return (
-    <article className="platform-overview-card" onClick={() => onOpen(platform)}>
+    <article className="platform-overview-card">
       <div className="platform-card-main">
         <div className="platform-card-top">
           <div>
@@ -31,7 +31,7 @@ export default function PlatformOverviewCard({ platform, data, profile, stats, o
         </div>
       </div>
       <div className="card-footer">
-        <button className="text-link" type="button">View details</button>
+        <button className="text-link" type="button" onClick={() => onOpen(platform)}>View details</button>
       </div>
     </article>
   );
