@@ -1,3 +1,15 @@
+FROM node:20-slim AS frontend
+
+WORKDIR /app/dashboard
+
+COPY dashboard/package.json ./
+RUN npm install
+
+COPY dashboard/index.html ./
+COPY dashboard/vite.config.js ./
+COPY dashboard/src ./src
+RUN npm run build
+
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -10,7 +22,8 @@ ENV DASHBOARD_PORT=8000
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY dashboard ./dashboard
+COPY dashboard/server.py ./dashboard/server.py
+COPY --from=frontend /app/dashboard/dist ./dashboard/dist
 
 EXPOSE 8000
 
