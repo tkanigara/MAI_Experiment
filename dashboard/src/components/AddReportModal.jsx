@@ -11,15 +11,20 @@ export default function AddReportModal({
   platformData,
   onClose,
   onImported,
+  onSaveKpiTargets,
+  activePlatform,
   initialTab = "csv",
 }) {
   const [tab, setTab] = useState(initialTab);
   const [files, setFiles] = useState({});
+  const [draggingSlot, setDraggingSlot] = useState("");
   const [selectedMonth, setSelectedMonth] = useState(month?.slug || REPORT_MONTHS[0]?.slug);
   const [isImporting, setIsImporting] = useState(false);
+  const [isSavingKpi, setIsSavingKpi] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [error, setError] = useState("");
   const platforms = platformFlags(client);
+  const kpiPlatforms = activePlatform ? [activePlatform] : platforms;
   const uploadedCount = CSV_TYPES.filter((item) => files[item.key]).length;
   const warningCount = importResult?.summary?.warnings || 0;
   const monthOptions = [
@@ -28,9 +33,22 @@ export default function AddReportModal({
   ];
 
   function selectFile(key, file) {
+    if (!file) return;
     setImportResult(null);
     setError("");
     setFiles((current) => ({ ...current, [key]: file }));
+  }
+
+  function handleDragOver(event, key) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDraggingSlot(key);
+  }
+
+  function handleDrop(event, key) {
+    event.preventDefault();
+    setDraggingSlot("");
+    selectFile(key, event.dataTransfer.files?.[0]);
   }
 
   async function importCsv() {
@@ -56,6 +74,42 @@ export default function AddReportModal({
       setError(err.message);
     } finally {
       setIsImporting(false);
+    }
+  }
+
+  async function saveKpiTargets(event) {
+    event?.preventDefault();
+    if (!client?.id) return;
+    setIsSavingKpi(true);
+    setError("");
+    const formElement = event?.currentTarget?.tagName === "FORM"
+      ? event.currentTarget
+      : document.getElementById("kpi-target-form");
+    const form = new FormData(formElement);
+    const periodYear = Number(selectedMonth.split("-").at(-1)) || new Date().getFullYear();
+    const targets = [];
+    kpiPlatforms.forEach((platform) => {
+      (KPI_METRICS[platform] || []).forEach((metric) => {
+        const target = form.get(`${platform}:${metric}:target`);
+        const existing = (platformData[platform]?.kpi_results || []).find((item) => item.metric_name === metric);
+        if (target || existing?.target_month) {
+          targets.push({
+            platform,
+            metric_name: metric,
+            period_year: periodYear,
+            target_month: target,
+            unit: form.get(`${platform}:${metric}:unit`) || existing?.unit || "count",
+          });
+        }
+      });
+    });
+    try {
+      await onSaveKpiTargets?.(targets);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsSavingKpi(false);
     }
   }
 
@@ -108,7 +162,14 @@ export default function AddReportModal({
                 const result = importResult?.files?.find((item) => item.slot === key);
                 const hasWarning = (result?.warnings || []).length > 0;
                 return (
-                  <div className="upload-row" key={key}>
+                  <div
+                    className={`upload-row ${draggingSlot === key ? "is-dragging" : ""}`}
+                    key={key}
+                    onDragEnter={(event) => handleDragOver(event, key)}
+                    onDragOver={(event) => handleDragOver(event, key)}
+                    onDragLeave={() => setDraggingSlot("")}
+                    onDrop={(event) => handleDrop(event, key)}
+                  >
                     <div className="upload-icon">{files[key] ? "ok" : "csv"}</div>
                     <div>
                       <div className="upload-title">{title}</div>
@@ -116,6 +177,7 @@ export default function AddReportModal({
                         {files[key]?.name || description}
                         {result?.rows ? ` - ${result.rows} rows` : ""}
                       </div>
+                      {!files[key] && <div className="drop-hint">Drop CSV here or choose a file</div>}
                       {hasWarning && (
                         <ul className="warning-list compact">
                           {result.warnings.slice(0, 2).map((warning) => <li key={warning}>{warning}</li>)}
@@ -158,8 +220,17 @@ export default function AddReportModal({
             )}
           </>
         ) : (
-          <div className="kpi-target-list">
-            {platforms.map((platform) => (
+          <form id="kpi-target-form" className="kpi-target-list" onSubmit={saveKpiTargets}>
+            <div className="csv-action-bar">
+              <div>
+                <strong>Update KPI targets only</strong>
+                <span>This does not require uploading CSV files.</span>
+              </div>
+              <button type="submit" className="primary-button" disabled={isSavingKpi}>
+                {isSavingKpi ? "Saving..." : "Save KPI Targets"}
+              </button>
+            </div>
+            {kpiPlatforms.map((platform) => (
               <section className="kpi-target-card" key={platform}>
                 <h3><PlatformBadge platform={platform} /> KPI Targets</h3>
                 {(KPI_METRICS[platform] || []).map((metric) => {
@@ -168,28 +239,46 @@ export default function AddReportModal({
                     <div className="kpi-target-row" key={metric}>
                       <strong>{prettyMetric(metric)}</strong>
                       <span className="muted">Actual: {formatNumber(row.actual_month)}</span>
-                      <input defaultValue={row.target_month || ""} placeholder="Target" />
+                      <input
+                        name={`${platform}:${metric}:target`}
+                        type="number"
+                        step="0.01"
+                        defaultValue={row.target_month || ""}
+                        placeholder="Target"
+                      />
+                      <input
+                        name={`${platform}:${metric}:unit`}
+                        defaultValue={row.unit || "count"}
+                        placeholder="Unit"
+                      />
                     </div>
                   );
                 })}
               </section>
             ))}
-          </div>
+            {error && <div className="import-alert danger">{error}</div>}
+          </form>
         )}
       </div>
       <div className="modal-actions sticky-actions">
         <span className="action-hint">
-          {uploadedCount ? `${uploadedCount} file selected. Click import to save into database.` : "Choose at least one CSV file to import."}
+          {tab === "csv"
+            ? uploadedCount
+              ? `${uploadedCount} file selected. Click import to save into database.`
+              : "Choose at least one CSV file to import."
+            : "Save KPI targets independently from CSV upload."}
         </span>
         <div>
           <button type="button" className="secondary-button" onClick={onClose}>Cancel</button>
           <button
             type="button"
             className="primary-button"
-            disabled={isImporting || uploadedCount === 0}
-            onClick={tab === "csv" ? importCsv : onClose}
+            disabled={tab === "csv" ? isImporting || uploadedCount === 0 : isSavingKpi}
+            onClick={tab === "csv" ? importCsv : saveKpiTargets}
           >
-            {isImporting ? "Saving..." : tab === "csv" ? "Save CSV Data" : "Done"}
+            {tab === "csv"
+              ? isImporting ? "Saving..." : "Save CSV Data"
+              : isSavingKpi ? "Saving..." : "Save KPI Targets"}
           </button>
         </div>
       </div>

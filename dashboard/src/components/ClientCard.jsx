@@ -1,7 +1,8 @@
 import { PlatformBadges } from "./Badges";
 import { platformFlags } from "../lib/format";
+import OpenIconButton from "./OpenIconButton";
 
-export default function ClientCard({ client, onOpen, onDelete }) {
+export default function ClientCard({ client, onOpen, onEdit, onDelete }) {
   const platforms = platformFlags(client);
   return (
     <article className="client-card">
@@ -11,7 +12,7 @@ export default function ClientCard({ client, onOpen, onDelete }) {
             <div className="client-title">{client.client_name}</div>
             <div className="client-code">{client.client_code || client.id}</div>
           </div>
-          {client.industry && <span className="badge">{client.industry}</span>}
+          <OpenIconButton label={`Open ${client.client_name}`} onClick={() => onOpen(client.id)} />
         </div>
         <PlatformBadges platforms={platforms} />
         <div className="client-meta">
@@ -20,7 +21,9 @@ export default function ClientCard({ client, onOpen, onDelete }) {
         </div>
       </div>
       <div className="card-footer">
-        <button className="text-link" type="button" onClick={() => onOpen(client.id)}>Open client</button>
+        <button className="text-link client-footer-link" type="button" onClick={() => onEdit(client)}>
+          Edit
+        </button>
         <button
           className="danger-link"
           type="button"

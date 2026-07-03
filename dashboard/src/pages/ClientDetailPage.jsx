@@ -13,6 +13,7 @@ export default function ClientDetailPage({
   onDeleteClient,
 }) {
   const platforms = platformFlags(client);
+  const profileCount = Math.max(profiles.length, platforms.length, client.connected_profiles || 0);
   const latestReport = reportMonths[0]?.label || "-";
   return (
     <section className="view active">
@@ -40,7 +41,7 @@ export default function ClientDetailPage({
         </div>
         <div className="summary-item">
           <div className="summary-label">Profiles</div>
-          <div className="summary-value">{profiles.length} connected</div>
+          <div className="summary-value">{profileCount} connected</div>
         </div>
         <div className="summary-item">
           <div className="summary-label">Latest Report</div>
@@ -62,6 +63,7 @@ export default function ClientDetailPage({
               month={month}
               platforms={platforms}
               onOpen={(slug) => onOpenMonth(`${clientSlug(client)}/${slug}`)}
+              onGenerateReport={() => window.alert("Slide report generation is not connected yet.")}
             />
           ))}
         </div>

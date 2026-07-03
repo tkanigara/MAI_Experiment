@@ -5,4 +5,17 @@ __pycache__/
 venv/
 credentials.json
 token.json
-*.json
+token*.json
+*.backup*.json
+*service-account*.json
+optimum-essence-*.json
+
+# Frontend generated files
+dashboard/node_modules/
+dashboard/dist/
+
+# Runtime logs and caches
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

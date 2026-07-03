@@ -1,9 +1,17 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Modal, { ModalHeader } from "./Modal";
 
-export default function AddClientModal({ onClose, onAddClient }) {
+const DEFAULT_INDUSTRIES = ["Automotive", "Retail & E-Commerce", "Technology"];
+
+export default function AddClientModal({ client = null, industries = [], onClose, onAddClient }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
+  const [industryMode, setIndustryMode] = useState(client?.industry || "");
+  const isEdit = Boolean(client);
+  const industryOptions = useMemo(
+    () => [...new Set([...DEFAULT_INDUSTRIES, ...industries].filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [industries],
+  );
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -11,11 +19,15 @@ export default function AddClientModal({ onClose, onAddClient }) {
     setError("");
     const form = new FormData(event.currentTarget);
     const platforms = form.getAll("platforms");
+    const industry =
+      industryMode === "__custom__"
+        ? String(form.get("custom_industry") || "").trim()
+        : String(form.get("industry") || "").trim();
     try {
       await onAddClient({
         client_code: String(form.get("client_code") || "").toLowerCase().replace(/\s+/g, "-"),
         client_name: form.get("client_name"),
-        industry: form.get("industry"),
+        industry,
         has_instagram: platforms.includes("instagram"),
         has_facebook: platforms.includes("facebook"),
         has_tiktok: platforms.includes("tiktok"),
@@ -30,37 +42,43 @@ export default function AddClientModal({ onClose, onAddClient }) {
   return (
     <Modal onClose={onClose}>
       <ModalHeader
-        title="Add New Client"
-        subtitle="Create a client profile and select connected social media platforms."
+        title={isEdit ? "Edit Client" : "Add New Client"}
+        subtitle={isEdit ? "Update client information and connected social media platforms." : "Create a client profile and select connected social media platforms."}
         onClose={onClose}
       />
       <form className="modal-body" onSubmit={handleSubmit}>
-        <label>Client Name <input name="client_name" placeholder="e.g. Dunlop Indonesia" required /></label>
-        <label>Client Code <input name="client_code" placeholder="e.g. DNLP-ID" required /></label>
+        <label>Client Name <input name="client_name" placeholder="e.g. Dunlop Indonesia" defaultValue={client?.client_name || ""} required /></label>
+        <label>Client Code <input name="client_code" placeholder="e.g. DNLP-ID" defaultValue={client?.client_code || ""} required /></label>
         <label>
           Industry
-          <select name="industry" required>
+          <select name="industry" required value={industryMode} onChange={(event) => setIndustryMode(event.target.value)}>
             <option value="">Select industry</option>
-            <option>Automotive</option>
-            <option>Retail & E-Commerce</option>
-            <option>Demo</option>
-            <option>Technology</option>
+            {industryOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+            <option value="__custom__">Add new industry</option>
           </select>
         </label>
+        {industryMode === "__custom__" && (
+          <label>
+            New Industry
+            <input name="custom_industry" placeholder="e.g. Logistics" required />
+          </label>
+        )}
         <div>
           <div className="field-label">Connected Platforms</div>
           <div className="check-grid">
-            <label><input type="checkbox" name="platforms" value="instagram" /> Instagram</label>
-            <label><input type="checkbox" name="platforms" value="facebook" /> Facebook</label>
-            <label><input type="checkbox" name="platforms" value="tiktok" /> TikTok</label>
-            <label><input type="checkbox" name="platforms" value="youtube" /> YouTube</label>
+            <label><input type="checkbox" name="platforms" value="instagram" defaultChecked={client?.has_instagram} /> Instagram</label>
+            <label><input type="checkbox" name="platforms" value="facebook" defaultChecked={client?.has_facebook} /> Facebook</label>
+            <label><input type="checkbox" name="platforms" value="tiktok" defaultChecked={client?.has_tiktok} /> TikTok</label>
+            <label><input type="checkbox" name="platforms" value="youtube" defaultChecked={client?.has_youtube} /> YouTube</label>
           </div>
         </div>
         {error && <div className="import-alert danger">{error}</div>}
         <div className="modal-actions">
           <button type="button" className="secondary-button" onClick={onClose} disabled={isSaving}>Cancel</button>
           <button type="submit" className="primary-button" disabled={isSaving}>
-            {isSaving ? "Saving..." : "Save Client"}
+            {isSaving ? "Saving..." : isEdit ? "Save Changes" : "Save Client"}
           </button>
         </div>
       </form>

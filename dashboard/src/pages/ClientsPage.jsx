@@ -9,6 +9,7 @@ export default function ClientsPage({
   onIndustryChange,
   onOpenClient,
   onOpenAddClient,
+  onEditClient,
   onDeleteClient,
 }) {
   const filtered = clients.filter((client) => {
@@ -41,6 +42,7 @@ export default function ClientsPage({
               key={client.id}
               client={client}
               onOpen={onOpenClient}
+              onEdit={onEditClient}
               onDelete={onDeleteClient}
             />
           ))

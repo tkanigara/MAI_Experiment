@@ -1,6 +1,7 @@
 import { PLATFORM_LABELS } from "../lib/constants";
 import { formatNumber } from "../lib/format";
 import { PlatformBadge, StatusBadge } from "./Badges";
+import OpenIconButton from "./OpenIconButton";
 
 export default function PlatformOverviewCard({ platform, data, profile, stats, onOpen }) {
   const kpiRows = data?.kpi_results || [];
@@ -18,8 +19,11 @@ export default function PlatformOverviewCard({ platform, data, profile, stats, o
               <StatusBadge text={ready ? "Ready" : "Partial"} state={ready ? "ready" : "partial"} />
             </div>
             <div className="profile-name">{profile?.profile_name || data?.report?.profile_name || PLATFORM_LABELS[platform]}</div>
+            <div className="kpi-preview">{met} of {total} KPI targets met</div>
           </div>
-          <div className="kpi-preview">{met} of {total} KPI targets met</div>
+          <div className="platform-card-actions">
+            <OpenIconButton label={`View ${PLATFORM_LABELS[platform]} details`} onClick={() => onOpen(platform)} />
+          </div>
         </div>
         <div className="platform-stat-grid">
           {stats.map((item) => (
@@ -29,9 +33,6 @@ export default function PlatformOverviewCard({ platform, data, profile, stats, o
             </div>
           ))}
         </div>
-      </div>
-      <div className="card-footer">
-        <button className="text-link" type="button" onClick={() => onOpen(platform)}>View details</button>
       </div>
     </article>
   );

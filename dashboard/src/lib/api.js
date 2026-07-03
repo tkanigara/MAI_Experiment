@@ -4,9 +4,13 @@ export async function api(path, options = {}) {
     headers: isFormData ? {} : { "Content-Type": "application/json" },
     ...options,
   });
-  const data = await response.json();
+  const contentType = response.headers.get("Content-Type") || "";
+  const data = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
   if (!response.ok) {
-    throw new Error(data.error || "Request failed");
+    const message = String(data.error || "Request failed");
+    throw new Error(message.startsWith("<!DOCTYPE") ? "API endpoint is not available. Restart the dashboard backend." : message);
   }
   return data;
 }

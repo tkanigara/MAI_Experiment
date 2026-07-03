@@ -12,6 +12,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 from uuid import UUID
 
 from dotenv import load_dotenv
@@ -21,8 +22,6 @@ from sqlalchemy import create_engine, text
 BASE_DIR = Path(__file__).resolve().parents[1]
 DASHBOARD_DIR = Path(__file__).resolve().parent
 STATIC_DIR = DASHBOARD_DIR / "dist"
-if not STATIC_DIR.exists():
-    STATIC_DIR = DASHBOARD_DIR / "static"
 PLATFORM_TABLES = {
     "instagram": "instagram_reports",
     "facebook": "facebook_reports",
@@ -340,6 +339,51 @@ class DashboardRepository:
             ).mappings().one()
             return row_dict(row)
 
+    def update_client(self, client_id: str, payload: dict):
+        required = ["client_code", "client_name"]
+        missing = [key for key in required if not str(payload.get(key, "")).strip()]
+        if missing:
+            raise ValueError(f"Missing fields: {', '.join(missing)}")
+        client_code = str(payload["client_code"]).strip().lower().replace(" ", "-")
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    UPDATE clients
+                    SET
+                        client_code = :client_code,
+                        client_name = :client_name,
+                        industry = :industry,
+                        has_instagram = :has_instagram,
+                        has_facebook = :has_facebook,
+                        has_tiktok = :has_tiktok,
+                        has_youtube = :has_youtube,
+                        updated_at = now()
+                    WHERE id = :client_id
+                    RETURNING id, client_code, client_name, industry,
+                              has_instagram, has_facebook, has_tiktok, has_youtube,
+                              (
+                                  SELECT COUNT(*)
+                                  FROM client_social_profiles p
+                                  WHERE p.client_id = clients.id AND p.is_active
+                              ) AS connected_profiles
+                    """
+                ),
+                {
+                    "client_id": client_id,
+                    "client_code": client_code,
+                    "client_name": str(payload["client_name"]).strip(),
+                    "industry": payload.get("industry") or None,
+                    "has_instagram": bool(payload.get("has_instagram")),
+                    "has_facebook": bool(payload.get("has_facebook")),
+                    "has_tiktok": bool(payload.get("has_tiktok")),
+                    "has_youtube": bool(payload.get("has_youtube")),
+                },
+            ).mappings().first()
+            if not row:
+                raise ValueError("Client not found")
+            return row_dict(row)
+
     def delete_client(self, client_id: str):
         with self.engine.begin() as conn:
             client = conn.execute(
@@ -405,18 +449,58 @@ class DashboardRepository:
                         WHERE rar.endpoint LIKE 'csv_import/%'
                     ) AS uploaded_files,
                     (
-                        SELECT COUNT(*) FROM instagram_reports r
-                        WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        CASE WHEN EXISTS (
+                            SELECT 1 FROM instagram_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        ) THEN 1 ELSE 0 END
                     ) + (
-                        SELECT COUNT(*) FROM facebook_reports r
-                        WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        CASE WHEN EXISTS (
+                            SELECT 1 FROM facebook_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        ) THEN 1 ELSE 0 END
                     ) + (
-                        SELECT COUNT(*) FROM tiktok_reports r
-                        WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        CASE WHEN EXISTS (
+                            SELECT 1 FROM tiktok_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        ) THEN 1 ELSE 0 END
                     ) + (
-                        SELECT COUNT(*) FROM youtube_reports r
-                        WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
-                    ) AS platform_reports
+                        CASE WHEN EXISTS (
+                            SELECT 1 FROM youtube_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        ) THEN 1 ELSE 0 END
+                    ) AS platform_reports,
+                    (
+                        SELECT MAX(updated_at) FROM (
+                            SELECT COALESCE(er.finished_at, er.started_at) AS updated_at
+                            FROM etl_runs er
+                            WHERE er.report_period_id = rp.id
+                              AND er.client_id = rp.client_id
+                              AND er.status = 'success'
+                            UNION ALL
+                            SELECT r.updated_at
+                            FROM instagram_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                            UNION ALL
+                            SELECT r.updated_at
+                            FROM facebook_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                            UNION ALL
+                            SELECT r.updated_at
+                            FROM tiktok_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                            UNION ALL
+                            SELECT r.updated_at
+                            FROM youtube_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                            UNION ALL
+                            SELECT rar.fetched_at AS updated_at
+                            FROM raw_api_responses rar
+                            JOIN etl_runs er ON er.id = rar.run_id
+                            WHERE er.report_period_id = rp.id
+                              AND rar.client_id = rp.client_id
+                              AND rar.endpoint LIKE 'csv_import/%'
+                        ) report_updates
+                    ) AS last_updated
                 FROM report_periods rp
                 LEFT JOIN etl_runs er ON er.report_period_id = rp.id AND er.status = 'success'
                 LEFT JOIN raw_api_responses rar ON rar.run_id = er.id
@@ -441,6 +525,7 @@ class DashboardRepository:
                     "period_end": row["period_end"],
                     "uploaded_files": uploaded_files,
                     "platform_reports": platform_reports,
+                    "last_updated": row["last_updated"],
                     "status": status,
                     "state": "ready" if platform_reports else "partial",
                 }
@@ -1252,6 +1337,7 @@ def overview_metrics(platform: str, report: dict | None):
     if platform == "tiktok":
         return [
             metric("Followers", report.get("total_followers")),
+            metric("Follows", report.get("follows")),
             metric("Growth Rate", report.get("follower_growth_rate"), "%"),
             metric("Views", report.get("total_views")),
             metric("Engagement", report.get("total_engagement")),
@@ -1260,6 +1346,7 @@ def overview_metrics(platform: str, report: dict | None):
         ]
     return [
         metric("Followers", report.get("total_followers")),
+        metric("Follows", report.get("follows")),
         metric("Growth Rate", report.get("follower_growth_rate"), "%"),
         metric("Reach", report.get("reach")),
         metric("Engagement", report.get("total_engagement")),
@@ -1276,10 +1363,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     repository = DashboardRepository()
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
+        static_directory = STATIC_DIR if STATIC_DIR.exists() else DASHBOARD_DIR
+        super().__init__(*args, directory=str(static_directory), **kwargs)
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/image-proxy":
+            self.send_proxied_image(parsed)
+            return
         if parsed.path == "/api/clients":
             self.send_json(self.repository.clients())
             return
@@ -1306,13 +1397,67 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
         return super().do_GET()
 
+    def send_proxied_image(self, parsed):
+        query = parse_qs(parsed.query)
+        source_url = (query.get("url") or [""])[0]
+        parsed_source = urlparse(source_url)
+        if parsed_source.scheme not in {"http", "https"} or not parsed_source.netloc:
+            self.send_error_json("Invalid image URL", HTTPStatus.BAD_REQUEST)
+            return
+
+        request = Request(
+            source_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0 Safari/537.36"
+                ),
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+        )
+        try:
+            with urlopen(request, timeout=8) as response:
+                content_type = response.headers.get("Content-Type", "image/jpeg").split(";")[0]
+                if not content_type.startswith("image/"):
+                    self.send_error_json("URL did not return an image", HTTPStatus.BAD_GATEWAY)
+                    return
+                body = response.read(6_000_001)
+        except Exception as exc:
+            self.send_error_json(f"Failed to load image: {exc}", HTTPStatus.BAD_GATEWAY)
+            return
+
+        if len(body) > 6_000_000:
+            self.send_error_json("Image is too large", HTTPStatus.BAD_GATEWAY)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         parsed = urlparse(self.path)
+        parts = [part for part in parsed.path.split("/") if part]
         if parsed.path == "/api/clients":
             length = int(self.headers.get("Content-Length", "0"))
             try:
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 self.send_json(self.repository.create_client(payload), HTTPStatus.CREATED)
+            except (json.JSONDecodeError, ValueError) as exc:
+                self.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                message = str(exc)
+                if "duplicate key value" in message and "clients_client_code_key" in message:
+                    message = "Client code already exists."
+                self.send_error_json(message, HTTPStatus.BAD_REQUEST)
+            return
+        if len(parts) == 3 and parts[0] == "api" and parts[1] == "clients":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                self.send_json(self.repository.update_client(parts[2], payload))
             except (json.JSONDecodeError, ValueError) as exc:
                 self.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
             except Exception as exc:
@@ -1344,6 +1489,24 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_json(self.repository.upsert_kpi_target(payload), HTTPStatus.CREATED)
         except (json.JSONDecodeError, ValueError) as exc:
             self.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+
+    def do_PUT(self):
+        parsed = urlparse(self.path)
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) == 3 and parts[0] == "api" and parts[1] == "clients":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                self.send_json(self.repository.update_client(parts[2], payload))
+            except (json.JSONDecodeError, ValueError) as exc:
+                self.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                message = str(exc)
+                if "duplicate key value" in message and "clients_client_code_key" in message:
+                    message = "Client code already exists."
+                self.send_error_json(message, HTTPStatus.BAD_REQUEST)
+            return
+        self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self):
         parsed = urlparse(self.path)
@@ -1395,9 +1558,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
 
 def main():
+    api_only = os.getenv("DASHBOARD_API_ONLY", "").lower() in {"1", "true", "yes"}
+    if not STATIC_DIR.exists() and not api_only:
+        raise RuntimeError(
+            "Dashboard frontend build not found. Run `npm install` and `npm run build` in the dashboard folder first."
+        )
     query = parse_qs(urlparse(os.environ.get("DASHBOARD_QUERY", "")).query)
     host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
-    port = int(os.getenv("DASHBOARD_PORT") or query.get("port", [8000])[0])
+    port = int(os.getenv("PORT") or os.getenv("DASHBOARD_PORT") or query.get("port", [8000])[0])
     server = ThreadingHTTPServer((host, port), DashboardHandler)
     print(f"Dashboard running at http://{host}:{port}")
     server.serve_forever()

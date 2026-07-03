@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AddClientModal from "./components/AddClientModal";
 import AddReportModal from "./components/AddReportModal";
+import DeleteClientModal from "./components/DeleteClientModal";
 import EditKpiModal from "./components/EditKpiModal";
 import Header from "./components/Header";
 import { api } from "./lib/api";
@@ -26,6 +27,9 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState("");
   const [editKpi, setEditKpi] = useState(null);
+  const [editClient, setEditClient] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [isDeletingClient, setIsDeletingClient] = useState(false);
   const [error, setError] = useState("");
 
   const industries = useMemo(
@@ -109,12 +113,33 @@ export default function App() {
     showToast("KPI target updated.");
   }
 
+  async function saveKpiTargets(targets) {
+    if (!selectedClient) return;
+    const validTargets = targets.filter((target) => target.target_month !== null && target.target_month !== "");
+    if (!validTargets.length) {
+      showToast("No KPI target changes to save.");
+      return;
+    }
+    await Promise.all(
+      validTargets.map((target) => api("/api/kpi-targets", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: selectedClient.id,
+          platform: target.platform,
+          metric_name: target.metric_name,
+          period_year: target.period_year,
+          target_month: target.target_month,
+          unit: target.unit,
+        }),
+      })),
+    );
+    await loadPlatformData(selectedClient);
+    showToast("KPI targets updated.");
+  }
+
   async function deleteClient(client) {
     if (!client?.id) return;
-    const confirmed = window.confirm(
-      `Delete ${client.client_name}? This will remove its profiles, reports, competitors, KPI data, and imported raw rows.`,
-    );
-    if (!confirmed) return;
+    setIsDeletingClient(true);
     await api(`/api/clients/${client.id}`, { method: "DELETE" });
     await loadClients();
     if (selectedClient?.id === client.id || currentClient?.id === client.id) {
@@ -124,6 +149,8 @@ export default function App() {
       setPlatformData({});
       navigate("/clients");
     }
+    setDeleteTarget(null);
+    setIsDeletingClient(false);
     showToast("Client deleted.");
   }
 
@@ -160,7 +187,8 @@ export default function App() {
         navigate(`/clients/${clientSlug(client)}`);
       }}
       onOpenAddClient={() => setModal("add-client")}
-      onDeleteClient={(client) => deleteClient(client).catch((err) => setError(err.message))}
+      onEditClient={setEditClient}
+      onDeleteClient={setDeleteTarget}
     />
   );
 
@@ -173,7 +201,7 @@ export default function App() {
         onNavigate={navigate}
         onOpenMonth={(path) => navigate(`/clients/${path}`)}
         onOpenAddReport={() => setModal("add-report-csv")}
-        onDeleteClient={(client) => deleteClient(client).catch((err) => setError(err.message))}
+        onDeleteClient={setDeleteTarget}
       />
     );
   }
@@ -214,6 +242,7 @@ export default function App() {
       </main>
       {modal === "add-client" && (
         <AddClientModal
+          industries={industries}
           onClose={() => setModal(null)}
           onAddClient={async (client) => {
             const savedClient = await api("/api/clients", {
@@ -227,13 +256,37 @@ export default function App() {
           }}
         />
       )}
+      {editClient && (
+        <AddClientModal
+          client={editClient}
+          industries={industries}
+          onClose={() => setEditClient(null)}
+          onAddClient={async (client) => {
+            const savedClient = await api(`/api/clients/${editClient.id}`, {
+              method: "POST",
+              body: JSON.stringify(client),
+            });
+            await loadClients();
+            if (selectedClient?.id === editClient.id) {
+              await loadClient(savedClient);
+            }
+            setEditClient(null);
+            showToast("Client updated.");
+            if (currentClient?.id === editClient.id && clientSlug(savedClient) !== currentClientSlug) {
+              navigate(`/clients/${clientSlug(savedClient)}`, true);
+            }
+          }}
+        />
+      )}
       {(modal === "add-report-csv" || modal === "add-report-kpi") && (
         <AddReportModal
           client={selectedClient}
           month={currentMonth}
           reportMonths={reportMonths}
           platformData={platformData}
+          activePlatform={modal === "add-report-kpi" ? currentPlatform : null}
           initialTab={modal === "add-report-kpi" ? "kpi" : "csv"}
+          onSaveKpiTargets={saveKpiTargets}
           onImported={async () => {
             await loadClients();
             await loadClient(selectedClient);
@@ -248,6 +301,19 @@ export default function App() {
           row={editKpi}
           onClose={() => setEditKpi(null)}
           onSave={saveKpi}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteClientModal
+          client={deleteTarget}
+          isDeleting={isDeletingClient}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            deleteClient(deleteTarget).catch((err) => {
+              setIsDeletingClient(false);
+              setError(err.message);
+            });
+          }}
         />
       )}
       {toast && <div className="toast active">{toast}</div>}
