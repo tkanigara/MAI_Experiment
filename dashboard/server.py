@@ -1012,8 +1012,72 @@ class DashboardRepository:
                 report_id = self.upsert_tiktok_report(conn, table, base)
             else:
                 report_id = self.upsert_meta_report(conn, table, base)
+            self.upsert_social_content_reports(conn, client_id, period_id, platform, profile_ids.get(platform), summary)
             reports[platform] = {"report_id": report_id, **base}
         return reports
+
+    def upsert_social_content_reports(self, conn, client_id, period_id, platform, profile_id, summary):
+        conn.execute(
+            text(
+                """
+                DELETE FROM social_content_reports
+                WHERE client_id = :client_id
+                    AND report_period_id = :period_id
+                    AND platform = :platform
+                """
+            ),
+            {"client_id": client_id, "period_id": period_id, "platform": platform},
+        )
+        for bucket in ("top", "low"):
+            posts = summary.get(f"{bucket}_posts") or []
+            for index, post in enumerate(posts, start=1):
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO social_content_reports (
+                            client_id, profile_id, report_period_id, platform, source,
+                            post_id, published_at, caption, permalink, image_url,
+                            content_type, content_rank, performance_bucket,
+                            likes, comments, shares, saves, reposts, reactions,
+                            views, reach, total_engagement, engagement_rate,
+                            raw_metrics
+                        )
+                        VALUES (
+                            :client_id, :profile_id, :period_id, :platform, 'fanpage_karma_csv',
+                            :post_id, :published_at, :caption, :permalink, :image_url,
+                            :content_type, :content_rank, :performance_bucket,
+                            :likes, :comments, :shares, :saves, :reposts, :reactions,
+                            :views, :reach, :total_engagement, :engagement_rate,
+                            CAST(:raw_metrics AS JSONB)
+                        )
+                        """
+                    ),
+                    {
+                        "client_id": client_id,
+                        "profile_id": profile_id,
+                        "period_id": period_id,
+                        "platform": platform,
+                        "post_id": post.get("post_id"),
+                        "published_at": post.get("published_at"),
+                        "caption": post.get("caption"),
+                        "permalink": post.get("permalink"),
+                        "image_url": post.get("image_url"),
+                        "content_type": post.get("content_type"),
+                        "content_rank": index,
+                        "performance_bucket": bucket,
+                        "likes": post.get("likes"),
+                        "comments": post.get("comments"),
+                        "shares": post.get("shares"),
+                        "saves": post.get("saves"),
+                        "reposts": post.get("reposts"),
+                        "reactions": post.get("reactions"),
+                        "views": post.get("views"),
+                        "reach": post.get("reach"),
+                        "total_engagement": post.get("total_engagement"),
+                        "engagement_rate": post.get("engagement_rate"),
+                        "raw_metrics": json.dumps(post),
+                    },
+                )
 
     def upsert_meta_report(self, conn, table, data):
         row = conn.execute(

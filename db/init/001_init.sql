@@ -204,6 +204,54 @@ CREATE TABLE IF NOT EXISTS competitor_content_reports (
     UNIQUE (client_id, platform, report_period_id, profile_name, post_id)
 );
 
+CREATE TABLE IF NOT EXISTS social_content_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    profile_id UUID REFERENCES client_social_profiles(id) ON DELETE SET NULL,
+    report_period_id UUID NOT NULL REFERENCES report_periods(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    source TEXT NOT NULL DEFAULT 'fanpage_karma',
+    post_id TEXT,
+    published_at TIMESTAMPTZ,
+    caption TEXT,
+    permalink TEXT,
+    image_url TEXT,
+    content_type TEXT,
+    content_rank INTEGER,
+    performance_bucket TEXT CHECK (performance_bucket IN ('top', 'low')),
+    likes NUMERIC,
+    comments NUMERIC,
+    shares NUMERIC,
+    saves NUMERIC,
+    reposts NUMERIC,
+    reactions NUMERIC,
+    views NUMERIC,
+    reach NUMERIC,
+    total_engagement NUMERIC,
+    engagement_rate NUMERIC,
+    audience_demographics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    raw_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (client_id, platform, report_period_id, performance_bucket, post_id)
+);
+
+CREATE TABLE IF NOT EXISTS report_insights (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    report_period_id UUID REFERENCES report_periods(id) ON DELETE CASCADE,
+    platform TEXT CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    section_key TEXT NOT NULL,
+    insight_key TEXT NOT NULL,
+    insight_text TEXT NOT NULL,
+    display_order INTEGER,
+    source TEXT NOT NULL DEFAULT 'manual',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (client_id, report_period_id, platform, section_key, insight_key)
+);
+
 CREATE TABLE IF NOT EXISTS instagram_reports (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
@@ -276,6 +324,7 @@ CREATE TABLE IF NOT EXISTS facebook_reports (
     posts_per_day NUMERIC,
     post_interaction_rate NUMERIC,
     page_performance_index NUMERIC,
+    demographics JSONB NOT NULL DEFAULT '{}'::jsonb,
     daily_followers JSONB NOT NULL DEFAULT '[]'::jsonb,
     daily_engagement JSONB NOT NULL DEFAULT '[]'::jsonb,
     top_posts JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -342,7 +391,9 @@ CREATE TABLE IF NOT EXISTS youtube_reports (
     total_subscribers NUMERIC,
     subscriber_growth NUMERIC,
     subscriber_growth_rate NUMERIC,
+    subscribers_lost NUMERIC,
     total_views NUMERIC,
+    reach NUMERIC,
     total_engagement NUMERIC,
     engagement_rate NUMERIC,
     likes NUMERIC,
@@ -351,9 +402,12 @@ CREATE TABLE IF NOT EXISTS youtube_reports (
     total_posts NUMERIC,
     video_posts NUMERIC,
     shorts_posts NUMERIC,
+    long_form_posts NUMERIC,
+    live_posts NUMERIC,
     posts_per_day NUMERIC,
     post_interaction_rate NUMERIC,
     page_performance_index NUMERIC,
+    demographics JSONB NOT NULL DEFAULT '{}'::jsonb,
     daily_subscribers JSONB NOT NULL DEFAULT '[]'::jsonb,
     daily_views JSONB NOT NULL DEFAULT '[]'::jsonb,
     daily_engagement JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -379,6 +433,43 @@ ALTER TABLE IF EXISTS tiktok_reports
 
 ALTER TABLE IF EXISTS youtube_reports
     ADD COLUMN IF NOT EXISTS content_type_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE IF EXISTS facebook_reports
+    ADD COLUMN IF NOT EXISTS demographics JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE IF EXISTS youtube_reports
+    ADD COLUMN IF NOT EXISTS demographics JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE IF EXISTS youtube_reports
+    ADD COLUMN IF NOT EXISTS subscribers_lost NUMERIC;
+
+ALTER TABLE IF EXISTS youtube_reports
+    ADD COLUMN IF NOT EXISTS reach NUMERIC;
+
+ALTER TABLE IF EXISTS youtube_reports
+    ADD COLUMN IF NOT EXISTS long_form_posts NUMERIC;
+
+ALTER TABLE IF EXISTS youtube_reports
+    ADD COLUMN IF NOT EXISTS live_posts NUMERIC;
+
+ALTER TABLE IF EXISTS social_content_reports
+    DROP CONSTRAINT IF EXISTS social_content_reports_client_id_platform_report_period_id_post_id_key;
+
+ALTER TABLE IF EXISTS social_content_reports
+    DROP CONSTRAINT IF EXISTS social_content_reports_client_id_platform_report_period_id__key;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'social_content_reports_unique_bucket_post'
+    ) THEN
+        ALTER TABLE social_content_reports
+            ADD CONSTRAINT social_content_reports_unique_bucket_post
+            UNIQUE (client_id, platform, report_period_id, performance_bucket, post_id);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_client_competitors_client
     ON client_competitors (client_id, is_active);
@@ -434,6 +525,35 @@ CREATE INDEX IF NOT EXISTS idx_competitor_content_reports_engagement
 
 CREATE INDEX IF NOT EXISTS idx_competitor_content_reports_raw_metrics_gin
     ON competitor_content_reports USING GIN (raw_metrics);
+
+CREATE INDEX IF NOT EXISTS idx_social_content_reports_dashboard
+    ON social_content_reports (
+        client_id,
+        platform,
+        report_period_id,
+        performance_bucket,
+        content_rank
+    );
+
+CREATE INDEX IF NOT EXISTS idx_social_content_reports_engagement
+    ON social_content_reports (
+        client_id,
+        platform,
+        report_period_id,
+        total_engagement DESC
+    );
+
+CREATE INDEX IF NOT EXISTS idx_social_content_reports_raw_metrics_gin
+    ON social_content_reports USING GIN (raw_metrics);
+
+CREATE INDEX IF NOT EXISTS idx_report_insights_lookup
+    ON report_insights (
+        client_id,
+        report_period_id,
+        platform,
+        section_key,
+        display_order
+    );
 
 CREATE INDEX IF NOT EXISTS idx_instagram_reports_period
     ON instagram_reports (client_id, report_period_id);
