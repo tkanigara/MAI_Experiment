@@ -18,6 +18,11 @@ from uuid import UUID
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
+try:
+    from dashboard.slides_report import generate_dashboard_slides_report
+except ModuleNotFoundError:
+    from slides_report import generate_dashboard_slides_report
+
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DASHBOARD_DIR = Path(__file__).resolve().parent
@@ -27,6 +32,89 @@ PLATFORM_TABLES = {
     "facebook": "facebook_reports",
     "tiktok": "tiktok_reports",
     "youtube": "youtube_reports",
+}
+
+PLATFORM_DATA_FIELDS = {
+    "instagram": [
+        ("total_followers", "Total followers"),
+        ("follower_growth", "Follower growth"),
+        ("follower_growth_rate", "Follower growth rate"),
+        ("follows", "Follows"),
+        ("unfollows", "Unfollows"),
+        ("reach", "Reach"),
+        ("impressions", "Impressions"),
+        ("total_engagement", "Total engagement"),
+        ("engagement_rate", "Engagement rate"),
+        ("likes", "Likes"),
+        ("comments", "Comments"),
+        ("shares", "Shares"),
+        ("saves", "Saves"),
+        ("reposts", "Reposts"),
+        ("total_posts", "Total posts"),
+        ("reels_posts", "Reels posts"),
+        ("carousel_posts", "Carousel posts"),
+        ("single_posts", "Single posts"),
+        ("story_posts", "Story posts"),
+        ("demographics", "Audience demographics"),
+    ],
+    "facebook": [
+        ("total_followers", "Total followers"),
+        ("follower_growth", "Follower growth"),
+        ("follower_growth_rate", "Follower growth rate"),
+        ("follows", "Follows"),
+        ("unfollows", "Unfollows"),
+        ("reach", "Reach"),
+        ("impressions", "Impressions"),
+        ("total_engagement", "Total engagement"),
+        ("engagement_rate", "Engagement rate"),
+        ("likes", "Likes"),
+        ("comments", "Comments"),
+        ("shares", "Shares"),
+        ("reactions", "Reactions"),
+        ("total_posts", "Total posts"),
+        ("reels_posts", "Reels posts"),
+        ("carousel_posts", "Carousel posts"),
+        ("single_posts", "Single posts"),
+        ("story_posts", "Story posts"),
+        ("demographics", "Audience demographics"),
+    ],
+    "tiktok": [
+        ("total_followers", "Total followers"),
+        ("follower_growth", "Follower growth"),
+        ("follower_growth_rate", "Follower growth rate"),
+        ("follows", "Follows"),
+        ("unfollows", "Unfollows"),
+        ("total_views", "Total views"),
+        ("reach", "Reach"),
+        ("total_engagement", "Total engagement"),
+        ("engagement_rate", "Engagement rate"),
+        ("likes", "Likes"),
+        ("comments", "Comments"),
+        ("shares", "Shares"),
+        ("saves", "Saves"),
+        ("total_posts", "Total posts"),
+        ("video_posts", "Video posts"),
+        ("demographics", "Audience demographics"),
+    ],
+    "youtube": [
+        ("total_subscribers", "Total subscribers"),
+        ("subscriber_growth", "Subscriber growth"),
+        ("subscriber_growth_rate", "Subscriber growth rate"),
+        ("subscribers_lost", "Subscribers lost"),
+        ("total_views", "Total views"),
+        ("reach", "Reach"),
+        ("total_engagement", "Total engagement"),
+        ("engagement_rate", "Engagement rate"),
+        ("likes", "Likes"),
+        ("comments", "Comments"),
+        ("shares", "Shares"),
+        ("total_posts", "Total posts"),
+        ("video_posts", "Video posts"),
+        ("shorts_posts", "Shorts posts"),
+        ("long_form_posts", "Long-form posts"),
+        ("live_posts", "Live posts"),
+        ("demographics", "Audience demographics"),
+    ],
 }
 PLATFORM_KPI_METRICS = {
     "instagram": {"followers", "engagement", "reach"},
@@ -104,6 +192,14 @@ SOCIAL_NETWORK_PLATFORMS = {
     "TIKTOK": "tiktok",
     "YOUTUBE": "youtube",
 }
+
+
+def parse_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def database_url() -> str:
@@ -562,6 +658,7 @@ class DashboardRepository:
             period_id = report_data["report_period_id"] if report_data else None
             kpi_results = []
             competitor_profiles = []
+            content_missing = []
             if period_id:
                 kpi_results = [
                     row_dict(row)
@@ -615,6 +712,7 @@ class DashboardRepository:
                         },
                     ).mappings()
                 ]
+                content_missing = self.content_missing_data(conn, client_id, period_id, platform)
             kpi_targets = [
                 row_dict(row)
                 for row in conn.execute(
@@ -632,16 +730,82 @@ class DashboardRepository:
             ]
         if report_data is not None:
             report_data["competitor_profiles"] = competitor_profiles
+        missing_data = missing_platform_data(platform, report_data, content_missing)
         return {
             "platform": platform,
             "report": report_data,
             "metrics": overview_metrics(platform, report_data),
+            "missing_data": missing_data,
             "kpi_results": kpi_results,
             "kpi_targets": kpi_targets,
             "competitor_profiles": competitor_profiles,
             "top_posts": (report_data or {}).get("top_posts") or [],
             "low_posts": (report_data or {}).get("low_posts") or [],
         }
+
+    def content_missing_data(self, conn, client_id: str, period_id: str, platform: str):
+        rows = conn.execute(
+            text(
+                """
+                WITH posts AS (
+                    SELECT *
+                    FROM social_content_reports
+                    WHERE client_id = :client_id
+                      AND report_period_id = :period_id
+                      AND platform = :platform
+                      AND performance_bucket = 'all'
+                )
+                SELECT field, missing_count, total_count
+                FROM (
+                    SELECT 'published_at' AS field, COUNT(*) FILTER (WHERE published_at IS NULL) AS missing_count, COUNT(*) AS total_count FROM posts
+                    UNION ALL SELECT 'caption', COUNT(*) FILTER (
+                        WHERE COALESCE(content_type, '') <> 'story'
+                          AND (caption IS NULL OR btrim(caption) = '' OR caption = '-')
+                    ), COUNT(*) FILTER (WHERE COALESCE(content_type, '') <> 'story') FROM posts
+                    UNION ALL SELECT 'permalink', COUNT(*) FILTER (WHERE permalink IS NULL OR btrim(permalink) = ''), COUNT(*) FROM posts
+                    UNION ALL SELECT 'image_url', COUNT(*) FILTER (WHERE image_url IS NULL OR btrim(image_url) = ''), COUNT(*) FROM posts
+                    UNION ALL SELECT 'content_type', COUNT(*) FILTER (WHERE content_type IS NULL OR btrim(content_type) = ''), COUNT(*) FROM posts
+                    UNION ALL SELECT 'likes', COUNT(*) FILTER (WHERE likes IS NULL), COUNT(*) FROM posts
+                    UNION ALL SELECT 'comments', COUNT(*) FILTER (WHERE comments IS NULL), COUNT(*) FROM posts
+                    UNION ALL SELECT 'shares', COUNT(*) FILTER (WHERE shares IS NULL), COUNT(*) FROM posts
+                    UNION ALL SELECT 'views', COUNT(*) FILTER (WHERE views IS NULL), COUNT(*) FROM posts
+                    UNION ALL SELECT 'reach', COUNT(*) FILTER (WHERE reach IS NULL), COUNT(*) FROM posts
+                    UNION ALL SELECT 'total_engagement', COUNT(*) FILTER (WHERE total_engagement IS NULL), COUNT(*) FROM posts
+                    UNION ALL SELECT 'engagement_rate', COUNT(*) FILTER (WHERE engagement_rate IS NULL), COUNT(*) FROM posts
+                ) checks
+                WHERE total_count > 0 AND missing_count > 0
+                ORDER BY field
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_id": period_id,
+                "platform": platform,
+            },
+        ).mappings()
+        labels = {
+            "published_at": "Post publish date",
+            "caption": "Post caption",
+            "permalink": "Post permalink",
+            "image_url": "Post image URL",
+            "content_type": "Post content type",
+            "likes": "Post likes",
+            "comments": "Post comments",
+            "shares": "Post shares",
+            "views": "Post views",
+            "reach": "Post reach",
+            "total_engagement": "Post total engagement",
+            "engagement_rate": "Post engagement rate",
+        }
+        return [
+            {
+                "field": f"posts.{row['field']}",
+                "label": labels.get(row["field"], row["field"]),
+                "missing_count": row["missing_count"],
+                "total_count": row["total_count"],
+            }
+            for row in rows
+        ]
 
     def upsert_kpi_target(self, payload: dict):
         required = ["client_id", "platform", "metric_name", "period_year"]
@@ -1028,56 +1192,72 @@ class DashboardRepository:
             ),
             {"client_id": client_id, "period_id": period_id, "platform": platform},
         )
-        for bucket in ("top", "low"):
-            posts = summary.get(f"{bucket}_posts") or []
+        post_groups = [
+            ("all", summary.get("raw_posts") or []),
+            ("top", summary.get("top_posts") or []),
+            ("low", summary.get("low_posts") or []),
+        ]
+        for bucket, posts in post_groups:
             for index, post in enumerate(posts, start=1):
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO social_content_reports (
-                            client_id, profile_id, report_period_id, platform, source,
-                            post_id, published_at, caption, permalink, image_url,
-                            content_type, content_rank, performance_bucket,
-                            likes, comments, shares, saves, reposts, reactions,
-                            views, reach, total_engagement, engagement_rate,
-                            raw_metrics
-                        )
-                        VALUES (
-                            :client_id, :profile_id, :period_id, :platform, 'fanpage_karma_csv',
-                            :post_id, :published_at, :caption, :permalink, :image_url,
-                            :content_type, :content_rank, :performance_bucket,
-                            :likes, :comments, :shares, :saves, :reposts, :reactions,
-                            :views, :reach, :total_engagement, :engagement_rate,
-                            CAST(:raw_metrics AS JSONB)
-                        )
-                        """
-                    ),
-                    {
-                        "client_id": client_id,
-                        "profile_id": profile_id,
-                        "period_id": period_id,
-                        "platform": platform,
-                        "post_id": post.get("post_id"),
-                        "published_at": post.get("published_at"),
-                        "caption": post.get("caption"),
-                        "permalink": post.get("permalink"),
-                        "image_url": post.get("image_url"),
-                        "content_type": post.get("content_type"),
-                        "content_rank": index,
-                        "performance_bucket": bucket,
-                        "likes": post.get("likes"),
-                        "comments": post.get("comments"),
-                        "shares": post.get("shares"),
-                        "saves": post.get("saves"),
-                        "reposts": post.get("reposts"),
-                        "reactions": post.get("reactions"),
-                        "views": post.get("views"),
-                        "reach": post.get("reach"),
-                        "total_engagement": post.get("total_engagement"),
-                        "engagement_rate": post.get("engagement_rate"),
-                        "raw_metrics": json.dumps(post),
-                    },
+                self.insert_social_content_report(
+                    conn,
+                    client_id,
+                    period_id,
+                    platform,
+                    profile_id,
+                    bucket,
+                    index,
+                    post,
                 )
+
+    def insert_social_content_report(self, conn, client_id, period_id, platform, profile_id, bucket, rank, post):
+        conn.execute(
+            text(
+                """
+                INSERT INTO social_content_reports (
+                    client_id, profile_id, report_period_id, platform, source,
+                    post_id, published_at, caption, permalink, image_url,
+                    content_type, content_rank, performance_bucket,
+                    likes, comments, shares, saves, reposts, reactions,
+                    views, reach, total_engagement, engagement_rate,
+                    raw_metrics
+                )
+                VALUES (
+                    :client_id, :profile_id, :period_id, :platform, 'fanpage_karma_csv',
+                    :post_id, :published_at, :caption, :permalink, :image_url,
+                    :content_type, :content_rank, :performance_bucket,
+                    :likes, :comments, :shares, :saves, :reposts, :reactions,
+                    :views, :reach, :total_engagement, :engagement_rate,
+                    CAST(:raw_metrics AS JSONB)
+                )
+                """
+            ),
+            {
+                "client_id": client_id,
+                "profile_id": profile_id,
+                "period_id": period_id,
+                "platform": platform,
+                "post_id": post.get("post_id"),
+                "published_at": post.get("published_at"),
+                "caption": post.get("caption"),
+                "permalink": post.get("permalink"),
+                "image_url": post.get("image_url"),
+                "content_type": post.get("content_type"),
+                "content_rank": rank,
+                "performance_bucket": bucket,
+                "likes": post.get("likes"),
+                "comments": post.get("comments"),
+                "shares": post.get("shares"),
+                "saves": post.get("saves"),
+                "reposts": post.get("reposts"),
+                "reactions": post.get("reactions"),
+                "views": post.get("views"),
+                "reach": post.get("reach"),
+                "total_engagement": post.get("total_engagement"),
+                "engagement_rate": post.get("engagement_rate"),
+                "raw_metrics": json.dumps(post),
+            },
+        )
 
     def upsert_meta_report(self, conn, table, data):
         row = conn.execute(
@@ -1423,6 +1603,55 @@ def metric(label: str, value, suffix: str = ""):
     return {"label": label, "value": value, "suffix": suffix}
 
 
+def is_missing_value(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict)):
+        return not value
+    return False
+
+
+def missing_platform_data(platform: str, report: dict | None, content_missing=None):
+    content_missing = content_missing or []
+    if not report:
+        return {
+            "status": "missing",
+            "missing_count": len(PLATFORM_DATA_FIELDS.get(platform, [])),
+            "total_count": len(PLATFORM_DATA_FIELDS.get(platform, [])),
+            "items": [
+                {"field": field, "label": label}
+                for field, label in PLATFORM_DATA_FIELDS.get(platform, [])
+            ],
+        }
+    fields = PLATFORM_DATA_FIELDS.get(platform, [])
+    items = [
+        {"field": field, "label": label}
+        for field, label in fields
+        if is_missing_value(report.get(field))
+    ]
+    if not ((report.get("top_posts") or []) or (report.get("low_posts") or [])):
+        items.append({"field": "content_posts", "label": "Top/low content posts"})
+    if not (report.get("competitor_profiles") or []):
+        items.append({"field": "competitor_profiles", "label": "Competitor summary"})
+    items.extend(content_missing)
+    missing_count = len(items)
+    total_count = len(fields) + 2 + len(content_missing)
+    if missing_count == 0:
+        status = "complete"
+    elif missing_count == total_count:
+        status = "missing"
+    else:
+        status = "partial"
+    return {
+        "status": status,
+        "missing_count": missing_count,
+        "total_count": total_count,
+        "items": items,
+    }
+
+
 class DashboardHandler(SimpleHTTPRequestHandler):
     repository = DashboardRepository()
 
@@ -1539,6 +1768,27 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 }
                 files = {slot: fields.get(slot) for slot in CSV_IMPORT_SLOTS}
                 self.send_json(self.repository.import_csv_report(payload, files), HTTPStatus.CREATED)
+            except ValueError as exc:
+                self.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self.send_error_json(str(exc), HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/reports/slides":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                client_id = str(payload.get("client_id") or "").strip()
+                period_id = str(payload.get("period_id") or "").strip()
+                if not client_id or not period_id:
+                    raise ValueError("client_id and period_id are required")
+                self.send_json(
+                    generate_dashboard_slides_report(
+                        client_id=client_id,
+                        period_id=period_id,
+                        dry_run=parse_bool(payload.get("dry_run")),
+                    ),
+                    HTTPStatus.CREATED,
+                )
             except ValueError as exc:
                 self.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
             except Exception as exc:

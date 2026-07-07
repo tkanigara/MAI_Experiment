@@ -2,7 +2,7 @@ import { PlatformBadges, StatusBadge } from "./Badges";
 import { formatDateTime } from "../lib/format";
 import OpenIconButton from "./OpenIconButton";
 
-export default function MonthCard({ month, platforms, onOpen, onGenerateReport }) {
+export default function MonthCard({ month, platforms, onOpen, onGenerateReport, isGenerating }) {
   return (
     <article className="month-card">
       <div className="card-main">
@@ -22,8 +22,13 @@ export default function MonthCard({ month, platforms, onOpen, onGenerateReport }
         </div>
       </div>
       <div className="card-footer">
-        <button className="text-link" type="button" onClick={() => onGenerateReport?.(month)}>
-          Generate report
+        <button
+          className="text-link"
+          type="button"
+          disabled={isGenerating}
+          onClick={() => onGenerateReport?.(month)}
+        >
+          {isGenerating ? "Generating..." : "Generate report"}
         </button>
       </div>
     </article>

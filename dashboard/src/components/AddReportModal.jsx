@@ -15,10 +15,18 @@ export default function AddReportModal({
   activePlatform,
   initialTab = "csv",
 }) {
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().toLocaleString("en-US", { month: "long" });
+  const defaultMonth = month?.slug
+    || REPORT_MONTHS.find((item) => item.slug === `${currentMonth.toLowerCase()}-${currentYear}`)?.slug
+    || REPORT_MONTHS.find((item) => item.slug.endsWith(`-${currentYear}`))?.slug
+    || REPORT_MONTHS[0]?.slug;
+  const defaultMonthName = REPORT_MONTHS.find((item) => item.slug === defaultMonth)?.label?.split(" ")[0] || currentMonth;
   const [tab, setTab] = useState(initialTab);
   const [files, setFiles] = useState({});
   const [draggingSlot, setDraggingSlot] = useState("");
-  const [selectedMonth, setSelectedMonth] = useState(month?.slug || REPORT_MONTHS[0]?.slug);
+  const [selectedYear, setSelectedYear] = useState(Number((defaultMonth || "").split("-").at(-1)) || currentYear);
+  const [selectedMonthName, setSelectedMonthName] = useState(defaultMonthName);
   const [isImporting, setIsImporting] = useState(false);
   const [isSavingKpi, setIsSavingKpi] = useState(false);
   const [importResult, setImportResult] = useState(null);
@@ -27,10 +35,10 @@ export default function AddReportModal({
   const kpiPlatforms = activePlatform ? [activePlatform] : platforms;
   const uploadedCount = CSV_TYPES.filter((item) => files[item.key]).length;
   const warningCount = importResult?.summary?.warnings || 0;
-  const monthOptions = [
-    ...reportMonths,
-    ...REPORT_MONTHS.filter((item) => !reportMonths.some((monthItem) => monthItem.slug === item.slug)),
-  ];
+  const monthNames = [...new Set(REPORT_MONTHS.map((item) => item.label.split(" ")[0]))];
+  const yearOptions = [...new Set(REPORT_MONTHS.map((item) => Number(item.slug.split("-").at(-1))))];
+  const selectedMonth = `${selectedMonthName.toLowerCase()}-${selectedYear}`;
+  const selectedMonthExists = reportMonths.some((monthItem) => monthItem.slug === selectedMonth);
 
   function selectFile(key, file) {
     if (!file) return;
@@ -86,18 +94,20 @@ export default function AddReportModal({
       ? event.currentTarget
       : document.getElementById("kpi-target-form");
     const form = new FormData(formElement);
-    const periodYear = Number(selectedMonth.split("-").at(-1)) || new Date().getFullYear();
+    const periodYear = selectedYear || currentYear;
     const targets = [];
     kpiPlatforms.forEach((platform) => {
       (KPI_METRICS[platform] || []).forEach((metric) => {
-        const target = form.get(`${platform}:${metric}:target`);
+        const targetMonth = form.get(`${platform}:${metric}:target_month`);
+        const targetYear = form.get(`${platform}:${metric}:target_year`);
         const existing = (platformData[platform]?.kpi_results || []).find((item) => item.metric_name === metric);
-        if (target || existing?.target_month) {
+        if (targetMonth || targetYear || existing?.target_month || existing?.target_year) {
           targets.push({
             platform,
             metric_name: metric,
             period_year: periodYear,
-            target_month: target,
+            target_month: targetMonth || null,
+            target_year: targetYear || null,
             unit: form.get(`${platform}:${metric}:unit`) || existing?.unit || "count",
           });
         }
@@ -125,12 +135,30 @@ export default function AddReportModal({
           <span>Client</span>
           <strong>{client?.client_name || "Client"}</strong>
         </div>
-        <label>
-          Report Month
-          <select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>
-            {monthOptions.map((item) => <option value={item.slug} key={item.slug}>{item.label}</option>)}
-          </select>
-        </label>
+        {tab === "csv" ? (
+          <div className="split-fields">
+            <label>
+              Report Year
+              <select value={selectedYear} onChange={(event) => setSelectedYear(Number(event.target.value))}>
+                {yearOptions.map((year) => <option value={year} key={year}>{year}</option>)}
+              </select>
+            </label>
+            <label>
+              Report Month
+              <select value={selectedMonthName} onChange={(event) => setSelectedMonthName(event.target.value)}>
+                {monthNames.map((monthName) => <option value={monthName} key={monthName}>{monthName}</option>)}
+              </select>
+            </label>
+            {selectedMonthExists ? <span className="field-note">Existing report month</span> : null}
+          </div>
+        ) : (
+          <label>
+            KPI Year
+            <select value={selectedYear} onChange={(event) => setSelectedYear(Number(event.target.value))}>
+              {yearOptions.map((year) => <option value={year} key={year}>{year}</option>)}
+            </select>
+          </label>
+        )}
       </div>
       <div className="tabs">
         <button className={`tab ${tab === "csv" ? "active" : ""}`} onClick={() => setTab("csv")} type="button">
@@ -231,24 +259,34 @@ export default function AddReportModal({
               </button>
             </div>
             {kpiPlatforms.map((platform) => (
-              <section className="kpi-target-card" key={platform}>
+              <section className="kpi-target-card" key={`${platform}-${selectedYear}`}>
                 <h3><PlatformBadge platform={platform} /> KPI Targets</h3>
                 {(KPI_METRICS[platform] || []).map((metric) => {
+                  const targetRow = (platformData[platform]?.kpi_targets || []).find(
+                    (item) => item.metric_name === metric && Number(item.period_year) === Number(selectedYear),
+                  ) || {};
                   const row = (platformData[platform]?.kpi_results || []).find((item) => item.metric_name === metric) || {};
                   return (
                     <div className="kpi-target-row" key={metric}>
                       <strong>{prettyMetric(metric)}</strong>
                       <span className="muted">Actual: {formatNumber(row.actual_month)}</span>
                       <input
-                        name={`${platform}:${metric}:target`}
+                        name={`${platform}:${metric}:target_month`}
                         type="number"
                         step="0.01"
-                        defaultValue={row.target_month || ""}
-                        placeholder="Target"
+                        defaultValue={targetRow.target_month || row.target_month || ""}
+                        placeholder="Monthly target"
+                      />
+                      <input
+                        name={`${platform}:${metric}:target_year`}
+                        type="number"
+                        step="0.01"
+                        defaultValue={targetRow.target_year || row.target_year || ""}
+                        placeholder="Yearly target"
                       />
                       <input
                         name={`${platform}:${metric}:unit`}
-                        defaultValue={row.unit || "count"}
+                        defaultValue={targetRow.unit || row.unit || "count"}
                         placeholder="Unit"
                       />
                     </div>

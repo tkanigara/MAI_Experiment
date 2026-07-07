@@ -1,7 +1,9 @@
+import { useState } from "react";
 import Breadcrumb from "../components/Breadcrumb";
 import CompetitorTable from "../components/CompetitorTable";
 import KpiTable from "../components/KpiTable";
 import MetricCards from "../components/MetricCards";
+import MissingDataModal from "../components/MissingDataModal";
 import PostList from "../components/PostList";
 import { PLATFORM_LABELS } from "../lib/constants";
 import { clientSlug } from "../lib/format";
@@ -15,7 +17,15 @@ export default function PlatformDetailPage({
   onOpenReportKpi,
   onEditKpi,
 }) {
+  const [showMissingData, setShowMissingData] = useState(false);
   const report = data?.report || {};
+  const missingData = data?.missing_data || {
+    items: [{ field: "data_check", label: "Data completeness check is unavailable. Restart the dashboard backend." }],
+    missing_count: 1,
+    status: "unknown",
+  };
+  const hasMissingData = (missingData.missing_count || 0) > 0;
+
   return (
     <section className="view active">
       <Breadcrumb
@@ -32,8 +42,23 @@ export default function PlatformDetailPage({
           <h1>{PLATFORM_LABELS[platform]} Overview</h1>
           <p>Performance summary, KPI results, and top content for {month.label}.</p>
         </div>
-        <button className="primary-button" onClick={onOpenReportKpi}>Update KPI Targets</button>
+        <div className="page-actions">
+          <button
+            className={`secondary-button data-check-button ${hasMissingData ? "has-missing" : ""}`}
+            onClick={() => setShowMissingData(true)}
+          >
+            {hasMissingData ? `${missingData.missing_count} Missing Fields` : "Data Complete"}
+          </button>
+          <button className="primary-button" onClick={onOpenReportKpi}>Update KPI Targets</button>
+        </div>
       </div>
+      {showMissingData && (
+        <MissingDataModal
+          platformLabel={PLATFORM_LABELS[platform]}
+          missingData={missingData}
+          onClose={() => setShowMissingData(false)}
+        />
+      )}
       <MetricCards metrics={data?.metrics || []} />
       <section className="content-section">
         <h2>KPI Results</h2>

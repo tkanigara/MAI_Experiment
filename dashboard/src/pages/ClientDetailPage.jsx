@@ -10,7 +10,10 @@ export default function ClientDetailPage({
   onNavigate,
   onOpenMonth,
   onOpenAddReport,
+  onOpenKpiTargets,
   onDeleteClient,
+  onGenerateReport,
+  generatingReportId,
 }) {
   const platforms = platformFlags(client);
   const profileCount = Math.max(profiles.length, platforms.length, client.connected_profiles || 0);
@@ -53,7 +56,10 @@ export default function ClientDetailPage({
           <h2>Report Months</h2>
           <p>Select a report month to view platform performance overview.</p>
         </div>
-        <button className="primary-button" onClick={onOpenAddReport}>Add Report Data</button>
+        <div className="page-actions">
+          <button className="secondary-button" onClick={onOpenKpiTargets}>Manage KPI Targets</button>
+          <button className="primary-button" onClick={onOpenAddReport}>Add Report Data</button>
+        </div>
       </div>
       {reportMonths.length ? (
         <div className="month-grid">
@@ -63,7 +69,8 @@ export default function ClientDetailPage({
               month={month}
               platforms={platforms}
               onOpen={(slug) => onOpenMonth(`${clientSlug(client)}/${slug}`)}
-              onGenerateReport={() => window.alert("Slide report generation is not connected yet.")}
+              onGenerateReport={onGenerateReport}
+              isGenerating={generatingReportId === month.id}
             />
           ))}
         </div>

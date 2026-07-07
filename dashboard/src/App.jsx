@@ -30,6 +30,7 @@ export default function App() {
   const [editClient, setEditClient] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
+  const [generatingReportId, setGeneratingReportId] = useState("");
   const [error, setError] = useState("");
 
   const industries = useMemo(
@@ -105,6 +106,7 @@ export default function App() {
         metric_name: payload.metric_name,
         period_year: 2026,
         target_month: payload.target_month,
+        target_year: payload.target_year,
         unit: payload.unit,
       }),
     });
@@ -115,7 +117,13 @@ export default function App() {
 
   async function saveKpiTargets(targets) {
     if (!selectedClient) return;
-    const validTargets = targets.filter((target) => target.target_month !== null && target.target_month !== "");
+    const validTargets = targets.filter((target) => (
+      target.target_month !== null
+      && target.target_month !== ""
+    ) || (
+      target.target_year !== null
+      && target.target_year !== ""
+    ));
     if (!validTargets.length) {
       showToast("No KPI target changes to save.");
       return;
@@ -129,6 +137,7 @@ export default function App() {
           metric_name: target.metric_name,
           period_year: target.period_year,
           target_month: target.target_month,
+          target_year: target.target_year,
           unit: target.unit,
         }),
       })),
@@ -154,6 +163,43 @@ export default function App() {
     showToast("Client deleted.");
   }
 
+  async function generateSlidesReport(month) {
+    if (!selectedClient || !month?.id) return;
+    const reportWindow = window.open("about:blank", "_blank", "noopener,noreferrer");
+    if (reportWindow) {
+      reportWindow.document.write("<p style=\"font-family: sans-serif; padding: 24px;\">Generating report...</p>");
+      reportWindow.document.close();
+    }
+    setGeneratingReportId(month.id);
+    try {
+      const result = await api("/api/reports/slides", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: selectedClient.id,
+          period_id: month.id,
+        }),
+      });
+      showToast("Slides report generated.");
+      if (result.presentation_url) {
+        if (reportWindow) {
+          reportWindow.location.href = result.presentation_url;
+        } else {
+          window.location.href = result.presentation_url;
+        }
+      } else if (reportWindow) {
+        reportWindow.close();
+      }
+    } catch (err) {
+      if (reportWindow) {
+        reportWindow.close();
+      }
+      setError(err.message);
+      showToast("Failed to generate report.");
+    } finally {
+      setGeneratingReportId("");
+    }
+  }
+
   useEffect(() => {
     loadClients().catch((err) => setError(err.message));
     const onPopState = () => setRoute(routeParts());
@@ -169,7 +215,7 @@ export default function App() {
   }, [currentClient?.id]);
 
   useEffect(() => {
-    if (!selectedClient || !currentMonth) return;
+    if (!selectedClient) return;
     loadPlatformData(selectedClient).catch((err) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClient?.id, currentMonth?.slug]);
@@ -201,7 +247,10 @@ export default function App() {
         onNavigate={navigate}
         onOpenMonth={(path) => navigate(`/clients/${path}`)}
         onOpenAddReport={() => setModal("add-report-csv")}
+        onOpenKpiTargets={() => setModal("add-report-kpi")}
         onDeleteClient={setDeleteTarget}
+        onGenerateReport={generateSlidesReport}
+        generatingReportId={generatingReportId}
       />
     );
   }
@@ -216,6 +265,8 @@ export default function App() {
         onNavigate={navigate}
         onOpenPlatform={(path) => navigate(`/clients/${path}`)}
         onOpenAddReport={() => setModal("add-report-csv")}
+        onGenerateReport={generateSlidesReport}
+        isGeneratingReport={generatingReportId === currentMonth.id}
       />
     );
   }

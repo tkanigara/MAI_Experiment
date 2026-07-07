@@ -38,8 +38,23 @@ services:
       DASHBOARD_HOST: 0.0.0.0
       DASHBOARD_PORT: 8000
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mai_user}:${POSTGRES_PASSWORD:-mai_password}@postgres:5432/${POSTGRES_DB:-mai_socmed_report}
+      SLIDES_TEMPLATE_ID: ${SLIDES_TEMPLATE_ID:-}
+      GOOGLE_SLIDES_TEMPLATE_ID: ${GOOGLE_SLIDES_TEMPLATE_ID:-}
+      GOOGLE_SLIDES_AUTH: ${GOOGLE_SLIDES_AUTH:-}
+      GOOGLE_CREDENTIALS_FILE: ${GOOGLE_CREDENTIALS_FILE:-credentials.json}
+      GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE: ${GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE:-}
+      GOOGLE_TOKEN_FILE: ${GOOGLE_TOKEN_FILE:-token.json}
+      GOOGLE_OAUTH_PORT: ${GOOGLE_OAUTH_PORT:-0}
+      GOOGLE_SLIDES_OUTPUT_FOLDER_ID: ${GOOGLE_SLIDES_OUTPUT_FOLDER_ID:-}
+      REPORT_AGENCY_NAME: ${REPORT_AGENCY_NAME:-MAI}
+      SLIDES_FAST_MODE: ${SLIDES_FAST_MODE:-true}
+      SLIDES_REPLACE_IMAGES: ${SLIDES_REPLACE_IMAGES:-false}
+      SLIDES_TEXT_BATCH_SIZE: ${SLIDES_TEXT_BATCH_SIZE:-100}
     ports:
       - "${DASHBOARD_PORT:-8000}:8000"
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+      - ./token.json:/app/token.json
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,0 +1,1102 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+from generate_slides_example import (  # noqa: E402
+    copy_template,
+    extract_presentation_id,
+    get_google_services,
+    image_placeholder_mapping,
+    replace_image_placeholders,
+)
+
+
+PLATFORM_TABLES = {
+    "instagram": "instagram_reports",
+    "facebook": "facebook_reports",
+    "tiktok": "tiktok_reports",
+    "youtube": "youtube_reports",
+}
+
+PLATFORM_PREFIXES = {
+    "instagram": "IG",
+    "facebook": "FB",
+    "tiktok": "TK",
+    "youtube": "YT",
+}
+
+PLATFORM_LABELS = {
+    "instagram": "Instagram",
+    "facebook": "Facebook",
+    "tiktok": "TikTok",
+    "youtube": "YouTube",
+}
+
+PLACEHOLDER_PATTERN = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
+
+
+class StepProfiler:
+    def __init__(self):
+        self.started_at = time.perf_counter()
+        self.steps: dict[str, float] = {}
+
+    def record(self, name: str, start: float):
+        duration = time.perf_counter() - start
+        self.steps[name] = self.steps.get(name, 0) + duration
+        print(f"[slides] {name}: {duration:.2f}s", flush=True)
+
+    def total(self) -> float:
+        duration = time.perf_counter() - self.started_at
+        self.steps["total"] = duration
+        print(f"[slides] total: {duration:.2f}s", flush=True)
+        return duration
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def database_url() -> str:
+    load_dotenv(BASE_DIR / ".env")
+    return os.getenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://mai_user:mai_password@localhost:55432/mai_socmed_report",
+    )
+
+
+def default_template() -> str:
+    return (
+        os.getenv("SLIDES_TEMPLATE_ID")
+        or os.getenv("GOOGLE_SLIDES_TEMPLATE_ID")
+        or ""
+    )
+
+
+def default_credentials() -> str:
+    auth_mode = os.getenv("GOOGLE_SLIDES_AUTH", "").strip().lower()
+    if auth_mode in {"oauth", "user_oauth", "user-oauth"}:
+        return os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    return (
+        os.getenv("GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE")
+        or os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    )
+
+
+def resolve_project_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else BASE_DIR / path
+
+
+def fmt_number(value, fallback: str = "-") -> str:
+    if value is None or value == "":
+        return fallback
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return f"{int(number):,}"
+    return f"{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def fmt_percent(value, fallback: str = "-") -> str:
+    if value is None or value == "":
+        return fallback
+    return f"{fmt_number(value)}%"
+
+
+def pct(actual, target) -> str:
+    try:
+        actual_number = float(actual)
+        target_number = float(target)
+    except (TypeError, ValueError):
+        return "-"
+    if target_number == 0:
+        return "-"
+    return fmt_percent(round((actual_number / target_number) * 100, 2))
+
+
+def clean_text(value, limit: int | None = None) -> str:
+    text_value = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text_value or text_value == "-":
+        return "-"
+    if limit and len(text_value) > limit:
+        return text_value[: max(limit - 3, 0)].rstrip() + "..."
+    return text_value
+
+
+def placeholder(name: str) -> str:
+    return "{{" + name + "}}"
+
+
+def is_image_placeholder_key(key: str) -> bool:
+    return key.strip("{}").endswith("_IMAGE")
+
+
+def row_dict(row):
+    return dict(row) if row else None
+
+
+def extract_placeholders_from_presentation(presentation: dict) -> set[str]:
+    return set(PLACEHOLDER_PATTERN.findall(json.dumps(presentation, ensure_ascii=False)))
+
+
+def fetch_presentation_placeholders(slides_service, presentation_id: str) -> set[str]:
+    presentation = (
+        slides_service.presentations()
+        .get(presentationId=presentation_id)
+        .execute()
+    )
+    return extract_placeholders_from_presentation(presentation)
+
+
+def fallback_value(value) -> bool:
+    return value is None or str(value).strip() in {"", "-"}
+
+
+def platform_from_placeholder(placeholder_name: str) -> str | None:
+    if placeholder_name.startswith("IG_") or "_IG_" in placeholder_name:
+        return "instagram"
+    if placeholder_name.startswith("FB_") or "_FB_" in placeholder_name:
+        return "facebook"
+    if placeholder_name.startswith("TK_") or "_TK_" in placeholder_name:
+        return "tiktok"
+    if placeholder_name.startswith("YT_") or "_YT_" in placeholder_name:
+        return "youtube"
+    return None
+
+
+def issue_reason(placeholder_key: str, mapping: dict, payload: dict | None = None, sent_keys: set[str] | None = None) -> str:
+    if placeholder_key not in mapping:
+        return "placeholder not found in mapping; template name may have changed or alias is missing"
+    if sent_keys is not None and placeholder_key not in sent_keys:
+        return "mapping exists but was not included in batchUpdate"
+
+    value = mapping.get(placeholder_key)
+    if not fallback_value(value):
+        return "mapping exists and was sent to Slides API; replacement did not apply, so inspect split text runs or batchUpdate result"
+
+    name = placeholder_key.strip("{}")
+    platform = platform_from_placeholder(name)
+    if "POST_TOP" in name or "POST_LOW" in name:
+        bucket = "top" if "POST_TOP" in name else "low"
+        if payload and platform:
+            posts = (payload.get("content", {}).get(platform, {}) or {}).get(bucket, [])
+            if not posts:
+                return f"mapping fallback '-' because no {bucket} content rows were found in social_content_reports"
+        return "mapping fallback '-' because content field is unavailable for this post slot"
+    if "COMP" in name:
+        if payload and platform and not payload.get("competitors", {}).get(platform):
+            return "mapping fallback '-' because no competitor rows were found in competitor_profile_reports"
+        return "mapping fallback '-' because competitor field is unavailable"
+    if "DEMOGRAPHIC" in name or name.startswith("AGE_") or name.startswith("GENDER_") or name.startswith("TOP_CITY_"):
+        return "mapping fallback '-' because demographics data is empty or not imported"
+    if name.startswith("WEB_") or name.startswith("SSL_") or name.startswith("DOMAIN_"):
+        return "mapping fallback '-' because website/SEO data is not imported yet"
+    if name.startswith("ADS_"):
+        return "mapping fallback '-' because paid ads data is not imported yet"
+    if platform:
+        report = (payload or {}).get("reports", {}).get(platform) if payload else None
+        if not report:
+            return f"mapping fallback '-' because no {platform} report row exists for this period"
+        return f"mapping fallback '-' because source DB value is NULL or empty for {platform}"
+    return "mapping fallback '-' because source data is unavailable"
+
+
+def audit_mapping(template_placeholders: set[str], mapping: dict, payload: dict | None = None, sent_keys: set[str] | None = None, remaining_placeholders: set[str] | None = None) -> dict:
+    mapping_keys = set(mapping)
+    matched = sorted(template_placeholders & mapping_keys)
+    missing = sorted(template_placeholders - mapping_keys)
+    unused = sorted(mapping_keys - template_placeholders)
+    fallback_keys = sorted(
+        key for key in matched
+        if fallback_value(mapping.get(key))
+    )
+    remaining = sorted(remaining_placeholders or [])
+    return {
+        "template_placeholder_count": len(template_placeholders),
+        "mapping_key_count": len(mapping_keys),
+        "matched_count": len(matched),
+        "missing_in_mapping_count": len(missing),
+        "unused_mapping_key_count": len(unused),
+        "remaining_placeholder_count": len(remaining),
+        "matched_placeholders": matched,
+        "missing_in_mapping": [
+            {"placeholder": key, "reason": issue_reason(key, mapping, payload, sent_keys)}
+            for key in missing
+        ],
+        "unused_mapping_keys": unused,
+        "fallback_values": [
+            {"placeholder": key, "value": mapping.get(key), "reason": issue_reason(key, mapping, payload, sent_keys)}
+            for key in fallback_keys
+        ],
+        "remaining_placeholders": [
+            {"placeholder": key, "reason": issue_reason(key, mapping, payload, sent_keys)}
+            for key in remaining
+        ],
+    }
+
+
+def log_audit(label: str, audit: dict):
+    print(
+        "[slides_report]"
+        f" {label}: template={audit.get('template_placeholder_count')} "
+        f"mapping={audit.get('mapping_key_count')} "
+        f"matched={audit.get('matched_count')} "
+        f"missing={audit.get('missing_in_mapping_count')} "
+        f"unused={audit.get('unused_mapping_key_count')} "
+        f"remaining={audit.get('remaining_placeholder_count')}",
+        flush=True,
+    )
+    for item in audit.get("missing_in_mapping", [])[:50]:
+        print(f"[slides_report] missing {item['placeholder']}: {item['reason']}", flush=True)
+    for item in audit.get("remaining_placeholders", [])[:50]:
+        print(f"[slides_report] remaining {item['placeholder']}: {item['reason']}", flush=True)
+
+
+class SlidesReportRepository:
+    def __init__(self):
+        self.engine = create_engine(database_url(), pool_pre_ping=True)
+
+    def report_payload(self, client_id: str, period_id: str) -> dict:
+        with self.engine.begin() as conn:
+            client = row_dict(
+                conn.execute(
+                    text(
+                        """
+                        SELECT id, client_code, client_name, industry,
+                               has_instagram, has_facebook, has_tiktok, has_youtube
+                        FROM clients
+                        WHERE id = :client_id
+                        """
+                    ),
+                    {"client_id": client_id},
+                ).mappings().first()
+            )
+            period = row_dict(
+                conn.execute(
+                    text(
+                        """
+                        SELECT id, period_label, period_start, period_end
+                        FROM report_periods
+                        WHERE id = :period_id AND client_id = :client_id
+                        """
+                    ),
+                    {"client_id": client_id, "period_id": period_id},
+                ).mappings().first()
+            )
+            if not client or not period:
+                raise ValueError("Client or report period not found")
+
+            reports = {}
+            content = {}
+            competitors = {}
+            kpi_results = {}
+            trends = {}
+            for platform, table_name in PLATFORM_TABLES.items():
+                if not client.get(f"has_{platform}"):
+                    continue
+                reports[platform] = row_dict(
+                    conn.execute(
+                        text(
+                            f"""
+                            SELECT r.*, p.profile_name, p.profile_url, p.image_url
+                            FROM {table_name} r
+                            LEFT JOIN client_social_profiles p ON p.id = r.profile_id
+                            WHERE r.client_id = :client_id
+                              AND r.report_period_id = :period_id
+                            ORDER BY r.updated_at DESC
+                            LIMIT 1
+                            """
+                        ),
+                        {"client_id": client_id, "period_id": period_id},
+                    ).mappings().first()
+                )
+                content[platform] = self.content_posts(conn, client_id, period_id, platform)
+                competitors[platform] = [
+                    dict(row)
+                    for row in conn.execute(
+                        text(
+                            """
+                            SELECT profile_name, total_followers, follower_growth,
+                                   follower_growth_rate, total_posts, total_engagement,
+                                   engagement_rate, reach, impressions, profile_url, image_url
+                            FROM competitor_profile_reports
+                            WHERE client_id = :client_id
+                              AND report_period_id = :period_id
+                              AND platform = :platform
+                            ORDER BY total_engagement DESC NULLS LAST,
+                                     total_followers DESC NULLS LAST
+                            LIMIT 5
+                            """
+                        ),
+                        {
+                            "client_id": client_id,
+                            "period_id": period_id,
+                            "platform": platform,
+                        },
+                    ).mappings()
+                ]
+                kpi_results[platform] = [
+                    dict(row)
+                    for row in conn.execute(
+                        text(
+                            """
+                            SELECT metric_name, actual_month, actual_year, target_month,
+                                   target_year, achievement_month, achievement_year, unit
+                            FROM kpi_results
+                            WHERE client_id = :client_id
+                              AND report_period_id = :period_id
+                              AND platform = :platform
+                            ORDER BY metric_name
+                            """
+                        ),
+                        {
+                            "client_id": client_id,
+                            "period_id": period_id,
+                            "platform": platform,
+                        },
+                    ).mappings()
+                ]
+                trends[platform] = self.monthly_trends(conn, client_id, period, platform, table_name)
+
+            return {
+                "client": client,
+                "period": period,
+                "reports": reports,
+                "content": content,
+                "competitors": competitors,
+                "kpi_results": kpi_results,
+                "trends": trends,
+            }
+
+    def content_posts(self, conn, client_id: str, period_id: str, platform: str) -> dict:
+        rows = conn.execute(
+            text(
+                """
+                WITH ranked AS (
+                    SELECT
+                        post_id, published_at, caption, permalink, image_url,
+                        content_type, content_rank, performance_bucket,
+                        likes, comments, shares, saves, reposts, reactions,
+                        views, reach, total_engagement, engagement_rate,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY performance_bucket
+                            ORDER BY content_rank ASC NULLS LAST,
+                                     total_engagement DESC NULLS LAST
+                        ) AS bucket_rank
+                    FROM social_content_reports
+                    WHERE client_id = :client_id
+                      AND report_period_id = :period_id
+                      AND platform = :platform
+                      AND performance_bucket IN ('top', 'low')
+                )
+                SELECT *
+                FROM ranked
+                WHERE bucket_rank <= 3
+                ORDER BY performance_bucket, bucket_rank
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_id": period_id,
+                "platform": platform,
+            },
+        ).mappings()
+        result = {"top": [], "low": []}
+        for row in rows:
+            item = dict(row)
+            bucket = item.pop("performance_bucket")
+            item.pop("bucket_rank", None)
+            result.setdefault(bucket, []).append(item)
+        return result
+
+    def monthly_trends(self, conn, client_id: str, period: dict, platform: str, table_name: str) -> list[dict]:
+        follower_field = "total_subscribers" if platform == "youtube" else "total_followers"
+        growth_field = "subscriber_growth" if platform == "youtube" else "follower_growth"
+        lost_field = "subscribers_lost" if platform == "youtube" else "unfollows"
+        reach_field = "COALESCE(r.reach, r.total_views)" if platform in {"tiktok", "youtube"} else "COALESCE(r.reach, r.impressions)"
+        impressions_field = "r.total_views" if platform in {"tiktok", "youtube"} else "r.impressions"
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT
+                    rp.period_label,
+                    rp.period_start,
+                    r.{follower_field} AS audience_total,
+                    r.{growth_field} AS growth,
+                    r.{lost_field} AS audience_lost,
+                    r.total_engagement,
+                    r.engagement_rate,
+                    {reach_field} AS reach_or_views,
+                    {impressions_field} AS impressions_or_views,
+                    r.likes,
+                    r.comments,
+                    r.shares,
+                    r.total_posts
+                FROM {table_name} r
+                JOIN report_periods rp ON rp.id = r.report_period_id
+                WHERE r.client_id = :client_id
+                  AND rp.period_start <= :period_start
+                ORDER BY rp.period_start DESC
+                LIMIT 3
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_start": period["period_start"],
+            },
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
+def report_value(report: dict | None, platform: str, field: str):
+    if not report:
+        return None
+    if field == "audience_total":
+        return report.get("total_subscribers") if platform == "youtube" else report.get("total_followers")
+    if field == "growth":
+        return report.get("subscriber_growth") if platform == "youtube" else report.get("follower_growth")
+    if field == "growth_rate":
+        return report.get("subscriber_growth_rate") if platform == "youtube" else report.get("follower_growth_rate")
+    if field == "audience_gained":
+        return report.get("subscribers_gained") or report.get("follows")
+    if field == "audience_lost":
+        return report.get("subscribers_lost") if platform == "youtube" else report.get("unfollows")
+    if field == "views":
+        return report.get("total_views") or report.get("impressions")
+    return report.get(field)
+
+
+def kpi_by_metric(rows: list[dict]) -> dict:
+    return {str(row.get("metric_name") or "").lower(): row for row in rows}
+
+
+def demographic_summary(report: dict | None) -> str:
+    demographics = (report or {}).get("demographics") or {}
+    if not demographics:
+        return "-"
+    if isinstance(demographics, str):
+        try:
+            demographics = json.loads(demographics)
+        except json.JSONDecodeError:
+            return clean_text(demographics, 120)
+    if not isinstance(demographics, dict) or not demographics:
+        return "-"
+    parts = []
+    for key, value in list(demographics.items())[:3]:
+        label = str(key).replace("_", " ").title()
+        parts.append(f"{label}: {fmt_percent(value) if isinstance(value, (int, float)) else value}")
+    return "; ".join(parts) if parts else "-"
+
+
+def add_kpi_mapping(mapping: dict, prefix: str, platform: str, rows: list[dict], report: dict | None):
+    kpis = kpi_by_metric(rows)
+    metric_aliases = {
+        "followers": "FOL",
+        "subscribers": "SUB",
+        "reach": "REACH",
+        "views": "VIEWS",
+        "engagement": "INT",
+    }
+    fallback_actuals = {
+        "followers": report_value(report, platform, "audience_total"),
+        "subscribers": report_value(report, platform, "audience_total"),
+        "reach": report_value(report, platform, "reach"),
+        "views": report_value(report, platform, "views"),
+        "engagement": report_value(report, platform, "total_engagement"),
+    }
+    for metric_name, alias in metric_aliases.items():
+        row = kpis.get(metric_name) or {}
+        actual_month = row.get("actual_month", fallback_actuals.get(metric_name))
+        actual_year = row.get("actual_year", actual_month)
+        for period_name, actual in (("MONTH", actual_month), ("YEAR", actual_year)):
+            target = row.get(f"target_{period_name.lower()}")
+            achievement = row.get(f"achievement_{period_name.lower()}")
+            mapping[placeholder(f"{prefix}_{alias}_TARGET_{period_name}")] = fmt_number(target)
+            mapping[placeholder(f"{prefix}_{alias}_ACTUAL_{period_name}")] = fmt_number(actual)
+            mapping[placeholder(f"{prefix}_{alias}_PCT_{period_name}")] = (
+                fmt_percent(achievement) if achievement is not None else pct(actual, target)
+            )
+
+
+def add_platform_mapping(mapping: dict, payload: dict, platform: str):
+    prefix = PLATFORM_PREFIXES[platform]
+    report = payload["reports"].get(platform)
+    content = payload["content"].get(platform, {})
+    competitors = payload["competitors"].get(platform, [])
+    trends = payload["trends"].get(platform, [])
+    label = PLATFORM_LABELS[platform]
+
+    audience_label = "Subscribers" if platform == "youtube" else "Followers"
+    audience_total = report_value(report, platform, "audience_total")
+    growth = report_value(report, platform, "growth")
+    growth_display = growth if growth is not None else audience_total
+    growth_rate = report_value(report, platform, "growth_rate")
+    gained = report_value(report, platform, "audience_gained")
+    lost = report_value(report, platform, "audience_lost")
+    reach = report_value(report, platform, "reach")
+    views = report_value(report, platform, "views")
+    interactions = report_value(report, platform, "total_engagement")
+    er = report_value(report, platform, "engagement_rate")
+
+    mapping.update(
+        {
+            placeholder(f"{prefix}_TOTAL_FOLLOWERS"): fmt_number(audience_total),
+            placeholder(f"{prefix}_TOTAL_SUBSCRIBERS"): fmt_number(audience_total),
+            placeholder(f"{prefix}_TOTAL_FOL"): fmt_number(audience_total),
+            placeholder(f"{prefix}_TOTAL_SUB"): fmt_number(audience_total),
+            placeholder(f"{prefix}_FOLLOWERS_GROWTH"): fmt_number(growth_display),
+            placeholder(f"{prefix}_SUBSCRIBER_GROWTH"): fmt_number(growth_display),
+            placeholder(f"{prefix}_FOLLOWERS_GROWTH_RATE"): fmt_percent(growth_rate),
+            placeholder(f"{prefix}_SUBSCRIBER_GROWTH_RATE"): fmt_percent(growth_rate),
+            placeholder(f"{prefix}_FOLLOWS"): fmt_number(gained),
+            placeholder(f"{prefix}_SUBSCRIBERS_GAINED"): fmt_number(gained),
+            placeholder(f"{prefix}_UNFOLLOWS"): fmt_number(lost),
+            placeholder(f"{prefix}_SUBSCRIBERS_LOST"): fmt_number(lost),
+            placeholder(f"{prefix}_TOTAL_REACH"): fmt_number(reach),
+            placeholder(f"{prefix}_TOTAL_VIEWS"): fmt_number(views),
+            placeholder(f"{prefix}_TOTAL_INTERACTIONS"): fmt_number(interactions),
+            placeholder(f"{prefix}_TOTAL_INT"): fmt_number(interactions),
+            placeholder(f"{prefix}_TOTAL_LIKES"): fmt_number(report_value(report, platform, "likes")),
+            placeholder(f"{prefix}_LIKES"): fmt_number(report_value(report, platform, "likes")),
+            placeholder(f"{prefix}_TOTAL_COMMENTS"): fmt_number(report_value(report, platform, "comments")),
+            placeholder(f"{prefix}_COMMENT"): fmt_number(report_value(report, platform, "comments")),
+            placeholder(f"{prefix}_COMMENTS"): fmt_number(report_value(report, platform, "comments")),
+            placeholder(f"{prefix}_TOTAL_SHARES"): fmt_number(report_value(report, platform, "shares")),
+            placeholder(f"{prefix}_SHARE"): fmt_number(report_value(report, platform, "shares")),
+            placeholder(f"{prefix}_SHARES"): fmt_number(report_value(report, platform, "shares")),
+            placeholder(f"{prefix}_TOTAL_SAVED"): fmt_number(report_value(report, platform, "saves")),
+            placeholder(f"{prefix}_TOTAL_SAVES"): fmt_number(report_value(report, platform, "saves")),
+            placeholder(f"{prefix}_TOTAL_REPOSTS"): fmt_number(report_value(report, platform, "reposts")),
+            placeholder(f"{prefix}_AVG_ENGAGEMENT_RATE"): fmt_percent(er),
+            placeholder(f"{prefix}_AVG_ER"): fmt_percent(er),
+            placeholder(f"{prefix}_TOTAL_POSTS"): fmt_number(report_value(report, platform, "total_posts")),
+            placeholder(f"{prefix}_TOTAL_REELS"): fmt_number(report_value(report, platform, "reels_posts")),
+            placeholder(f"{prefix}_TOTAL_CAROUSEL"): fmt_number(report_value(report, platform, "carousel_posts")),
+            placeholder(f"{prefix}_TOTAL_SINGLE"): fmt_number(report_value(report, platform, "single_posts")),
+            placeholder(f"{prefix}_TOTAL_STORIES"): fmt_number(report_value(report, platform, "story_posts")),
+            placeholder(f"{prefix}_TOTAL_VIDEOS"): fmt_number(report_value(report, platform, "video_posts")),
+            placeholder(f"{prefix}_TOTAL_SHORTS"): fmt_number(report_value(report, platform, "shorts_posts")),
+            placeholder(f"{prefix}_TOTAL_LONG_FORM"): fmt_number(report_value(report, platform, "long_form_posts")),
+            placeholder(f"{prefix}_TOTAL_LIVE"): fmt_number(report_value(report, platform, "live_posts")),
+            placeholder(f"{prefix}_AUDIENCE_DEMOGRAPHIC"): demographic_summary(report),
+            placeholder(f"{prefix}_PERFORMANCE_INSIGHT"): (
+                f"{label} mencatat {fmt_number(audience_total)} {audience_label.lower()}, "
+                f"{fmt_number(interactions)} total engagements, dan ER {fmt_percent(er)}."
+            ),
+            placeholder(f"{prefix}_FOLLOWERS_GROWTH_TEXT"): (
+                f"{audience_label} berada di {fmt_number(audience_total)} pada periode ini."
+            ),
+            placeholder(f"{prefix}_SUBSCRIBER_GROWTH_TEXT"): (
+                f"Subscribers berada di {fmt_number(audience_total)} pada periode ini."
+            ),
+            placeholder(f"{prefix}_ENGAGEMENT_TREND_TEXT"): (
+                f"Total engagement {label} periode ini mencapai {fmt_number(interactions)}."
+            ),
+            placeholder(f"{prefix}_BENCHMARK_NOTE"): "Benchmark dapat diperbarui setelah data kompetitor lengkap tersedia.",
+            placeholder(f"{prefix}_TOP_CONTENT_SUCCESS_DRIVER"): "Top content dipilih berdasarkan total engagement tertinggi.",
+            placeholder(f"{prefix}_LOW_CONTENT_FAILURE_DRIVER"): "Low content dipilih berdasarkan total engagement terendah.",
+            placeholder(f"{prefix}_COMPETITOR_STRATEGY_INSIGHT"): "Competitor summary diambil dari data Fanpage Karma yang tersedia.",
+        }
+    )
+
+    add_kpi_mapping(mapping, prefix, platform, payload["kpi_results"].get(platform, []), report)
+    add_monthly_trends(mapping, prefix, platform, trends)
+    add_competitors(mapping, prefix, competitors)
+    add_posts(mapping, platform, prefix, "POST_TOP", content.get("top", []))
+    add_posts(mapping, platform, prefix, "POST_LOW", content.get("low", []))
+
+    if platform == "instagram":
+        add_legacy_instagram_aliases(mapping)
+
+
+def add_monthly_trends(mapping: dict, prefix: str, platform: str, trends: list[dict]):
+    padded = trends + [{} for _ in range(3)]
+    for index, row in enumerate(padded[:3], start=1):
+        month_label = "-"
+        if row.get("period_start"):
+            month_label = row["period_start"].strftime("%b")
+        elif row.get("period_label"):
+            month_label = clean_text(row.get("period_label"), 12)
+        values = {
+            "TOTAL_FOLLOWERS": fmt_number(row.get("audience_total")),
+            "TOTAL_SUBSCRIBERS": fmt_number(row.get("audience_total")),
+            "FOLLOWS": fmt_number(row.get("growth")),
+            "SUBSCRIBERS_GAINED": fmt_number(row.get("growth")),
+            "UNFOLLOWS": fmt_number(row.get("audience_lost")),
+            "SUBSCRIBERS_LOST": fmt_number(row.get("audience_lost")),
+            "NET_GROWTH": fmt_number(row.get("growth")),
+            "REACH": fmt_number(row.get("reach_or_views")),
+            "VIEWS": fmt_number(row.get("reach_or_views")),
+            "IMPR": fmt_number(row.get("impressions_or_views")),
+            "ENGAGEMENT": fmt_number(row.get("total_engagement")),
+            "ENG": fmt_number(row.get("total_engagement")),
+            "ER": fmt_percent(row.get("engagement_rate")),
+            "LIKES": fmt_number(row.get("likes")),
+            "COMM": fmt_number(row.get("comments")),
+            "COMMENTS": fmt_number(row.get("comments")),
+            "SHARE": fmt_number(row.get("shares")),
+            "SHARES": fmt_number(row.get("shares")),
+            "POSTS": fmt_number(row.get("total_posts")),
+        }
+        mapping[placeholder(f"M{index}_NAME")] = month_label
+        mapping[placeholder(f"M{index}_POSTS")] = values["POSTS"]
+        for suffix, value in values.items():
+            mapping[placeholder(f"M{index}_{prefix}_{suffix}")] = value
+            mapping[placeholder(f"{prefix}_M{index}_{suffix}")] = value
+
+
+def add_competitors(mapping: dict, prefix: str, competitors: list[dict]):
+    padded = competitors + [{} for _ in range(5)]
+    if competitors:
+        self_row = competitors[0]
+        mapping[placeholder(f"{prefix}_COMP_SELF_GROWTH")] = fmt_percent(self_row.get("follower_growth_rate"))
+    for index, row in enumerate(padded[:5], start=1):
+        base = f"{prefix}_COMP_{index}"
+        mapping[placeholder(f"{base}_NAME")] = clean_text(row.get("profile_name"), 32)
+        mapping[placeholder(f"{base}_FOL")] = fmt_number(row.get("total_followers"))
+        mapping[placeholder(f"{base}_SUB")] = fmt_number(row.get("total_followers"))
+        mapping[placeholder(f"{base}_GROWTH")] = fmt_percent(row.get("follower_growth_rate"))
+        mapping[placeholder(f"{base}_POSTS")] = fmt_number(row.get("total_posts"))
+        mapping[placeholder(f"{base}_ER")] = fmt_percent(row.get("engagement_rate"))
+        mapping[placeholder(f"{base}_INT")] = fmt_number(row.get("total_engagement"))
+        mapping[placeholder(f"{prefix}_POST_COMP_{index}_IMAGE")] = clean_text(row.get("image_url"))
+
+
+def add_posts(mapping: dict, platform: str, prefix: str, base_name: str, posts: list[dict]):
+    padded = posts + [{} for _ in range(3)]
+    prefixed_base = f"{prefix}_{base_name}"
+    for index, post in enumerate(padded[:3], start=1):
+        for current_base in {base_name, prefixed_base}:
+            key = f"{current_base}_{index}"
+            mapping[placeholder(f"{key}_TITLE")] = clean_text(post.get("caption"), 80)
+            mapping[placeholder(f"{key}_IMAGE")] = clean_text(post.get("image_url"))
+            mapping[placeholder(f"{key}_TYPE")] = clean_text(post.get("content_type"), 24)
+            mapping[placeholder(f"{key}_VIEW")] = fmt_number(post.get("views") or post.get("reach"))
+            mapping[placeholder(f"{key}_VIEWS")] = fmt_number(post.get("views") or post.get("reach"))
+            mapping[placeholder(f"{key}_REACH")] = fmt_number(post.get("reach"))
+            mapping[placeholder(f"{key}_LIKES")] = fmt_number(post.get("likes"))
+            mapping[placeholder(f"{key}_COMMENT")] = fmt_number(post.get("comments"))
+            mapping[placeholder(f"{key}_COMMENTS")] = fmt_number(post.get("comments"))
+            mapping[placeholder(f"{key}_SHARE")] = fmt_number(post.get("shares"))
+            mapping[placeholder(f"{key}_SHARES")] = fmt_number(post.get("shares"))
+            mapping[placeholder(f"{key}_SAVE")] = fmt_number(post.get("saves"))
+            mapping[placeholder(f"{key}_SAVES")] = fmt_number(post.get("saves"))
+            mapping[placeholder(f"{key}_REPOST")] = fmt_number(post.get("reposts"))
+            mapping[placeholder(f"{key}_REPOSTS")] = fmt_number(post.get("reposts"))
+            mapping[placeholder(f"{key}_ER")] = fmt_percent(post.get("engagement_rate"))
+            mapping[placeholder(f"{key}_ENGAGEMENT")] = fmt_number(post.get("total_engagement"))
+            for suffix in ("MEN", "WOMEN", "1824", "2534", "3544", "4554", "5564", "COUNTRY"):
+                mapping.setdefault(placeholder(f"{key}_{suffix}"), "-")
+
+    if platform == "instagram" and base_name == "POST_TOP":
+        for index in range(1, 4):
+            for suffix in (
+                "TITLE", "IMAGE", "TYPE", "VIEW", "VIEWS", "REACH", "LIKES",
+                "COMMENT", "COMMENTS", "SHARE", "SHARES", "SAVE", "SAVES",
+                "REPOST", "REPOSTS", "ER", "ENGAGEMENT", "MEN", "WOMEN",
+                "1824", "2534", "3544", "4554", "5564", "COUNTRY",
+            ):
+                mapping[placeholder(f"POST_{index}_{suffix}")] = mapping.get(
+                    placeholder(f"POST_TOP_{index}_{suffix}"),
+                    "-",
+                )
+
+
+def add_legacy_instagram_aliases(mapping: dict):
+    alias_pairs = {
+        "COMP_SELF_GROWTH": "IG_COMP_SELF_GROWTH",
+        "IG_TOTAL_SAVED": "IG_TOTAL_SAVES",
+        "INSIGT_FOLLOWERS_GROWTH_TEXT": "IG_FOLLOWERS_GROWTH_TEXT",
+        "ENGAGEMENT_TREND_TEXT": "IG_ENGAGEMENT_TREND_TEXT",
+        "BENCHMARK_NOTE": "IG_BENCHMARK_NOTE",
+        "TOP_CONTENT_SUCCESS_DRIVER": "IG_TOP_CONTENT_SUCCESS_DRIVER",
+        "LOW_CONTENT_FAILURE_DRIVER": "IG_LOW_CONTENT_FAILURE_DRIVER",
+        "COMPETITOR_STRATEGY_INSIGHT": "IG_COMPETITOR_STRATEGY_INSIGHT",
+    }
+    for target, source in alias_pairs.items():
+        mapping[placeholder(target)] = mapping.get(placeholder(source), "-")
+    for index in range(1, 6):
+        for suffix in ("NAME", "FOL", "GROWTH", "POSTS", "ER", "INT"):
+            mapping[placeholder(f"COMP_{index}_{suffix}")] = mapping.get(
+                placeholder(f"IG_COMP_{index}_{suffix}"),
+                "-",
+            )
+
+
+def empty_defaults() -> dict:
+    mapping = {}
+    common_keys = [
+        "EXECUTIVE_SUMMARY",
+        "NEXT_REPORT_PERIOD",
+        "DEMOGRAPHICS_INSIGHT",
+        "AGE_18_24_PCT",
+        "AGE_25_34_PCT",
+        "AGE_35_44_PCT",
+        "AGE_45_PLUS_PCT",
+        "GENDER_MALE_PCT",
+        "GENDER_FEMALE_PCT",
+        "TOP_CITY_1",
+        "TOP_CITY_1_PCT",
+        "TOP_CITY_2",
+        "TOP_CITY_2_PCT",
+        "TOP_CITY_3",
+        "TOP_CITY_3_PCT",
+        "WEB_PREV_SESSIONS",
+        "WEB_CURR_SESSIONS",
+        "WEB_PREV_ORGANIC",
+        "WEB_CURR_ORGANIC",
+        "WEB_PREV_BOUNCE",
+        "WEB_CURR_BOUNCE",
+        "WEB_PREV_DUR",
+        "WEB_CURR_DUR",
+        "SSL_EXPIRY_DATE",
+        "DOMAIN_REMAINING_DAYS",
+        "WEB_SEO_RECO_TEXT",
+        "ADS_REACH_TARGET",
+        "ADS_REACH_ACTUAL",
+        "ADS_REACH_PCT",
+        "ADS_REACH_SPENT",
+        "ADS_REACH_REM",
+        "ADS_INT_TARGET",
+        "ADS_INT_ACTUAL",
+        "ADS_INT_PCT",
+        "ADS_INT_SPENT",
+        "ADS_INT_REM",
+        "ADS_YT_TARGET",
+        "ADS_YT_ACTUAL",
+        "ADS_YT_PCT",
+        "ADS_YT_SPENT",
+        "ADS_YT_REM",
+        "ADS_TK_TARGET",
+        "ADS_TK_ACTUAL",
+        "ADS_TK_PCT",
+        "ADS_TK_SPENT",
+        "ADS_TK_REM",
+        "ADS_TOTAL_SPENT",
+        "ADS_TOTAL_REM",
+        "ADS_AVG_CPM",
+        "ADS_AVG_CPC",
+        "ADS_AVG_CTR",
+        "SUMMARY_POINT_1",
+        "SUMMARY_POINT_2",
+        "SUMMARY_POINT_3",
+        "SUMMARY_POINT_4",
+        "RECOMMENDATION_1",
+        "RECOMMENDATION_2",
+        "RECOMMENDATION_3",
+    ]
+    insight_suffixes = [
+        "SUMMARY_POINT_1",
+        "SUMMARY_POINT_2",
+        "SUMMARY_POINT_3",
+        "SUMMARY_POINT_4",
+        "RECOMMENDATION_1",
+        "RECOMMENDATION_2",
+        "RECOMMENDATION_3",
+        "REACH_INSIGHT_SUMMARY",
+    ]
+    for key in common_keys:
+        mapping[placeholder(key)] = "-"
+    for prefix in PLATFORM_PREFIXES.values():
+        for suffix in insight_suffixes:
+            mapping[placeholder(f"{prefix}_{suffix}")] = "-"
+    return mapping
+
+
+def build_mapping(payload: dict) -> dict:
+    client = payload["client"]
+    period = payload["period"]
+    report_period = period.get("period_label") or period["period_start"].strftime("%B %Y")
+    mapping = empty_defaults()
+    mapping.update(
+        {
+            "{{CLIENT_NAME}}": client["client_name"],
+            "{{AGENCY_NAME}}": os.getenv("REPORT_AGENCY_NAME", "MAI"),
+            "{{REPORT_PERIOD}}": report_period,
+            "{{EXECUTIVE_SUMMARY}}": (
+                f"Report {report_period} untuk {client['client_name']} dibuat dari data "
+                "social media yang tersedia di dashboard."
+            ),
+            "{{SUMMARY_POINT_1}}": "Social media performance dihitung dari data report yang sudah diimport.",
+            "{{SUMMARY_POINT_2}}": "KPI target dan achievement mengikuti input target di dashboard.",
+            "{{SUMMARY_POINT_3}}": "Top dan low content dipilih berdasarkan total engagement.",
+            "{{SUMMARY_POINT_4}}": "Field yang belum tersedia ditampilkan sebagai '-' sampai data lengkap diimport.",
+            "{{RECOMMENDATION_1}}": "Lengkapi data yang masih kosong sebelum report final dikirim.",
+            "{{RECOMMENDATION_2}}": "Gunakan top content sebagai referensi konten periode berikutnya.",
+            "{{RECOMMENDATION_3}}": "Perbarui KPI target tahunan dan bulanan secara berkala.",
+        }
+    )
+
+    totals = {"reach": 0, "views": 0, "interactions": 0, "posts": 0}
+    er_values = []
+    for platform in PLATFORM_TABLES:
+        add_platform_mapping(mapping, payload, platform)
+        report = payload["reports"].get(platform) or {}
+        totals["reach"] += float(report.get("reach") or 0)
+        totals["views"] += float(report.get("total_views") or report.get("impressions") or 0)
+        totals["interactions"] += float(report.get("total_engagement") or 0)
+        totals["posts"] += float(report.get("total_posts") or 0)
+        if report.get("engagement_rate") is not None:
+            er_values.append(float(report["engagement_rate"]))
+
+    avg_er = sum(er_values) / len(er_values) if er_values else None
+    mapping.update(
+        {
+            "{{TOTAL_REACH}}": fmt_number(totals["reach"]),
+            "{{TOTAL_VIEWS}}": fmt_number(totals["views"]),
+            "{{TOTAL_INTERACTIONS}}": fmt_number(totals["interactions"]),
+            "{{TOTAL_POSTS}}": fmt_number(totals["posts"]),
+            "{{AVG_ENGAGEMENT_RATE}}": fmt_percent(avg_er),
+        }
+    )
+    return mapping
+
+
+def share_presentation_as_editor(drive_service, presentation_id: str) -> dict:
+    permission = (
+        drive_service.permissions()
+        .create(
+            fileId=presentation_id,
+            body={
+                "type": "anyone",
+                "role": "writer",
+                "allowFileDiscovery": False,
+            },
+            fields="id,type,role",
+            sendNotificationEmail=False,
+        )
+        .execute()
+    )
+    return permission
+
+
+def replace_text_placeholders_chunked(
+    slides_service,
+    presentation_id: str,
+    mapping: dict,
+    chunk_size: int | None = None,
+    skip_image_placeholders: bool = False,
+) -> dict:
+    chunk_size = chunk_size or env_int("SLIDES_TEXT_BATCH_SIZE", 100)
+    requests = []
+    sent_keys = []
+    skipped_image_placeholders = []
+    for key, value in mapping.items():
+        if is_image_placeholder_key(key):
+            if skip_image_placeholders:
+                skipped_image_placeholders.append(key)
+                continue
+            value = "-"
+        sent_keys.append(key)
+        requests.append(
+            {
+                "replaceAllText": {
+                    "containsText": {
+                        "text": key,
+                        "matchCase": True,
+                    },
+                    "replaceText": str(value),
+                }
+            }
+        )
+
+    batch_sizes = []
+    for index in range(0, len(requests), chunk_size):
+        batch = requests[index : index + chunk_size]
+        batch_number = (index // chunk_size) + 1
+        batch_sizes.append(len(batch))
+        print(
+            f"[slides_report] batchUpdate batch={batch_number} replaceTextRequests={len(batch)}",
+            flush=True,
+        )
+        slides_service.presentations().batchUpdate(
+            presentationId=presentation_id,
+            body={"requests": batch},
+        ).execute()
+    print(
+        f"[slides_report] batchUpdate totalPlaceholdersSent={len(sent_keys)} totalRequests={len(requests)} totalBatches={len(batch_sizes)}",
+        flush=True,
+    )
+    return {
+        "sent_keys": sent_keys,
+        "sent_key_count": len(sent_keys),
+        "total_requests": len(requests),
+        "batch_count": len(batch_sizes),
+        "batch_sizes": batch_sizes,
+        "skipped_image_placeholders": sorted(skipped_image_placeholders),
+    }
+
+
+def should_replace_images() -> bool:
+    return env_bool("SLIDES_REPLACE_IMAGES", False)
+
+
+def fast_mode_enabled() -> bool:
+    return env_bool("SLIDES_FAST_MODE", False)
+
+
+def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bool = False) -> dict:
+    profiler = StepProfiler()
+    load_dotenv(BASE_DIR / ".env")
+    template_value = default_template()
+    if not template_value:
+        raise ValueError("SLIDES_TEMPLATE_ID is not configured.")
+    template_id = extract_presentation_id(template_value)
+
+    start = time.perf_counter()
+    payload = SlidesReportRepository().report_payload(client_id, period_id)
+    profiler.record("load_db_data", start)
+
+    start = time.perf_counter()
+    mapping = build_mapping(payload)
+    profiler.record("build_mapping", start)
+
+    credentials_path = resolve_project_path(default_credentials())
+    if not credentials_path.exists():
+        raise FileNotFoundError(f"Google credentials file not found: {credentials_path}")
+    token_path = resolve_project_path(os.getenv("GOOGLE_TOKEN_FILE", "token.json"))
+    oauth_port = int(os.getenv("GOOGLE_OAUTH_PORT", "0"))
+
+    slides_service, drive_service = get_google_services(
+        credentials_path,
+        token_path,
+        oauth_port,
+    )
+
+    result = {
+        "template_id": template_id,
+        "client_id": client_id,
+        "period_id": period_id,
+        "placeholder_count": len(mapping),
+    }
+    fast_mode = fast_mode_enabled()
+    template_placeholders = set()
+    if dry_run or not fast_mode:
+        start = time.perf_counter()
+        template_placeholders = fetch_presentation_placeholders(slides_service, template_id)
+        profiler.record("template_scan", start)
+        preflight_audit = audit_mapping(template_placeholders, mapping, payload)
+        result["audit"] = preflight_audit
+        log_audit("preflight", preflight_audit)
+    else:
+        print("[slides] template_scan: skipped (fast mode)", flush=True)
+        result["audit"] = {
+            "template_placeholder_count": None,
+            "mapping_key_count": len(mapping),
+            "matched_count": None,
+            "missing_in_mapping_count": None,
+            "unused_mapping_key_count": None,
+            "remaining_placeholder_count": None,
+            "missing_in_mapping": [],
+            "remaining_placeholders": [],
+            "fallback_values": [],
+        }
+    if dry_run:
+        result["mapping"] = mapping
+        audit = result["audit"]
+        result["debug_summary"] = {
+            "total_template_placeholders": audit["template_placeholder_count"],
+            "total_mapping_keys": audit["mapping_key_count"],
+            "matched_placeholders": audit["matched_count"],
+            "unmatched_template_placeholders": audit["missing_in_mapping_count"],
+            "unused_mapping_keys": audit["unused_mapping_key_count"],
+            "placeholder_masih_tersisa": [
+                item["placeholder"]
+                for item in audit["missing_in_mapping"]
+            ],
+        }
+        profiler.total()
+        result["profile"] = profiler.steps
+        return result
+
+    client_name = payload["client"]["client_name"]
+    period_label = payload["period"].get("period_label") or payload["period"]["period_start"].strftime("%B %Y")
+    report_name = f"SNS Report - {client_name} - {period_label} - {datetime.now():%Y%m%d-%H%M}"
+
+    start = time.perf_counter()
+    presentation_id = copy_template(drive_service, template_id, report_name)
+    profiler.record("copy_template", start)
+
+    start = time.perf_counter()
+    permission = share_presentation_as_editor(drive_service, presentation_id)
+    profiler.record("share_file", start)
+
+    start = time.perf_counter()
+    images_replaced = False
+    replace_images = should_replace_images()
+    if replace_images:
+        image_mapping = image_placeholder_mapping(mapping)
+        if image_mapping:
+            replace_image_placeholders(slides_service, presentation_id, image_mapping)
+            images_replaced = True
+    else:
+        print("[slides] image_handling: image replacement disabled", flush=True)
+    profiler.record("image_handling", start)
+
+    start = time.perf_counter()
+    batch_audit = replace_text_placeholders_chunked(
+        slides_service,
+        presentation_id,
+        mapping,
+        skip_image_placeholders=images_replaced,
+    )
+    profiler.record("replace_text", start)
+
+    post_replace_audit = None
+    if fast_mode:
+        print("[slides] post_replace_scan: skipped (fast mode)", flush=True)
+    else:
+        start = time.perf_counter()
+        remaining_placeholders = fetch_presentation_placeholders(slides_service, presentation_id)
+        profiler.record("post_replace_scan", start)
+        post_replace_audit = audit_mapping(
+            template_placeholders,
+            mapping,
+            payload,
+            sent_keys=set(batch_audit["sent_keys"]),
+            remaining_placeholders=remaining_placeholders,
+        )
+        log_audit("post_replace", post_replace_audit)
+    total_duration = profiler.total()
+
+    result.update(
+        {
+            "presentation_id": presentation_id,
+            "presentation_url": f"https://docs.google.com/presentation/d/{presentation_id}/edit",
+            "report_name": report_name,
+            "permission": permission,
+            "images_replaced": images_replaced,
+            "batch_update": batch_audit,
+            "post_replace_audit": post_replace_audit,
+            "fast_mode": fast_mode,
+            "profile": profiler.steps,
+            "total_duration_seconds": total_duration,
+        }
+    )
+    return result

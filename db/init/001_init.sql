@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS social_content_reports (
     image_url TEXT,
     content_type TEXT,
     content_rank INTEGER,
-    performance_bucket TEXT CHECK (performance_bucket IN ('top', 'low')),
+    performance_bucket TEXT CHECK (performance_bucket IN ('all', 'top', 'low')),
     likes NUMERIC,
     comments NUMERIC,
     shares NUMERIC,
@@ -457,6 +457,22 @@ ALTER TABLE IF EXISTS social_content_reports
 
 ALTER TABLE IF EXISTS social_content_reports
     DROP CONSTRAINT IF EXISTS social_content_reports_client_id_platform_report_period_id__key;
+
+ALTER TABLE IF EXISTS social_content_reports
+    DROP CONSTRAINT IF EXISTS social_content_reports_performance_bucket_check;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'social_content_reports_performance_bucket_check'
+    ) THEN
+        ALTER TABLE social_content_reports
+            ADD CONSTRAINT social_content_reports_performance_bucket_check
+            CHECK (performance_bucket IN ('all', 'top', 'low'));
+    END IF;
+END $$;
 
 DO $$
 BEGIN

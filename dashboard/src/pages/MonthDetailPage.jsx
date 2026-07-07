@@ -27,11 +27,18 @@ function platformStats(platform, report = {}) {
   ];
 }
 
-export default function MonthDetailPage({ client, month, profiles, platformData, onNavigate, onOpenPlatform, onOpenAddReport }) {
+export default function MonthDetailPage({
+  client,
+  month,
+  profiles,
+  platformData,
+  onNavigate,
+  onOpenPlatform,
+  onOpenAddReport,
+  onGenerateReport,
+  isGeneratingReport,
+}) {
   const platforms = platformFlags(client);
-  function handleGenerateReport() {
-    window.alert("Slide report generation is not connected yet.");
-  }
 
   return (
     <section className="view active">
@@ -48,8 +55,13 @@ export default function MonthDetailPage({ client, month, profiles, platformData,
           <h1>{month.label} Report</h1>
           <p>Overview of connected social media performance for this report period.</p>
         </div>
-        <button className="primary-button" type="button" onClick={handleGenerateReport}>
-          Generate report
+        <button
+          className="primary-button"
+          type="button"
+          disabled={isGeneratingReport}
+          onClick={() => onGenerateReport?.(month)}
+        >
+          {isGeneratingReport ? "Generating..." : "Generate report"}
         </button>
       </div>
       <section className="upload-summary">
