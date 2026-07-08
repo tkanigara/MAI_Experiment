@@ -21,7 +21,6 @@ from generate_slides_example import (  # noqa: E402
     extract_presentation_id,
     get_google_services,
     image_placeholder_mapping,
-    replace_image_placeholders,
 )
 
 
@@ -47,6 +46,7 @@ PLATFORM_LABELS = {
 }
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
+TEMPLATE_PLACEHOLDER_CACHE: dict[str, set[str]] = {}
 
 
 class StepProfiler:
@@ -166,12 +166,179 @@ def extract_placeholders_from_presentation(presentation: dict) -> set[str]:
 
 
 def fetch_presentation_placeholders(slides_service, presentation_id: str) -> set[str]:
+    if presentation_id in TEMPLATE_PLACEHOLDER_CACHE:
+        return set(TEMPLATE_PLACEHOLDER_CACHE[presentation_id])
     presentation = (
         slides_service.presentations()
         .get(presentationId=presentation_id)
         .execute()
     )
-    return extract_placeholders_from_presentation(presentation)
+    placeholders = extract_placeholders_from_presentation(presentation)
+    TEMPLATE_PLACEHOLDER_CACHE[presentation_id] = set(placeholders)
+    return placeholders
+
+
+def image_object_ids_by_placeholder(slides_service, presentation_id: str, image_mapping: dict) -> dict[str, list[str]]:
+    presentation = (
+        slides_service.presentations()
+        .get(presentationId=presentation_id)
+        .execute()
+    )
+    matched = {key: [] for key in image_mapping}
+    for slide in presentation.get("slides", []):
+        for element in slide.get("pageElements", []):
+            if "image" not in element:
+                continue
+            object_id = element.get("objectId")
+            alt_text = " ".join(
+                str(element.get(field, "") or "")
+                for field in ("title", "description")
+            )
+            for placeholder_key in image_mapping:
+                if object_id and placeholder_key in alt_text:
+                    matched[placeholder_key].append(object_id)
+    return matched
+
+
+def replace_image_placeholders_safe(
+    slides_service,
+    presentation_id: str,
+    image_mapping: dict,
+    allowed_placeholders: set[str] | None = None,
+) -> dict:
+    filtered_mapping = {
+        key: value
+        for key, value in image_mapping.items()
+        if allowed_placeholders is None or key in allowed_placeholders
+    }
+    if not filtered_mapping:
+        print("[slides_report] image replacement: no template image placeholders with valid URLs", flush=True)
+        return {
+            "attempted": 0,
+            "replaced": [],
+            "failed": [],
+            "unmatched": [],
+            "skipped_non_template": sorted(set(image_mapping) - set(filtered_mapping)),
+        }
+
+    image_object_ids = image_object_ids_by_placeholder(
+        slides_service,
+        presentation_id,
+        filtered_mapping,
+    )
+    replaced = []
+    replaced_object_ids = []
+    failed = []
+
+    for placeholder_key, object_ids in image_object_ids.items():
+        for object_id in object_ids:
+            request = {
+                "replaceImage": {
+                    "imageObjectId": object_id,
+                    "url": filtered_mapping[placeholder_key],
+                    "imageReplaceMethod": "CENTER_INSIDE",
+                }
+            }
+            try:
+                slides_service.presentations().batchUpdate(
+                    presentationId=presentation_id,
+                    body={"requests": [request]},
+                ).execute()
+                replaced.append(placeholder_key)
+                replaced_object_ids.append(object_id)
+            except Exception as exc:
+                failed.append(
+                    {
+                        "placeholder": placeholder_key,
+                        "method": "replaceImage",
+                        "reason": str(exc).splitlines()[0],
+                    }
+                )
+
+    for placeholder_key, image_url in filtered_mapping.items():
+        if image_object_ids.get(placeholder_key):
+            continue
+        request = {
+            "replaceAllShapesWithImage": {
+                "containsText": {
+                    "text": placeholder_key,
+                    "matchCase": True,
+                },
+                "imageUrl": image_url,
+                "replaceMethod": "CENTER_INSIDE",
+            }
+        }
+        try:
+            response = (
+                slides_service.presentations()
+                .batchUpdate(
+                    presentationId=presentation_id,
+                    body={"requests": [request]},
+                )
+                .execute()
+            )
+            occurrences = (
+                response.get("replies", [{}])[0]
+                .get("replaceAllShapesWithImage", {})
+                .get("occurrencesChanged", 0)
+            )
+            if occurrences:
+                replaced.append(placeholder_key)
+        except Exception as exc:
+            failed.append(
+                {
+                    "placeholder": placeholder_key,
+                    "method": "replaceAllShapesWithImage",
+                    "reason": str(exc).splitlines()[0],
+                }
+            )
+
+    replaced_set = set(replaced)
+    matched_object_keys = {
+        key
+        for key, object_ids in image_object_ids.items()
+        if object_ids
+    }
+    unmatched = sorted(set(filtered_mapping) - replaced_set - matched_object_keys)
+    print(
+        "[slides_report] image replacement: "
+        f"attempted={len(filtered_mapping)} replaced={len(replaced_set)} "
+        f"failed={len(failed)} unmatched={len(unmatched)}",
+        flush=True,
+    )
+    for item in failed[:10]:
+        print(
+            f"[slides_report] image failed {item['placeholder']} via {item['method']}: {item['reason']}",
+            flush=True,
+        )
+    if replaced_object_ids and env_bool("SLIDES_CLEAN_IMAGE_ALT_TEXT", False):
+        clear_requests = [
+            {
+                "updatePageElementAltText": {
+                    "objectId": object_id,
+                    "title": "",
+                    "description": "",
+                }
+            }
+            for object_id in replaced_object_ids
+        ]
+        try:
+            slides_service.presentations().batchUpdate(
+                presentationId=presentation_id,
+                body={"requests": clear_requests},
+            ).execute()
+        except Exception as exc:
+            print(
+                f"[slides_report] image alt text cleanup skipped: {str(exc).splitlines()[0]}",
+                flush=True,
+            )
+    return {
+        "attempted": len(filtered_mapping),
+        "replaced": sorted(replaced_set),
+        "failed": failed,
+        "unmatched": unmatched,
+        "skipped_non_template": sorted(set(image_mapping) - set(filtered_mapping)),
+    }
 
 
 def fallback_value(value) -> bool:
@@ -901,15 +1068,30 @@ def replace_text_placeholders_chunked(
     presentation_id: str,
     mapping: dict,
     chunk_size: int | None = None,
-    skip_image_placeholders: bool = False,
+    skip_image_placeholders: bool | set[str] = False,
+    allowed_placeholders: set[str] | None = None,
 ) -> dict:
     chunk_size = chunk_size or env_int("SLIDES_TEXT_BATCH_SIZE", 100)
     requests = []
     sent_keys = []
     skipped_image_placeholders = []
+    skipped_non_template_placeholders = []
+    skipped_image_keys = (
+        skip_image_placeholders
+        if isinstance(skip_image_placeholders, set)
+        else None
+    )
     for key, value in mapping.items():
+        if allowed_placeholders is not None and key not in allowed_placeholders:
+            skipped_non_template_placeholders.append(key)
+            continue
         if is_image_placeholder_key(key):
-            if skip_image_placeholders:
+            should_skip_image = (
+                key in skipped_image_keys
+                if skipped_image_keys is not None
+                else bool(skip_image_placeholders)
+            )
+            if should_skip_image:
                 skipped_image_placeholders.append(key)
                 continue
             value = "-"
@@ -940,7 +1122,7 @@ def replace_text_placeholders_chunked(
             body={"requests": batch},
         ).execute()
     print(
-        f"[slides_report] batchUpdate totalPlaceholdersSent={len(sent_keys)} totalRequests={len(requests)} totalBatches={len(batch_sizes)}",
+        f"[slides_report] batchUpdate totalPlaceholdersSent={len(sent_keys)} totalRequests={len(requests)} totalBatches={len(batch_sizes)} skippedNonTemplate={len(skipped_non_template_placeholders)}",
         flush=True,
     )
     return {
@@ -950,6 +1132,7 @@ def replace_text_placeholders_chunked(
         "batch_count": len(batch_sizes),
         "batch_sizes": batch_sizes,
         "skipped_image_placeholders": sorted(skipped_image_placeholders),
+        "skipped_non_template_placeholders": sorted(skipped_non_template_placeholders),
     }
 
 
@@ -959,6 +1142,10 @@ def should_replace_images() -> bool:
 
 def fast_mode_enabled() -> bool:
     return env_bool("SLIDES_FAST_MODE", False)
+
+
+def filter_to_template_enabled() -> bool:
+    return env_bool("SLIDES_FILTER_TO_TEMPLATE", True)
 
 
 def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bool = False) -> dict:
@@ -996,14 +1183,28 @@ def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bo
         "placeholder_count": len(mapping),
     }
     fast_mode = fast_mode_enabled()
+    filter_to_template = filter_to_template_enabled()
     template_placeholders = set()
-    if dry_run or not fast_mode:
+    if dry_run or not fast_mode or filter_to_template:
         start = time.perf_counter()
         template_placeholders = fetch_presentation_placeholders(slides_service, template_id)
-        profiler.record("template_scan", start)
+        profiler.record(
+            "template_scan" if dry_run or not fast_mode else "template_filter_scan",
+            start,
+        )
         preflight_audit = audit_mapping(template_placeholders, mapping, payload)
         result["audit"] = preflight_audit
-        log_audit("preflight", preflight_audit)
+        if dry_run or not fast_mode:
+            log_audit("preflight", preflight_audit)
+        else:
+            print(
+                "[slides_report] template_filter: "
+                f"template={preflight_audit['template_placeholder_count']} "
+                f"mapping={preflight_audit['mapping_key_count']} "
+                f"matched={preflight_audit['matched_count']} "
+                f"skipped={preflight_audit['unused_mapping_key_count']}",
+                flush=True,
+            )
     else:
         print("[slides] template_scan: skipped (fast mode)", flush=True)
         result["audit"] = {
@@ -1048,13 +1249,23 @@ def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bo
     profiler.record("share_file", start)
 
     start = time.perf_counter()
-    images_replaced = False
+    image_audit = {
+        "attempted": 0,
+        "replaced": [],
+        "failed": [],
+        "unmatched": [],
+        "skipped_non_template": [],
+    }
     replace_images = should_replace_images()
     if replace_images:
         image_mapping = image_placeholder_mapping(mapping)
         if image_mapping:
-            replace_image_placeholders(slides_service, presentation_id, image_mapping)
-            images_replaced = True
+            image_audit = replace_image_placeholders_safe(
+                slides_service,
+                presentation_id,
+                image_mapping,
+                allowed_placeholders=template_placeholders or None,
+            )
     else:
         print("[slides] image_handling: image replacement disabled", flush=True)
     profiler.record("image_handling", start)
@@ -1064,7 +1275,8 @@ def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bo
         slides_service,
         presentation_id,
         mapping,
-        skip_image_placeholders=images_replaced,
+        skip_image_placeholders=set(image_audit.get("replaced", [])),
+        allowed_placeholders=template_placeholders or None,
     )
     profiler.record("replace_text", start)
 
@@ -1091,10 +1303,12 @@ def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bo
             "presentation_url": f"https://docs.google.com/presentation/d/{presentation_id}/edit",
             "report_name": report_name,
             "permission": permission,
-            "images_replaced": images_replaced,
+            "images_replaced": bool(image_audit.get("replaced")),
+            "image_replacement": image_audit,
             "batch_update": batch_audit,
             "post_replace_audit": post_replace_audit,
             "fast_mode": fast_mode,
+            "filter_to_template": filter_to_template,
             "profile": profiler.steps,
             "total_duration_seconds": total_duration,
         }
