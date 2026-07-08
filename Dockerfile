@@ -29,10 +29,11 @@ COPY dashboard/routes ./dashboard/routes
 COPY dashboard/config.py ./dashboard/config.py
 COPY dashboard/db.py ./dashboard/db.py
 COPY dashboard/schemas.py ./dashboard/schemas.py
+COPY dashboard/main.py ./dashboard/main.py
 COPY dashboard/server.py ./dashboard/server.py
 COPY dashboard/slides_report.py ./dashboard/slides_report.py
 COPY --from=frontend /app/dashboard/dist ./dashboard/dist
 
 EXPOSE 8000
 
-CMD ["python", "dashboard/server.py"]
+CMD ["uvicorn", "dashboard.main:app", "--host", "0.0.0.0", "--port", "8000"]

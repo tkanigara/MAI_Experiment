@@ -31,6 +31,8 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
   const [generatingReportId, setGeneratingReportId] = useState("");
+  const [reportJob, setReportJob] = useState(null);
+  const [reportElapsed, setReportElapsed] = useState(0);
   const [error, setError] = useState("");
 
   const industries = useMemo(
@@ -56,6 +58,14 @@ export default function App() {
   function showToast(message) {
     setToast(message);
     window.setTimeout(() => setToast(""), 2400);
+  }
+
+  function formatElapsed(seconds) {
+    const safeSeconds = Math.max(0, Number(seconds) || 0);
+    const minutes = Math.floor(safeSeconds / 60);
+    const remainder = safeSeconds % 60;
+    if (!minutes) return `${remainder}s`;
+    return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
   }
 
   async function loadClients() {
@@ -165,11 +175,18 @@ export default function App() {
 
   async function generateSlidesReport(month) {
     if (!selectedClient || !month?.id) return;
-    const reportWindow = window.open("about:blank", "_blank", "noopener,noreferrer");
-    if (reportWindow) {
-      reportWindow.document.write("<p style=\"font-family: sans-serif; padding: 24px;\">Generating report...</p>");
-      reportWindow.document.close();
-    }
+    if (reportJob?.status === "running") return;
+    const startedAt = Date.now();
+    const reportLabel = `${selectedClient.client_name} - ${month.period_label || month.label || "Report"}`;
+    setReportElapsed(0);
+    setReportJob({
+      status: "running",
+      periodId: month.id,
+      label: reportLabel,
+      startedAt,
+      presentationUrl: "",
+      error: "",
+    });
     setGeneratingReportId(month.id);
     try {
       const result = await api("/api/reports/slides", {
@@ -179,22 +196,24 @@ export default function App() {
           period_id: month.id,
         }),
       });
-      showToast("Slides report generated.");
-      if (result.presentation_url) {
-        if (reportWindow) {
-          reportWindow.location.href = result.presentation_url;
-        } else {
-          window.location.href = result.presentation_url;
-        }
-      } else if (reportWindow) {
-        reportWindow.close();
-      }
+      setReportJob({
+        status: "complete",
+        periodId: month.id,
+        label: reportLabel,
+        startedAt,
+        presentationUrl: result.presentation_url || "",
+        error: "",
+      });
     } catch (err) {
-      if (reportWindow) {
-        reportWindow.close();
-      }
       setError(err.message);
-      showToast("Failed to generate report.");
+      setReportJob({
+        status: "failed",
+        periodId: month.id,
+        label: reportLabel,
+        startedAt,
+        presentationUrl: "",
+        error: err.message || "Failed to generate report.",
+      });
     } finally {
       setGeneratingReportId("");
     }
@@ -219,6 +238,16 @@ export default function App() {
     loadPlatformData(selectedClient).catch((err) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClient?.id, currentMonth?.slug]);
+
+  useEffect(() => {
+    if (reportJob?.status !== "running") return undefined;
+    const updateElapsed = () => {
+      setReportElapsed(Math.floor((Date.now() - reportJob.startedAt) / 1000));
+    };
+    updateElapsed();
+    const intervalId = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [reportJob?.status, reportJob?.startedAt]);
 
   let content = (
     <ClientsPage
@@ -366,6 +395,53 @@ export default function App() {
             });
           }}
         />
+      )}
+      {reportJob && (
+        <div className={`report-toast ${reportJob.status}`}>
+          <div className="report-toast-main">
+            <div>
+              <p className="report-toast-title">
+                {reportJob.status === "running"
+                  ? "Generating report"
+                  : reportJob.status === "complete"
+                    ? "Report generated"
+                    : "Report failed"}
+              </p>
+              <p className="report-toast-detail">{reportJob.label}</p>
+            </div>
+            {reportJob.status === "failed" && (
+              <button
+                type="button"
+                className="report-toast-close"
+                aria-label="Close report notification"
+                onClick={() => setReportJob(null)}
+              >
+                x
+              </button>
+            )}
+          </div>
+          {reportJob.status === "running" && (
+            <p className="report-toast-meta">{formatElapsed(reportElapsed)}</p>
+          )}
+          {reportJob.status === "complete" && (
+            <button
+              type="button"
+              className="report-toast-open"
+              disabled={!reportJob.presentationUrl}
+              onClick={() => {
+                if (reportJob.presentationUrl) {
+                  window.open(reportJob.presentationUrl, "_blank", "noopener,noreferrer");
+                }
+                setReportJob(null);
+              }}
+            >
+              Buka
+            </button>
+          )}
+          {reportJob.status === "failed" && (
+            <p className="report-toast-error">{reportJob.error}</p>
+          )}
+        </div>
       )}
       {toast && <div className="toast active">{toast}</div>}
     </>

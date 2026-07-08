@@ -1,4 +1,7 @@
 requests
+fastapi
+uvicorn[standard]
+python-multipart
 pandas
 python-dotenv
 google-api-python-client

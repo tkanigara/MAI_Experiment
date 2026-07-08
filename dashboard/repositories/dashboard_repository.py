@@ -107,7 +107,7 @@ PLATFORM_DATA_FIELDS = {
 PLATFORM_KPI_METRICS = {
     "instagram": {"followers", "engagement", "reach"},
     "facebook": {"followers", "engagement", "reach"},
-    "tiktok": {"followers", "engagement", "views"},
+    "tiktok": {"followers", "likes", "views"},
     "youtube": {"subscribers", "engagement", "views"},
 }
 CSV_IMPORT_SLOTS = {
@@ -710,6 +710,7 @@ class DashboardRepository:
             ]
         if report_data is not None:
             report_data["competitor_profiles"] = competitor_profiles
+        kpi_results = dashboard_kpi_results(platform, report_data, kpi_results, kpi_targets)
         missing_data = missing_platform_data(platform, report_data, content_missing)
         return {
             "platform": platform,
@@ -1465,6 +1466,7 @@ class DashboardRepository:
                 "engagement": report.get("engagement"),
                 "reach": report.get("reach"),
                 "views": report.get("views"),
+                "likes": report.get("likes"),
             }
             for metric_name in PLATFORM_KPI_METRICS[platform]:
                 actual = metric_values.get(metric_name)
@@ -1581,6 +1583,77 @@ def overview_metrics(platform: str, report: dict | None):
 
 def metric(label: str, value, suffix: str = ""):
     return {"label": label, "value": value, "suffix": suffix}
+
+
+def kpi_actual_value(platform: str, report: dict | None, metric_name: str):
+    if not report:
+        return None
+    if metric_name == "followers":
+        return report.get("total_followers")
+    if metric_name == "subscribers":
+        return report.get("total_subscribers")
+    if metric_name == "engagement":
+        return report.get("total_engagement")
+    if metric_name == "reach":
+        return report.get("reach")
+    if metric_name == "views":
+        return report.get("total_views") or report.get("views")
+    if metric_name == "likes":
+        return report.get("likes")
+    return None
+
+
+def achievement(actual, target):
+    try:
+        actual_number = Decimal(str(actual))
+        target_number = Decimal(str(target))
+    except Exception:
+        return None
+    if target_number == 0:
+        return None
+    return round(float((actual_number / target_number) * 100), 2)
+
+
+def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], targets: list[dict]):
+    configured_metrics = sorted(PLATFORM_KPI_METRICS.get(platform, set()))
+    rows_by_metric = {row.get("metric_name"): dict(row) for row in rows or []}
+    targets_by_metric = {row.get("metric_name"): dict(row) for row in targets or []}
+    result = []
+    for metric_name in configured_metrics:
+        row = rows_by_metric.get(metric_name) or {"metric_name": metric_name}
+        target = targets_by_metric.get(metric_name) or {}
+        actual_month = row.get("actual_month")
+        if actual_month is None:
+            actual_month = kpi_actual_value(platform, report, metric_name)
+        actual_year = row.get("actual_year")
+        if actual_year is None:
+            actual_year = actual_month
+        target_month = row.get("target_month")
+        if target_month is None:
+            target_month = target.get("target_month")
+        target_year = row.get("target_year")
+        if target_year is None:
+            target_year = target.get("target_year")
+        achievement_month = row.get("achievement_month")
+        if achievement_month is None:
+            achievement_month = achievement(actual_month, target_month)
+        achievement_year = row.get("achievement_year")
+        if achievement_year is None:
+            achievement_year = achievement(actual_year, target_year)
+        result.append(
+            {
+                **row,
+                "metric_name": metric_name,
+                "actual_month": actual_month,
+                "actual_year": actual_year,
+                "target_month": target_month,
+                "target_year": target_year,
+                "achievement_month": achievement_month,
+                "achievement_year": achievement_year,
+                "unit": row.get("unit") or target.get("unit"),
+            }
+        )
+    return result
 
 
 def is_missing_value(value):

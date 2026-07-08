@@ -10,7 +10,7 @@ export const PLATFORM_LABELS = {
 export const KPI_METRICS = {
   instagram: ["followers", "engagement", "reach"],
   facebook: ["followers", "engagement", "reach"],
-  tiktok: ["followers", "engagement", "views"],
+  tiktok: ["followers", "views", "likes"],
   youtube: ["subscribers", "engagement", "views"],
 };
 

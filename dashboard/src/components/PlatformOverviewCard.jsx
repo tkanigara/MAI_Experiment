@@ -1,11 +1,12 @@
-import { PLATFORM_LABELS } from "../lib/constants";
+import { KPI_METRICS, PLATFORM_LABELS } from "../lib/constants";
 import { formatNumber } from "../lib/format";
 import { PlatformBadge, StatusBadge } from "./Badges";
 import OpenIconButton from "./OpenIconButton";
 
 export default function PlatformOverviewCard({ platform, data, profile, stats, onOpen }) {
-  const kpiRows = data?.kpi_results || [];
-  const total = kpiRows.length || 3;
+  const configuredMetrics = KPI_METRICS[platform] || [];
+  const kpiRows = (data?.kpi_results || []).filter((row) => configuredMetrics.includes(row.metric_name));
+  const total = configuredMetrics.length || kpiRows.length || 3;
   const met = kpiRows.filter((row) => Number(row.achievement_month) >= 100).length;
   const ready = total > 0 && met === total;
 

@@ -18,9 +18,11 @@ function PencilIcon() {
 }
 
 export default function KpiTable({ platform, rows, onEdit }) {
-  const metrics = rows.length
-    ? rows
-    : (KPI_METRICS[platform] || []).map((metric) => ({ metric_name: metric }));
+  const configuredMetrics = KPI_METRICS[platform] || [];
+  const rowsByMetric = Object.fromEntries((rows || []).map((row) => [row.metric_name, row]));
+  const metrics = configuredMetrics.length
+    ? configuredMetrics.map((metric) => rowsByMetric[metric] || { metric_name: metric })
+    : rows;
 
   return (
     <div className="table-card">
