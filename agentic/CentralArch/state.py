@@ -24,6 +24,7 @@ class instagram_result_analysis(BaseModel):
     socmed_overview_analysis: str | None = None
     followers_growth_analysis: str | None = None
     growth_performance_analysis: str | None = None
+    top_content_performance: str | None = None
 
 class facebook_result_analysis(BaseModel):
     client_code: str | None = None
@@ -32,6 +33,7 @@ class facebook_result_analysis(BaseModel):
     socmed_overview_analysis: str | None = None
     followers_growth_analysis: str | None = None
     growth_performance_analysis: str | None = None
+    top_content_performance: str | None = None
 
 class tiktok_result_analysis(BaseModel):
     client_code: str | None = None
@@ -40,6 +42,7 @@ class tiktok_result_analysis(BaseModel):
     socmed_overview_analysis: str | None = None
     followers_growth_analysis: str | None = None
     growth_performance_analysis: str | None = None
+    top_content_performance: str | None = None
 
 class youtube_result_analysis(BaseModel):
     client_code: str | None = None
@@ -48,7 +51,28 @@ class youtube_result_analysis(BaseModel):
     socmed_overview_analysis: str | None = None
     followers_growth_analysis: str | None = None
     growth_performance_analysis: str | None = None
+    top_content_performance: str | None = None
 
+class SummaryInstagram(BaseModel):
+    client_code: str | None = None
+    key_summary: str | None = None
+    action_plan: str | None = None
+
+class SummaryFacebook(BaseModel):
+    client_code: str | None = None
+    key_summary: str | None = None
+    action_plan: str | None = None
+
+class SummaryTiktok(BaseModel):
+    client_code: str | None = None
+    key_summary: str | None = None
+    action_plan: str | None = None
+
+class SummaryYoutube(BaseModel):
+    client_code: str | None = None
+    key_summary: str | None = None
+    action_plan: str | None = None
+    
 class Summary(BaseModel):
     client_code: str | None = None
     summary_result : str | None = None
@@ -71,6 +95,10 @@ class State(BaseModel):
 
     #Summary  result
     summary_result : Summary = Field(default_factory=Summary)
+    summary_instagram: SummaryInstagram = Field(default_factory=SummaryInstagram)
+    summary_facebook: SummaryFacebook = Field(default_factory=SummaryFacebook)
+    summary_tiktok: SummaryTiktok = Field(default_factory=SummaryTiktok)
+    sumamry_youtube: SummaryYoutube = Field(default_factory=SummaryYoutube)
 
 
 

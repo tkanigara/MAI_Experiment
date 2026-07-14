@@ -2,7 +2,7 @@ from CentralArch.state import State, youtube_result_analysis
 from models.gemini import llm
 from langchain_core.messages import HumanMessage, SystemMessage
 from prompts.yt_analyst_prompt import KPI_PROMPT, SOCMED_OVERVIEW, FOLLOWERS_GROWTH, ENGAGEMENT_PERFORMANCE, YOUTUBE_ANALYST
-from tools.retrieval_yt_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance
+from tools.retrieval_yt_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance, retrieve_top_performing_content
 from utils.logger import node
 from typing import Any
 import json
@@ -107,11 +107,18 @@ def yt_analysis_agent_2nd(state: State) -> State:
             "report_date": state.request.report_date.isoformat()
         })
 
+        top_content = retrieve_top_performing_content.invoke({
+            "client_code": state.Metadata.client_code,
+            "report_date": state.request.report_date,
+            "platform": "instagram"
+        })
+
         data ={
             "kpi": kpi_data,
             "Social Media Overview": socmed,
             "Followers Growth": foll_growth,
-            "Engagement Performance": eng_performance
+            "Engagement Performance": eng_performance,
+            "Top Content": top_content,
         }
 
         SYSTEM_PROMPT = YOUTUBE_ANALYST
@@ -156,6 +163,7 @@ def yt_analysis_agent_2nd(state: State) -> State:
             socmed_overview_analysis=result["socmed_overview_analysis"],
             followers_growth_analysis=result["followers_growth_analysis"],
             growth_performance_analysis=result["growth_performance_analysis"],
+             top_content_performance=result["top_content_performance"]
         )
 
     return {

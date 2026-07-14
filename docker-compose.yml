@@ -3,17 +3,21 @@ services:
     image: postgres:16-alpine
     container_name: mai_postgres
     restart: unless-stopped
+
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-mai_socmed_report}
-      POSTGRES_USER: ${POSTGRES_USER:-mai_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mai_password}
+      POSTGRES_DB: mai_socmed_report
+      POSTGRES_USER: mai_user
+      POSTGRES_PASSWORD: mai_password
+
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "15432:5432"
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mai_user} -d ${POSTGRES_DB:-mai_socmed_report}"]
+      test: ["CMD-SHELL", "pg_isready -U mai_user -d mai_socmed_report"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,8 +26,10 @@ services:
     image: adminer:latest
     container_name: mai_adminer
     restart: unless-stopped
+
     ports:
-      - "${ADMINER_PORT:-8080}:8080"
+      - "8080:8080"
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,31 +38,23 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+
     container_name: mai_dashboard
     restart: unless-stopped
+
     environment:
       DASHBOARD_HOST: 0.0.0.0
       DASHBOARD_PORT: 8000
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mai_user}:${POSTGRES_PASSWORD:-mai_password}@postgres:5432/${POSTGRES_DB:-mai_socmed_report}
-      SLIDES_TEMPLATE_ID: ${SLIDES_TEMPLATE_ID:-}
-      GOOGLE_SLIDES_TEMPLATE_ID: ${GOOGLE_SLIDES_TEMPLATE_ID:-}
-      GOOGLE_SLIDES_AUTH: ${GOOGLE_SLIDES_AUTH:-}
-      GOOGLE_CREDENTIALS_FILE: ${GOOGLE_CREDENTIALS_FILE:-credentials.json}
-      GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE: ${GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE:-}
-      GOOGLE_TOKEN_FILE: ${GOOGLE_TOKEN_FILE:-token.json}
-      GOOGLE_OAUTH_PORT: ${GOOGLE_OAUTH_PORT:-0}
-      GOOGLE_SLIDES_OUTPUT_FOLDER_ID: ${GOOGLE_SLIDES_OUTPUT_FOLDER_ID:-}
-      REPORT_AGENCY_NAME: ${REPORT_AGENCY_NAME:-MAI}
-      SLIDES_FAST_MODE: ${SLIDES_FAST_MODE:-true}
-      SLIDES_FILTER_TO_TEMPLATE: ${SLIDES_FILTER_TO_TEMPLATE:-true}
-      SLIDES_REPLACE_IMAGES: ${SLIDES_REPLACE_IMAGES:-false}
-      SLIDES_CLEAN_IMAGE_ALT_TEXT: ${SLIDES_CLEAN_IMAGE_ALT_TEXT:-false}
-      SLIDES_TEXT_BATCH_SIZE: ${SLIDES_TEXT_BATCH_SIZE:-100}
+
+      DATABASE_URL: postgresql+psycopg://mai_user:mai_password@postgres:5432/mai_socmed_report
+
     ports:
-      - "${DASHBOARD_PORT:-8000}:8000"
+      - "8000:8000"
+
     volumes:
       - ./credentials.json:/app/credentials.json:ro
       - ./token.json:/app/token.json
+
     depends_on:
       postgres:
         condition: service_healthy

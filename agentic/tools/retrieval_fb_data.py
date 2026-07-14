@@ -333,3 +333,187 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
 
     finally:
         conn.close()
+
+@tool
+def retrieve_top_performing_content(client_code: str, report_date: str, platform: str):
+    """
+    Retrieve Top Performing Content based on
+    client_code, report_date, and platform.
+    """
+    conn = get_connection()
+    try:
+        report_date = datetime.strptime(report_date, "%Y-%m-%d").date()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    cp.client_id,
+                    cp.report_period_id,
+                    cp.platform,
+                    cp.post_id,
+                    cp.published_at,
+                    cp.caption,
+                    cp.permalink,
+                    cp.image_url,
+                    cp.content_type,
+                    cp.content_rank,
+                    cp.performance_bucket,
+                    cp.likes,
+                    cp.comments,
+                    cp.shares,
+                    cp.saves,
+                    cp.reposts,
+                    cp.reactions,
+                    cp.views,
+                    cp.reach,
+                    cp.total_engagement,
+                    cp.engagement_rate
+                FROM social_content_reports cp
+                INNER JOIN report_periods rp
+                    ON cp.report_period_id = rp.id
+                INNER JOIN clients c
+                    ON rp.client_id = c.id
+                WHERE
+                    c.client_code = %s
+                    AND cp.platform = %s
+                    AND rp.period_start <= %s
+                    AND rp.period_end >= %s
+                    AND cp.content_rank <= 5
+                ORDER BY cp.content_rank;
+                """,
+                (client_code, platform, report_date, report_date,)
+            )
+
+            rows = cursor.fetchall()
+            if not rows:
+                return {
+                    "success": False,
+                    "message": "Top Performing Content not found"
+                }
+
+            return {
+                "success": True,
+                "Top Performing Content": [
+                    {
+                        "client_id": str(row[0]),
+                        "report_period_id": str(row[1]),
+                        "platform": row[2],
+                        "post_id": row[3],
+                        "published_at": row[4].isoformat() if row[4] else None,
+                        "caption": row[5],
+                        "permalink": row[6],
+                        "image_url": row[7],
+                        "content_type": row[8],
+                        "content_rank": to_number(row[9]),
+                        "performance_bucket": row[10],
+                        "likes": to_number(row[11]),
+                        "comments": to_number(row[12]),
+                        "shares": to_number(row[13]),
+                        "saves": to_number(row[14]),
+                        "reposts": to_number(row[15]),
+                        "reactions": to_number(row[16]),
+                        "views": to_number(row[17]),
+                        "reach": to_number(row[18]),
+                        "total_engagement": to_number(row[19]),
+                        "engagement_rate": to_number(row[20]),
+                    }
+                    for row in rows
+                ]
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+    finally:
+        conn.close()
+
+@tool
+def retrieve_all_content(client_code: str, report_date: str, platform: str) -> dict:
+    """
+    Retrieve all content based on client_code, report_date, and platform.
+    """
+    conn = get_connection()
+    try:
+        report_date = datetime.strptime(report_date, "%Y-%m-%d").date()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    cp.client_id,
+                    cp.report_period_id,
+                    cp.platform,
+                    cp.post_id,
+                    cp.published_at,
+                    cp.caption,
+                    cp.permalink,
+                    cp.image_url,
+                    cp.content_type,
+                    cp.content_rank,
+                    cp.performance_bucket,
+                    cp.likes,
+                    cp.comments,
+                    cp.shares,
+                    cp.views,
+                    cp.reach,
+                    cp.total_engagement,
+                    cp.engagement_rate
+                FROM social_content_reports cp
+                JOIN report_periods rp
+                    ON cp.report_period_id = rp.id
+                JOIN clients c
+                    ON rp.client_id = c.id
+                WHERE
+                    c.client_code = %s
+                    AND cp.platform = %s
+                    AND rp.period_start <= %s
+                    AND rp.period_end >= %s
+                ORDER BY cp.published_at DESC;
+                """,
+                (client_code, platform, report_date, report_date),
+            )
+
+            rows = cursor.fetchall()
+            if not rows:
+                return {
+                    "success": False,
+                    "message": "Content not found"
+                }
+
+            return {
+                "success": True,
+                "All Content": [
+                    {
+                        "client_id": str(row[0]),
+                        "report_period_id": str(row[1]),
+                        "platform": row[2],
+                        "post_id": row[3],
+                        "published_at": row[4].isoformat() if row[4] else None,
+                        "caption": row[5],
+                        "permalink": row[6],
+                        "image_url": row[7],
+                        "content_type": row[8],
+                        "content_rank": to_number(row[9]),
+                        "performance_bucket": row[10],
+                        "likes": to_number(row[11]),
+                        "comments": to_number(row[12]),
+                        "shares": to_number(row[13]),
+                        "views": to_number(row[14]),
+                        "reach": to_number(row[15]),
+                        "total_engagement": to_number(row[16]),
+                        "engagement_rate": to_number(row[17]),
+                    }
+                    for row in rows
+                ]
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+    finally:
+        conn.close()

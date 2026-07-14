@@ -3,7 +3,7 @@ from models.gemini import llm
 from utils.llm_output import get_llm_text
 from langchain_core.messages import HumanMessage, SystemMessage
 from prompts.fb_analyst_prompt import KPI_PROMPT, SOCMED_OVERVIEW, FOLLOWERS_GROWTH, ENGAGEMENT_PERFORMANCE, FACEBOOK_ANALYST
-from tools.retrieval_fb_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance
+from tools.retrieval_fb_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance, retrieve_top_performing_content
 from utils.logger import node
 from typing import Any
 import json
@@ -107,11 +107,19 @@ def fb_analysis_agent_2nd(state: State) -> State:
             "report_date": state.request.report_date.isoformat()
         })
 
+        
+        top_content = retrieve_top_performing_content.invoke({
+            "client_code": state.Metadata.client_code,
+            "report_date": state.request.report_date,
+            "platform": "instagram"
+        })
+
         data ={
             "kpi": kpi_data,
             "Social Media Overview": socmed,
             "Followers Growth": foll_growth,
-            "Engagement Performance": eng_performance
+            "Engagement Performance": eng_performance,
+             "Top Content": top_content,
         }
 
         SYSTEM_PROMPT = FACEBOOK_ANALYST
@@ -135,12 +143,9 @@ def fb_analysis_agent_2nd(state: State) -> State:
             text = content
             text = text.strip()
 
-        # Hapus markdown jika ada
         text = re.sub(r"^```json\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"^```\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-
-        # Hapus trailing comma
         text = re.sub(r",(\s*[}\]])", r"\1", text)
 
         try:
@@ -156,6 +161,7 @@ def fb_analysis_agent_2nd(state: State) -> State:
             socmed_overview_analysis=result["socmed_overview_analysis"],
             followers_growth_analysis=result["followers_growth_analysis"],
             growth_performance_analysis=result["growth_performance_analysis"],
+            top_content_performance=result["top_content_performance"]
         )
 
     return {

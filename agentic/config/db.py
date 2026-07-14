@@ -6,5 +6,5 @@ def get_connection():
         user="mai_user",
         password="mai_password",
         host="localhost",
-        port=56000
+        port=15432
     )
