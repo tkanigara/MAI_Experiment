@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
-API = os.getenv("HF_API_TIMUR")
+API = os.getenv("HF_API")
 
 #Model Configuration
 llm = HuggingFaceEndpoint(

@@ -1,56 +1,66 @@
 from langchain_core.tools import tool
 from config.db import get_connection
+from datetime import datetime
 
 @tool
-def retrieval_metadata(client_code: str, report_date: str):
+def retrieval_metadata(client_code: str) -> dict:
     """
-    Retrieve client metadata for the specified report date.
-    This includes information such as client profile, industry,
-    reporting period, and other metadata required for report generation.
+    Retrieve client metadata based on client_code and report date.
     """
-    pass
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT
+                    id,
+                    client_code,
+                    client_name,
+                    has_instagram,
+                    has_facebook,
+                    has_tiktok,
+                    has_youtube
+                FROM clients
+                WHERE client_code = %s
+                LIMIT 1;
+            """
 
+            cursor.execute(sql, (client_code,))
+            row = cursor.fetchone()
 
-@tool
-def retrieval_kpi(client_code: str, report_date: str):
-    """
-    Retrieve key performance indicators (KPIs) for the specified client
-    and report date.
-    """
-    pass
+            if row is None:
+                return {
+                    "client_id": None,
+                    "client_code": None,
+                    "client_name": None,
+                    "instagram": False,
+                    "facebook": False,
+                    "tiktok": False,
+                    "youtube": False,
+                    "loaded": False,
+                }
 
+            return {
+                "client_id": row[0],
+                "client_code": row[1],
+                "client_name": row[2],
+                "instagram": bool(row[3]),
+                "facebook": bool(row[4]),
+                "tiktok": bool(row[5]),
+                "youtube": bool(row[6]),
+                "loaded": True,
+            }
 
-@tool
-def retrieval_sosmed_overview(client_code: str, report_date: str):
-    """
-    Retrieve an overview of the client's social media performance,
-    including overall metrics and summary statistics for the specified
-    report date.
-    """
-    pass
-
-
-@tool
-def retrieval_followers_growth(client_code: str, report_date: str):
-    """
-    Retrieve follower growth metrics for the specified client and
-    report date.
-    """
-    pass
-
-
-@tool
-def retrieval_engagement_performance(client_code: str, report_date: str):
-    """
-    Retrieve engagement performance metrics such as likes, comments,
-    shares, impressions, and engagement rate for the specified client
-    and report date.
-    """
-    pass
-TOOLS = [
-    retrieval_metadata,
-    retrieval_kpi,
-    retrieval_sosmed_overview,
-    retrieval_followers_growth,
-    retrieval_engagement_performance
-]
+    except ValueError:
+        return {
+            "client_id": None,
+            "client_code": None,
+            "client_name": None,
+            "instagram": False,
+            "facebook": False,
+            "tiktok": False,
+            "youtube": False,
+            "loaded": False,
+            "error": "Invalid report_date format. Expected YYYY-MM-DD."
+        }
+    finally:
+        conn.close()
