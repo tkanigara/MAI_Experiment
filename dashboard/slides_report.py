@@ -820,6 +820,7 @@ class SlidesReportRepository:
         follower_field = "total_subscribers" if platform == "youtube" else "total_followers"
         growth_field = "subscriber_growth" if platform == "youtube" else "follower_growth"
         growth_rate_field = "subscriber_growth_rate" if platform == "youtube" else "follower_growth_rate"
+        gained_field = "subscriber_growth" if platform == "youtube" else "follows"
         lost_field = "subscribers_lost" if platform == "youtube" else "unfollows"
         reach_field = "COALESCE(r.reach, r.total_views)" if platform in {"tiktok", "youtube"} else "COALESCE(r.reach, r.impressions)"
         impressions_field = "r.total_views" if platform in {"tiktok", "youtube"} else "r.impressions"
@@ -832,6 +833,7 @@ class SlidesReportRepository:
                     r.{follower_field} AS audience_total,
                     r.{growth_field} AS growth,
                     r.{growth_rate_field} AS growth_rate,
+                    r.{gained_field} AS audience_gained,
                     r.{lost_field} AS audience_lost,
                     r.total_engagement,
                     r.engagement_rate,
@@ -1043,8 +1045,8 @@ def add_monthly_trends(mapping: dict, prefix: str, platform: str, trends: list[d
         values = {
             "TOTAL_FOLLOWERS": fmt_number(row.get("audience_total")),
             "TOTAL_SUBSCRIBERS": fmt_number(row.get("audience_total")),
-            "FOLLOWS": fmt_number(row.get("growth")),
-            "SUBSCRIBERS_GAINED": fmt_number(row.get("growth")),
+            "FOLLOWS": fmt_number(row.get("audience_gained")),
+            "SUBSCRIBERS_GAINED": fmt_number(row.get("audience_gained")),
             "UNFOLLOWS": fmt_number(row.get("audience_lost")),
             "SUBSCRIBERS_LOST": fmt_number(row.get("audience_lost")),
             "NET_GROWTH": fmt_number(row.get("growth")),
@@ -1580,7 +1582,7 @@ def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bo
             "batch_update": batch_audit,
             "post_replace_audit": post_replace_audit,
             "fast_mode": fast_mode,
-            "filter_to_template": filter_to_template,
+            "filter_to_template": bool(replacement_placeholders),
             "profile": profiler.steps,
             "total_duration_seconds": total_duration,
         }

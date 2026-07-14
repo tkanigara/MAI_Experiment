@@ -4,6 +4,7 @@ import calendar
 import csv
 import io
 import json
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -180,6 +181,12 @@ SOCIAL_NETWORK_PLATFORMS = {
     "TIKTOK": "tiktok",
     "YOUTUBE": "youtube",
 }
+PLATFORM_CONTENT_SLOTS = {
+    "instagram": ("ig_post", "ig_story"),
+    "facebook": ("fb_post",),
+    "tiktok": ("tt_post",),
+    "youtube": ("yt_post",),
+}
 
 
 def parse_bool(value) -> bool:
@@ -227,9 +234,48 @@ def parse_number(value):
         return None
 
 
+def normalized_key(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def row_value(row: dict, *keys: str):
+    if not row:
+        return None
+    by_normalized = {normalized_key(key): value for key, value in row.items()}
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+        value = by_normalized.get(normalized_key(key))
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def number_from(row: dict, *keys: str):
+    return parse_number(row_value(row, *keys))
+
+
+def percent_from(row: dict, *keys: str):
+    value = row_value(row, *keys)
+    number = parse_number(value)
+    if number is None:
+        return None
+    if "%" in str(value):
+        return round(number, 2)
+    return round(number * 100, 2) if abs(number) <= 1 else round(number, 2)
+
+
 def numeric(row: dict, key: str, default=0):
     value = parse_number(row.get(key))
     return default if value is None else value
+
+
+def sum_optional(*values):
+    parsed = [value for value in values if value is not None]
+    if not parsed:
+        return None
+    return sum(parsed)
 
 
 def engagement_percent(value):
@@ -1126,23 +1172,73 @@ class DashboardRepository:
                 continue
             summary = post_summaries.get(platform, {"totals": {}, "top_posts": [], "low_posts": []})
             totals = summary.get("totals", {})
-            total_engagement = totals.get("engagement") or numeric(account or {}, "Number of Likes") + numeric(account or {}, "Number of comments")
+            content_uploaded = any(slot in parsed_files for slot in PLATFORM_CONTENT_SLOTS.get(platform, ()))
+            content_has_rows = bool(summary.get("raw_posts"))
+            account_likes = number_from(account or {}, "Number of Likes")
+            account_comments = number_from(account or {}, "Number of comments")
+            total_engagement = totals.get("engagement") if content_uploaded else None
+            if total_engagement is None:
+                total_engagement = sum_optional(account_likes, account_comments)
             base = {
                 "client_id": client_id,
                 "profile_id": profile_ids.get(platform),
                 "period_id": period_id,
                 "followers": parse_number((account or {}).get("Follower")),
-                "posts": parse_number((account or {}).get("Number of posts")) or totals.get("count"),
+                "follower_growth": number_from(
+                    account or {},
+                    "Followers growth absolute",
+                    "Follower growth absolute",
+                    "Followers Growth Absolute",
+                    "Follower Growth Absolute",
+                    "Followers growth",
+                    "Follower growth",
+                    "Net growth",
+                    "Net Growth",
+                ),
+                "follower_growth_rate": percent_from(
+                    account or {},
+                    "Followers growth in %",
+                    "Follower growth in %",
+                    "Followers Growth in %",
+                    "Follower Growth in %",
+                    "Followers growth %",
+                    "Follower growth %",
+                    "Growth Rate",
+                    "Growth rate",
+                ),
+                "follows": number_from(
+                    account or {},
+                    "New Followers",
+                    "New Follower",
+                    "New Followwer",
+                    "New followers",
+                    "Follows",
+                    "Followers gained",
+                    "New Subscribers",
+                    "New Subscriber",
+                ),
+                "unfollows": number_from(
+                    account or {},
+                    "Unfollows",
+                    "Unfollow",
+                    "Lost Followers",
+                    "Lost followers",
+                    "Followers lost",
+                    "Subscribers lost",
+                    "Lost Subscribers",
+                ),
+                "posts": parse_number((account or {}).get("Number of posts")) or (totals.get("count") if content_uploaded else None),
                 "engagement_rate": engagement_percent((account or {}).get("Engagement")),
-                "likes": numeric(account or {}, "Number of Likes") or totals.get("likes"),
-                "comments": numeric(account or {}, "Number of comments") or totals.get("comments"),
-                "shares": totals.get("shares"),
-                "reach": totals.get("reach"),
-                "views": totals.get("views"),
+                "likes": account_likes if account_likes is not None else (totals.get("likes") if content_uploaded else None),
+                "comments": account_comments if account_comments is not None else (totals.get("comments") if content_uploaded else None),
+                "shares": totals.get("shares") if content_uploaded else None,
+                "reach": totals.get("reach") if content_uploaded else None,
+                "views": totals.get("views") if content_uploaded else None,
                 "engagement": total_engagement,
-                "story_posts": summary.get("story_count", 0),
-                "top_posts": json.dumps(summary.get("top_posts") or []),
-                "low_posts": json.dumps(summary.get("low_posts") or []),
+                "story_posts": summary.get("story_count") if "ig_story" in parsed_files else None,
+                "content_has_rows": content_has_rows,
+                "top_posts": json.dumps(summary.get("top_posts") or []) if content_has_rows else None,
+                "low_posts": json.dumps(summary.get("low_posts") or []) if content_has_rows else None,
                 "raw_sections": json.dumps(
                     {
                         "account": account,
@@ -1157,7 +1253,8 @@ class DashboardRepository:
                 report_id = self.upsert_tiktok_report(conn, table, base)
             else:
                 report_id = self.upsert_meta_report(conn, table, base)
-            self.upsert_social_content_reports(conn, client_id, period_id, platform, profile_ids.get(platform), summary)
+            if content_has_rows:
+                self.upsert_social_content_reports(conn, client_id, period_id, platform, profile_ids.get(platform), summary)
             reports[platform] = {"report_id": report_id, **base}
         return reports
 
@@ -1246,31 +1343,37 @@ class DashboardRepository:
                 f"""
                 INSERT INTO {table} (
                     client_id, profile_id, report_period_id, source,
-                    total_followers, reach, impressions, total_engagement,
+                    total_followers, follower_growth, follower_growth_rate,
+                    follows, unfollows, reach, impressions, total_engagement,
                     engagement_rate, likes, comments, shares, total_posts,
                     story_posts, top_posts, low_posts, raw_sections
                 )
                 VALUES (
                     :client_id, :profile_id, :period_id, 'fanpage_karma_csv',
-                    :followers, :reach, :views, :engagement,
+                    :followers, :follower_growth, :follower_growth_rate,
+                    :follows, :unfollows, :reach, :views, :engagement,
                     :engagement_rate, :likes, :comments, :shares, :posts,
-                    :story_posts, CAST(:top_posts AS JSONB), CAST(:low_posts AS JSONB),
+                    :story_posts, CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
                     CAST(:raw_sections AS JSONB)
                 )
                 ON CONFLICT (client_id, profile_id, report_period_id)
                 DO UPDATE SET
-                    total_followers = EXCLUDED.total_followers,
-                    reach = EXCLUDED.reach,
-                    impressions = EXCLUDED.impressions,
-                    total_engagement = EXCLUDED.total_engagement,
-                    engagement_rate = EXCLUDED.engagement_rate,
-                    likes = EXCLUDED.likes,
-                    comments = EXCLUDED.comments,
-                    shares = EXCLUDED.shares,
-                    total_posts = EXCLUDED.total_posts,
-                    story_posts = EXCLUDED.story_posts,
-                    top_posts = EXCLUDED.top_posts,
-                    low_posts = EXCLUDED.low_posts,
+                    total_followers = COALESCE(EXCLUDED.total_followers, {table}.total_followers),
+                    follower_growth = COALESCE(EXCLUDED.follower_growth, {table}.follower_growth),
+                    follower_growth_rate = COALESCE(EXCLUDED.follower_growth_rate, {table}.follower_growth_rate),
+                    follows = COALESCE(EXCLUDED.follows, {table}.follows),
+                    unfollows = COALESCE(EXCLUDED.unfollows, {table}.unfollows),
+                    reach = COALESCE(EXCLUDED.reach, {table}.reach),
+                    impressions = COALESCE(EXCLUDED.impressions, {table}.impressions),
+                    total_engagement = COALESCE(EXCLUDED.total_engagement, {table}.total_engagement),
+                    engagement_rate = COALESCE(EXCLUDED.engagement_rate, {table}.engagement_rate),
+                    likes = COALESCE(EXCLUDED.likes, {table}.likes),
+                    comments = COALESCE(EXCLUDED.comments, {table}.comments),
+                    shares = COALESCE(EXCLUDED.shares, {table}.shares),
+                    total_posts = COALESCE(EXCLUDED.total_posts, {table}.total_posts),
+                    story_posts = COALESCE(EXCLUDED.story_posts, {table}.story_posts),
+                    top_posts = CASE WHEN :content_has_rows THEN EXCLUDED.top_posts ELSE {table}.top_posts END,
+                    low_posts = CASE WHEN :content_has_rows THEN EXCLUDED.low_posts ELSE {table}.low_posts END,
                     raw_sections = EXCLUDED.raw_sections,
                     updated_at = now()
                 RETURNING id
@@ -1286,31 +1389,37 @@ class DashboardRepository:
                 f"""
                 INSERT INTO {table} (
                     client_id, profile_id, report_period_id, source,
-                    total_followers, total_views, reach, total_engagement,
+                    total_followers, follower_growth, follower_growth_rate,
+                    follows, unfollows, total_views, reach, total_engagement,
                     engagement_rate, likes, comments, shares, total_posts,
                     video_posts, top_posts, low_posts, raw_sections
                 )
                 VALUES (
                     :client_id, :profile_id, :period_id, 'fanpage_karma_csv',
-                    :followers, :views, :reach, :engagement,
+                    :followers, :follower_growth, :follower_growth_rate,
+                    :follows, :unfollows, :views, :reach, :engagement,
                     :engagement_rate, :likes, :comments, :shares, :posts,
-                    :posts, CAST(:top_posts AS JSONB), CAST(:low_posts AS JSONB),
+                    :posts, CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
                     CAST(:raw_sections AS JSONB)
                 )
                 ON CONFLICT (client_id, profile_id, report_period_id)
                 DO UPDATE SET
-                    total_followers = EXCLUDED.total_followers,
-                    total_views = EXCLUDED.total_views,
-                    reach = EXCLUDED.reach,
-                    total_engagement = EXCLUDED.total_engagement,
-                    engagement_rate = EXCLUDED.engagement_rate,
-                    likes = EXCLUDED.likes,
-                    comments = EXCLUDED.comments,
-                    shares = EXCLUDED.shares,
-                    total_posts = EXCLUDED.total_posts,
-                    video_posts = EXCLUDED.video_posts,
-                    top_posts = EXCLUDED.top_posts,
-                    low_posts = EXCLUDED.low_posts,
+                    total_followers = COALESCE(EXCLUDED.total_followers, {table}.total_followers),
+                    follower_growth = COALESCE(EXCLUDED.follower_growth, {table}.follower_growth),
+                    follower_growth_rate = COALESCE(EXCLUDED.follower_growth_rate, {table}.follower_growth_rate),
+                    follows = COALESCE(EXCLUDED.follows, {table}.follows),
+                    unfollows = COALESCE(EXCLUDED.unfollows, {table}.unfollows),
+                    total_views = COALESCE(EXCLUDED.total_views, {table}.total_views),
+                    reach = COALESCE(EXCLUDED.reach, {table}.reach),
+                    total_engagement = COALESCE(EXCLUDED.total_engagement, {table}.total_engagement),
+                    engagement_rate = COALESCE(EXCLUDED.engagement_rate, {table}.engagement_rate),
+                    likes = COALESCE(EXCLUDED.likes, {table}.likes),
+                    comments = COALESCE(EXCLUDED.comments, {table}.comments),
+                    shares = COALESCE(EXCLUDED.shares, {table}.shares),
+                    total_posts = COALESCE(EXCLUDED.total_posts, {table}.total_posts),
+                    video_posts = COALESCE(EXCLUDED.video_posts, {table}.video_posts),
+                    top_posts = CASE WHEN :content_has_rows THEN EXCLUDED.top_posts ELSE {table}.top_posts END,
+                    low_posts = CASE WHEN :content_has_rows THEN EXCLUDED.low_posts ELSE {table}.low_posts END,
                     raw_sections = EXCLUDED.raw_sections,
                     updated_at = now()
                 RETURNING id
@@ -1326,30 +1435,35 @@ class DashboardRepository:
                 f"""
                 INSERT INTO {table} (
                     client_id, profile_id, report_period_id, source,
-                    total_subscribers, total_views, total_engagement,
+                    total_subscribers, subscriber_growth, subscriber_growth_rate,
+                    subscribers_lost, total_views, total_engagement,
                     engagement_rate, likes, comments, shares, total_posts,
                     video_posts, top_posts, low_posts, raw_sections
                 )
                 VALUES (
                     :client_id, :profile_id, :period_id, 'fanpage_karma_csv',
-                    :followers, :views, :engagement,
+                    :followers, :follower_growth, :follower_growth_rate,
+                    :unfollows, :views, :engagement,
                     :engagement_rate, :likes, :comments, :shares, :posts,
-                    :posts, CAST(:top_posts AS JSONB), CAST(:low_posts AS JSONB),
+                    :posts, CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
                     CAST(:raw_sections AS JSONB)
                 )
                 ON CONFLICT (client_id, profile_id, report_period_id)
                 DO UPDATE SET
-                    total_subscribers = EXCLUDED.total_subscribers,
-                    total_views = EXCLUDED.total_views,
-                    total_engagement = EXCLUDED.total_engagement,
-                    engagement_rate = EXCLUDED.engagement_rate,
-                    likes = EXCLUDED.likes,
-                    comments = EXCLUDED.comments,
-                    shares = EXCLUDED.shares,
-                    total_posts = EXCLUDED.total_posts,
-                    video_posts = EXCLUDED.video_posts,
-                    top_posts = EXCLUDED.top_posts,
-                    low_posts = EXCLUDED.low_posts,
+                    total_subscribers = COALESCE(EXCLUDED.total_subscribers, {table}.total_subscribers),
+                    subscriber_growth = COALESCE(EXCLUDED.subscriber_growth, {table}.subscriber_growth),
+                    subscriber_growth_rate = COALESCE(EXCLUDED.subscriber_growth_rate, {table}.subscriber_growth_rate),
+                    subscribers_lost = COALESCE(EXCLUDED.subscribers_lost, {table}.subscribers_lost),
+                    total_views = COALESCE(EXCLUDED.total_views, {table}.total_views),
+                    total_engagement = COALESCE(EXCLUDED.total_engagement, {table}.total_engagement),
+                    engagement_rate = COALESCE(EXCLUDED.engagement_rate, {table}.engagement_rate),
+                    likes = COALESCE(EXCLUDED.likes, {table}.likes),
+                    comments = COALESCE(EXCLUDED.comments, {table}.comments),
+                    shares = COALESCE(EXCLUDED.shares, {table}.shares),
+                    total_posts = COALESCE(EXCLUDED.total_posts, {table}.total_posts),
+                    video_posts = COALESCE(EXCLUDED.video_posts, {table}.video_posts),
+                    top_posts = CASE WHEN :content_has_rows THEN EXCLUDED.top_posts ELSE {table}.top_posts END,
+                    low_posts = CASE WHEN :content_has_rows THEN EXCLUDED.low_posts ELSE {table}.low_posts END,
                     raw_sections = EXCLUDED.raw_sections,
                     updated_at = now()
                 RETURNING id

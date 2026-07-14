@@ -160,10 +160,13 @@ report_periods.period_label or report_periods.period_start from latest 3 platfor
   {{M{M}_{P}_TOTAL_FOLLOWERS}}, {{M{M}_{P}_TOTAL_SUBSCRIBERS}},
   {{P_M{M}_TOTAL_FOLLOWERS}}, {{P_M{M}_TOTAL_SUBSCRIBERS}}
 
+{platform}_reports.follows or youtube_reports.subscriber_growth:
+  {{M{M}_{P}_FOLLOWS}}, {{M{M}_{P}_SUBSCRIBERS_GAINED}},
+  {{P_M{M}_FOLLOWS}}, {{P_M{M}_SUBSCRIBERS_GAINED}},
+  {{P_{M}_FOLLOWS}}, {{P_{M}_SUBSCRIBERS_GAINED}}
+
 {platform}_reports.follower_growth or youtube_reports.subscriber_growth:
-  {{M{M}_{P}_FOLLOWS}}, {{M{M}_{P}_SUBSCRIBERS_GAINED}}, {{M{M}_{P}_NET_GROWTH}},
-  {{P_M{M}_FOLLOWS}}, {{P_M{M}_SUBSCRIBERS_GAINED}}, {{P_M{M}_NET_GROWTH}},
-  {{P_{M}_FOLLOWS}}, {{P_{M}_SUBSCRIBERS_GAINED}}, {{P_{M}_NET_GROWTH}}
+  {{M{M}_{P}_NET_GROWTH}}, {{P_M{M}_NET_GROWTH}}, {{P_{M}_NET_GROWTH}}
 
 {platform}_reports.follower_growth_rate or youtube_reports.subscriber_growth_rate:
   {{M{M}_{P}_GROWTH_RATE}}, {{P_M{M}_GROWTH_RATE}}, {{P_{M}_GROWTH_RATE}}
