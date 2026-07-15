@@ -2,14 +2,15 @@ from CentralArch.state import State, SummaryFacebook
 from models.gemini import llm
 from langchain_core.messages import HumanMessage, SystemMessage
 from prompts.fb_summary_prompts import SYSTEM_PROMPT
+from utils.llm_json import parse_llm_json
 import json
 
 
-def fb_summary_agent(state: State) -> State:
+def fb_summary_agent(state: State) -> dict:
     data = {
         "client_code": state.Metadata.client_code,
-        "report_period": state.request.report_date.isoformat(),
-        "facebook_analysis": state.tiktok_result.model_dump(),
+        "report_period": state.request.report_date.isoformat() if state.request.report_date else None,
+        "facebook_analysis": state.facebook_result.model_dump(),
     }
 
     messages = [
@@ -19,12 +20,7 @@ def fb_summary_agent(state: State) -> State:
 
     response = llm.invoke(messages)
 
-    if isinstance(response.content, list):
-        content = response.content[0].get("text", "")
-    else:
-        content = str(response.content)
-
-    result = json.loads(content)
+    result = parse_llm_json(response.content)
 
     summary_result = SummaryFacebook(
         client_code=state.Metadata.client_code,
@@ -33,5 +29,5 @@ def fb_summary_agent(state: State) -> State:
     )
 
     return {
-        "fb_summary_result": summary_result
+        "summary_facebook": summary_result
     }

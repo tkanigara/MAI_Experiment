@@ -38,6 +38,7 @@ export default function AddReportModal({
   const monthNames = [...new Set(REPORT_MONTHS.map((item) => item.label.split(" ")[0]))];
   const yearOptions = [...new Set(REPORT_MONTHS.map((item) => Number(item.slug.split("-").at(-1))))];
   const selectedMonth = `${selectedMonthName.toLowerCase()}-${selectedYear}`;
+  const selectedMonthNumber = new Date(`${selectedMonthName} 1, ${selectedYear}`).getMonth() + 1;
   const selectedMonthExists = reportMonths.some((monthItem) => monthItem.slug === selectedMonth);
 
   function selectFile(key, file) {
@@ -106,6 +107,7 @@ export default function AddReportModal({
             platform,
             metric_name: metric,
             period_year: periodYear,
+            period_month: selectedMonthNumber,
             target_month: targetMonth || null,
             target_year: targetYear || null,
             unit: form.get(`${platform}:${metric}:unit`) || existing?.unit || "count",
@@ -135,30 +137,21 @@ export default function AddReportModal({
           <span>Client</span>
           <strong>{client?.client_name || "Client"}</strong>
         </div>
-        {tab === "csv" ? (
-          <div className="split-fields">
-            <label>
-              Report Year
-              <select value={selectedYear} onChange={(event) => setSelectedYear(Number(event.target.value))}>
-                {yearOptions.map((year) => <option value={year} key={year}>{year}</option>)}
-              </select>
-            </label>
-            <label>
-              Report Month
-              <select value={selectedMonthName} onChange={(event) => setSelectedMonthName(event.target.value)}>
-                {monthNames.map((monthName) => <option value={monthName} key={monthName}>{monthName}</option>)}
-              </select>
-            </label>
-            {selectedMonthExists ? <span className="field-note">Existing report month</span> : null}
-          </div>
-        ) : (
+        <div className="split-fields">
           <label>
-            KPI Year
+            {tab === "csv" ? "Report Year" : "KPI Year"}
             <select value={selectedYear} onChange={(event) => setSelectedYear(Number(event.target.value))}>
               {yearOptions.map((year) => <option value={year} key={year}>{year}</option>)}
             </select>
           </label>
-        )}
+          <label>
+            {tab === "csv" ? "Report Month" : "KPI Month"}
+            <select value={selectedMonthName} onChange={(event) => setSelectedMonthName(event.target.value)}>
+              {monthNames.map((monthName) => <option value={monthName} key={monthName}>{monthName}</option>)}
+            </select>
+          </label>
+          {tab === "csv" && selectedMonthExists ? <span className="field-note">Existing report month</span> : null}
+        </div>
       </div>
       <div className="tabs">
         <button className={`tab ${tab === "csv" ? "active" : ""}`} onClick={() => setTab("csv")} type="button">
@@ -263,7 +256,9 @@ export default function AddReportModal({
                 <h3><PlatformBadge platform={platform} /> KPI Targets</h3>
                 {(KPI_METRICS[platform] || []).map((metric) => {
                   const targetRow = (platformData[platform]?.kpi_targets || []).find(
-                    (item) => item.metric_name === metric && Number(item.period_year) === Number(selectedYear),
+                    (item) => item.metric_name === metric
+                      && Number(item.period_year) === Number(selectedYear)
+                      && Number(item.period_month) === selectedMonthNumber,
                   ) || {};
                   const row = (platformData[platform]?.kpi_results || []).find((item) => item.metric_name === metric) || {};
                   return (

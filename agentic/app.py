@@ -7,10 +7,20 @@ from CentralArch.state import (
 from datetime import date
 
 initial_state = State(
-    request=Request(
+    # request=Request(
+    #     user_intent="Generate Marketing Report",
+    #     client_code="mai001",
+    #     report_date=date(2026, 6, 8),
+    #     generate_slides=False,
+    # )
+        request=Request(
         user_intent="Generate Marketing Report",
-        client_code="mai001",
-        report_date=date(2026, 6, 8)
+        client_code="par",
+        report_date=date(2026, 6, 8),
+        generate_slides=True,
+        slides_dry_run=False,
+        persist_insights=True,
+        reuse_cached_insights=True,
     ),
 )
 
@@ -32,6 +42,9 @@ print(instagram.followers_growth_analysis)
 print("\n=== Engagement Performance ===")
 print(instagram.growth_performance_analysis)
 
+print("\n=== Top Performing Content ===")
+print(instagram.top_content_performance)
+
 
 facebook = result["facebook_result"]
 print("===============FACEBOOK ANALYSIS RESULT ==========")
@@ -48,6 +61,9 @@ print(facebook.followers_growth_analysis)
 print("\n=== Engagement Performance ===")
 print(facebook.growth_performance_analysis)
 
+print("\n=== Top Performing Content ===")
+print(facebook.top_content_performance)
+
 tiktok = result["tiktok_result"]
 print("===============TIKTOK ANALYSIS RESULT ==========")
 print("===========================================")
@@ -62,6 +78,9 @@ print(tiktok.followers_growth_analysis)
 
 print("\n=== Engagement Performance ===")
 print(tiktok.growth_performance_analysis)
+
+print("\n=== Top Performing Content ===")
+print(tiktok.top_content_performance)
 
 youtube = result["youtube_result"]
 print("===============YOUTUBE ANALYSIS RESULT ==========")
@@ -78,8 +97,24 @@ print(youtube.followers_growth_analysis)
 print("\n=== Engagement Performance ===")
 print(youtube.growth_performance_analysis)
 
-summary = result["summary_result"]
-print("===============SUMMARY RESULT ==========")
-print("===========================================")
-print("SUMMARY ANALYSIS")
-print(summary.summary_result)
+print("\n=== Top Performing Content ===")
+print(youtube.top_content_performance)
+
+print("===============PLATFORM SUMMARIES ==========")
+for platform, field_name in (
+    ("Instagram", "summary_instagram"),
+    ("Facebook", "summary_facebook"),
+    ("TikTok", "summary_tiktok"),
+    ("YouTube", "summary_youtube"),
+):
+    summary = result[field_name]
+    print(f"\n=== {platform} ===")
+    print("Key summary:", summary.key_summary)
+    print("Action plan:", summary.action_plan)
+
+generation = result["report_generation"]
+print("===============REPORT GENERATION ==========")
+print("STATUS:", generation.status)
+print("URL:", generation.presentation_url)
+print("ERROR:", generation.error)
+print("ANALYSIS CACHE HIT:", result["analysis_cache_hit"])

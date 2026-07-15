@@ -1,5 +1,6 @@
 requests
 fastapi
+rich
 uvicorn[standard]
 python-multipart
 pandas

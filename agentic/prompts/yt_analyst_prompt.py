@@ -39,7 +39,7 @@ RULES:
   "socmed_overview_analysis": "...",
   "followers_growth_analysis": "...",
   "growth_performance_analysis": "...",
-  "top_performance_content": "..."
+  "top_content_performance": "..."
 }
 
 Do not include markdown, explanations, or additional text outside the JSON object.

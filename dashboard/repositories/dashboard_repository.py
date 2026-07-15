@@ -654,7 +654,7 @@ class DashboardRepository:
             )
         return json_safe(months)
 
-    def overview(self, client_id: str, platform: str):
+    def overview(self, client_id: str, platform: str, period_id: str | None = None):
         if platform not in PLATFORM_TABLES:
             raise ValueError("Unsupported platform")
         table = PLATFORM_TABLES[platform]
@@ -674,11 +674,15 @@ class DashboardRepository:
                     JOIN report_periods rp ON rp.id = r.report_period_id
                     LEFT JOIN client_social_profiles p ON p.id = r.profile_id
                     WHERE r.client_id = :client_id
+                      AND (
+                          CAST(:period_id AS UUID) IS NULL
+                          OR r.report_period_id = CAST(:period_id AS UUID)
+                      )
                     ORDER BY rp.period_end DESC
                     LIMIT 1
                     """
                 ),
-                {"client_id": client_id},
+                {"client_id": client_id, "period_id": period_id},
             ).mappings().first()
             report_data = row_dict(report)
             period_id = report_data["report_period_id"] if report_data else None
@@ -744,11 +748,11 @@ class DashboardRepository:
                 for row in conn.execute(
                     text(
                         """
-                        SELECT id, metric_name, period_year, target_month,
+                        SELECT id, metric_name, period_year, period_month, target_month,
                                target_year, unit, notes, updated_at
                         FROM kpi_targets
                         WHERE client_id = :client_id AND platform = :platform
-                        ORDER BY period_year DESC, metric_name
+                        ORDER BY period_year DESC, period_month DESC, metric_name
                         """
                     ),
                     {"client_id": client_id, "platform": platform},
@@ -835,7 +839,7 @@ class DashboardRepository:
         ]
 
     def upsert_kpi_target(self, payload: dict):
-        required = ["client_id", "platform", "metric_name", "period_year"]
+        required = ["client_id", "platform", "metric_name", "period_year", "period_month"]
         missing = [key for key in required if not payload.get(key)]
         if missing:
             raise ValueError(f"Missing fields: {', '.join(missing)}")
@@ -846,26 +850,29 @@ class DashboardRepository:
         if metric_name not in PLATFORM_KPI_METRICS[platform]:
             allowed = ", ".join(sorted(PLATFORM_KPI_METRICS[platform]))
             raise ValueError(f"Unsupported KPI metric for {platform}. Use: {allowed}")
+        period_month = int(payload["period_month"])
+        if period_month < 1 or period_month > 12:
+            raise ValueError("period_month must be between 1 and 12")
         with self.engine.begin() as conn:
             row = conn.execute(
                 text(
                     """
                     INSERT INTO kpi_targets (
-                        client_id, platform, metric_name, period_year,
+                        client_id, platform, metric_name, period_year, period_month,
                         target_month, target_year, unit, notes, created_by
                     )
                     VALUES (
-                        :client_id, :platform, :metric_name, :period_year,
+                        :client_id, :platform, :metric_name, :period_year, :period_month,
                         :target_month, :target_year, :unit, :notes, :created_by
                     )
-                    ON CONFLICT (client_id, platform, metric_name, period_year)
+                    ON CONFLICT (client_id, platform, metric_name, period_year, period_month)
                     DO UPDATE SET
-                        target_month = EXCLUDED.target_month,
-                        target_year = EXCLUDED.target_year,
-                        unit = EXCLUDED.unit,
-                        notes = EXCLUDED.notes,
+                        target_month = COALESCE(EXCLUDED.target_month, kpi_targets.target_month),
+                        target_year = COALESCE(EXCLUDED.target_year, kpi_targets.target_year),
+                        unit = COALESCE(EXCLUDED.unit, kpi_targets.unit),
+                        notes = COALESCE(EXCLUDED.notes, kpi_targets.notes),
                         updated_at = now()
-                    RETURNING id, metric_name, period_year, target_month,
+                    RETURNING id, metric_name, period_year, period_month, target_month,
                               target_year, unit, notes, updated_at
                     """
                 ),
@@ -874,6 +881,7 @@ class DashboardRepository:
                     "platform": platform,
                     "metric_name": metric_name,
                     "period_year": int(payload["period_year"]),
+                    "period_month": period_month,
                     "target_month": payload.get("target_month") or None,
                     "target_year": payload.get("target_year") or None,
                     "unit": payload.get("unit") or None,
@@ -917,6 +925,7 @@ class DashboardRepository:
                   AND kr.platform = :platform
                   AND kr.metric_name = :metric_name
                   AND EXTRACT(YEAR FROM rp.period_start) = :period_year
+                  AND EXTRACT(MONTH FROM rp.period_start) = :period_month
                 """
             ),
             {
@@ -925,6 +934,7 @@ class DashboardRepository:
                 "platform": payload["platform"],
                 "metric_name": metric_name,
                 "period_year": int(payload["period_year"]),
+                "period_month": int(payload["period_month"]),
                 "target_month": payload.get("target_month") or None,
                 "target_year": payload.get("target_year") or None,
                 "unit": payload.get("unit") or None,
@@ -1595,6 +1605,7 @@ class DashboardRepository:
                           AND platform = :platform
                           AND metric_name = :metric_name
                           AND period_year = EXTRACT(YEAR FROM (SELECT period_start FROM report_periods WHERE id = :period_id))
+                          AND period_month = EXTRACT(MONTH FROM (SELECT period_start FROM report_periods WHERE id = :period_id))
                         """
                     ),
                     {
@@ -1731,7 +1742,18 @@ def achievement(actual, target):
 def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], targets: list[dict]):
     configured_metrics = sorted(PLATFORM_KPI_METRICS.get(platform, set()))
     rows_by_metric = {row.get("metric_name"): dict(row) for row in rows or []}
-    targets_by_metric = {row.get("metric_name"): dict(row) for row in targets or []}
+    report_period = (report or {}).get("period_start")
+    report_year = getattr(report_period, "year", None)
+    report_month = getattr(report_period, "month", None)
+    targets_by_metric = {
+        row.get("metric_name"): dict(row)
+        for row in targets or []
+        if report_year is None
+        or (
+            int(row.get("period_year") or 0) == report_year
+            and int(row.get("period_month") or 0) == report_month
+        )
+    }
     result = []
     for metric_name in configured_metrics:
         row = rows_by_metric.get(metric_name) or {"metric_name": metric_name}

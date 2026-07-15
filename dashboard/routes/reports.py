@@ -6,11 +6,11 @@ from http import HTTPStatus
 try:
     from dashboard.repositories.dashboard_repository import parse_bool
     from dashboard.schemas import require_fields
-    from dashboard.services.slides_report import generate_report_slides
+    from dashboard.services.agentic_report import generate_agentic_report
 except ModuleNotFoundError:
     from repositories.dashboard_repository import parse_bool
     from schemas import require_fields
-    from services.slides_report import generate_report_slides
+    from services.agentic_report import generate_agentic_report
 
 
 def handle_post(handler, parsed) -> bool:
@@ -24,7 +24,7 @@ def handle_post(handler, parsed) -> bool:
         period_id = str(payload.get("period_id") or "").strip()
         require_fields({"client_id": client_id, "period_id": period_id}, ["client_id", "period_id"])
         handler.send_json(
-            generate_report_slides(
+            generate_agentic_report(
                 client_id=client_id,
                 period_id=period_id,
                 dry_run=parse_bool(payload.get("dry_run")),

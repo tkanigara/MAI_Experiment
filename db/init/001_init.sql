@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS kpi_targets (
     platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
     metric_name TEXT NOT NULL,
     period_year INTEGER NOT NULL,
+    period_month INTEGER NOT NULL CHECK (period_month BETWEEN 1 AND 12),
     target_month NUMERIC,
     target_year NUMERIC,
     unit TEXT,
@@ -112,7 +113,7 @@ CREATE TABLE IF NOT EXISTS kpi_targets (
     created_by TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (client_id, platform, metric_name, period_year)
+    UNIQUE (client_id, platform, metric_name, period_year, period_month)
 );
 
 CREATE TABLE IF NOT EXISTS kpi_results (
@@ -503,7 +504,7 @@ CREATE INDEX IF NOT EXISTS idx_raw_api_responses_response_gin
     ON raw_api_responses USING GIN (response);
 
 CREATE INDEX IF NOT EXISTS idx_kpi_targets_lookup
-    ON kpi_targets (client_id, platform, period_year, metric_name);
+    ON kpi_targets (client_id, platform, period_year, period_month, metric_name);
 
 CREATE INDEX IF NOT EXISTS idx_kpi_results_dashboard
     ON kpi_results (client_id, platform, report_period_id, metric_name);

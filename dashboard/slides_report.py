@@ -720,6 +720,24 @@ class SlidesReportRepository:
                 ]
                 trends[platform] = self.monthly_trends(conn, client_id, period, platform, table_name)
 
+            insights = [
+                dict(row)
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT platform, section_key, insight_key, insight_text,
+                               display_order, source, metadata
+                        FROM report_insights
+                        WHERE client_id = :client_id
+                          AND report_period_id = :period_id
+                        ORDER BY platform NULLS FIRST, display_order NULLS LAST,
+                                 section_key, insight_key
+                        """
+                    ),
+                    {"client_id": client_id, "period_id": period_id},
+                ).mappings()
+            ]
+
             return {
                 "client": client,
                 "period": period,
@@ -729,6 +747,7 @@ class SlidesReportRepository:
                 "competitor_content": competitor_content,
                 "kpi_results": kpi_results,
                 "trends": trends,
+                "insights": insights,
             }
 
     def content_posts(self, conn, client_id: str, period_id: str, platform: str) -> dict:
@@ -1314,7 +1333,64 @@ def build_mapping(payload: dict) -> dict:
             "{{AVG_ENGAGEMENT_RATE}}": fmt_percent(avg_er),
         }
     )
+    apply_report_insights(mapping, payload.get("insights", []))
     return mapping
+
+
+def apply_report_insights(mapping: dict, insight_rows: list[dict]) -> None:
+    platform_targets = {
+        "kpi_analysis": ("SUMMARY_POINT_1",),
+        "socmed_overview_analysis": ("PERFORMANCE_INSIGHT", "SUMMARY_POINT_2"),
+        "followers_growth_analysis": (
+            "FOLLOWERS_GROWTH_TEXT",
+            "INSIGHT_FOLLOWERS_GROWTH_TEXT",
+            "SUMMARY_POINT_3",
+        ),
+        "growth_performance_analysis": ("REACH_INSIGHT_SUMMARY", "SUMMARY_POINT_4"),
+        "top_content_performance": ("TOP_CONTENT_SUCCESS_DRIVER",),
+        "key_summary": ("KEY_SUMMARY", "KEY_SUMMARY_TEXT"),
+    }
+
+    for row in insight_rows:
+        insight_text = str(row.get("insight_text") or "").strip()
+        if not insight_text:
+            continue
+
+        platform = row.get("platform")
+        insight_key = str(row.get("insight_key") or "")
+        if platform is None and insight_key == "summary_result":
+            mapping["{{EXECUTIVE_SUMMARY}}"] = insight_text
+            continue
+
+        prefix = PLATFORM_PREFIXES.get(str(platform))
+        if not prefix:
+            continue
+        if insight_key == "action_plan":
+            action_items = split_action_plan(insight_text)
+            for index, action_item in enumerate(action_items, start=1):
+                mapping[placeholder(f"{prefix}_RECOMMENDATION_{index}")] = action_item
+            continue
+        for suffix in platform_targets.get(insight_key, ()):
+            mapping[placeholder(f"{prefix}_{suffix}")] = insight_text
+
+
+def split_action_plan(action_plan: str, limit: int = 3) -> list[str]:
+    text = str(action_plan or "").strip()
+    if not text:
+        return []
+
+    parts = re.split(r"\r?\n+|\s*;\s*", text)
+    if len(parts) == 1:
+        parts = re.split(r"(?<=[.!?])\s+", text)
+
+    cleaned = []
+    for part in parts:
+        item = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", part).strip()
+        if item:
+            cleaned.append(item)
+        if len(cleaned) == limit:
+            break
+    return cleaned or [text]
 
 
 def share_presentation_as_editor(drive_service, presentation_id: str) -> dict:
@@ -1420,7 +1496,12 @@ def filter_to_template_enabled() -> bool:
     return env_bool("SLIDES_FILTER_TO_TEMPLATE", True)
 
 
-def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bool = False) -> dict:
+def generate_dashboard_slides_report(
+    client_id: str,
+    period_id: str,
+    dry_run: bool = False,
+    insight_overrides: list[dict] | None = None,
+) -> dict:
     profiler = StepProfiler()
     load_dotenv(BASE_DIR / ".env")
     template_value = default_template()
@@ -1430,6 +1511,15 @@ def generate_dashboard_slides_report(client_id: str, period_id: str, dry_run: bo
 
     start = time.perf_counter()
     payload = SlidesReportRepository().report_payload(client_id, period_id)
+    if insight_overrides:
+        merged_insights = {
+            (row.get("platform"), row.get("insight_key")): dict(row)
+            for row in payload.get("insights", [])
+        }
+        for row in insight_overrides:
+            key = (row.get("platform"), row.get("insight_key"))
+            merged_insights[key] = dict(row)
+        payload["insights"] = list(merged_insights.values())
     profiler.record("load_db_data", start)
 
     start = time.perf_counter()

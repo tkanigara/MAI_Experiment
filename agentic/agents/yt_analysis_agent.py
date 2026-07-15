@@ -109,8 +109,8 @@ def yt_analysis_agent_2nd(state: State) -> State:
 
         top_content = retrieve_top_performing_content.invoke({
             "client_code": state.Metadata.client_code,
-            "report_date": state.request.report_date,
-            "platform": "instagram"
+            "report_date": state.request.report_date.isoformat(),
+            "platform": "youtube"
         })
 
         data ={
@@ -163,7 +163,10 @@ def yt_analysis_agent_2nd(state: State) -> State:
             socmed_overview_analysis=result["socmed_overview_analysis"],
             followers_growth_analysis=result["followers_growth_analysis"],
             growth_performance_analysis=result["growth_performance_analysis"],
-             top_content_performance=result["top_content_performance"]
+            top_content_performance=(
+                result.get("top_content_performance")
+                or result.get("top_performance_content")
+            )
         )
 
     return {

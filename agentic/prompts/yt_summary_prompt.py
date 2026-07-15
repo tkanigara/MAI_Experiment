@@ -10,7 +10,7 @@ RULES:
 
 {
   "key_summary": "...",
-  "action_plan": "...",
+  "action_plan": "..."
 }
 
 """

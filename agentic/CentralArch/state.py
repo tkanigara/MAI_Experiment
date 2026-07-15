@@ -1,4 +1,3 @@
-from typing_extensions import List
 from datetime import date
 from pydantic import BaseModel, Field
 
@@ -7,15 +6,24 @@ class Request(BaseModel):
     user_intent: str
     client_code: str | None = None
     report_date: date | None = None
+    generate_slides: bool = False
+    slides_dry_run: bool = False
+    persist_insights: bool = True
+    reuse_cached_insights: bool = True
 
 class MetaData(BaseModel):
+    client_id: str | None = None
     client_code:str | None = None
     client_name:str | None = None
+    report_period_id: str | None = None
+    period_start: date | None = None
+    period_end: date | None = None
     instagram: bool =  False
     facebook: bool = False
     tiktok: bool = False
     youtube: bool = False
     loaded: bool = False
+    error: str | None = None
 
 class instagram_result_analysis(BaseModel):
     client_code: str | None = None
@@ -73,9 +81,12 @@ class SummaryYoutube(BaseModel):
     key_summary: str | None = None
     action_plan: str | None = None
     
-class Summary(BaseModel):
-    client_code: str | None = None
-    summary_result : str | None = None
+class ReportGenerationResult(BaseModel):
+    status: str = "not_requested"
+    presentation_id: str | None = None
+    presentation_url: str | None = None
+    report_name: str | None = None
+    error: str | None = None
 
 class State(BaseModel):
     #request
@@ -93,12 +104,18 @@ class State(BaseModel):
     tiktok_result: tiktok_result_analysis = Field(default_factory=tiktok_result_analysis)
     youtube_result: youtube_result_analysis = Field(default_factory=youtube_result_analysis)
 
-    #Summary  result
-    summary_result : Summary = Field(default_factory=Summary)
+    # Per-platform summary results
     summary_instagram: SummaryInstagram = Field(default_factory=SummaryInstagram)
     summary_facebook: SummaryFacebook = Field(default_factory=SummaryFacebook)
     summary_tiktok: SummaryTiktok = Field(default_factory=SummaryTiktok)
-    sumamry_youtube: SummaryYoutube = Field(default_factory=SummaryYoutube)
+    summary_youtube: SummaryYoutube = Field(default_factory=SummaryYoutube)
+
+    # Google Slides generation result
+    report_generation: ReportGenerationResult = Field(default_factory=ReportGenerationResult)
+
+    # Analysis cache status
+    analysis_cache_hit: bool = False
+    analysis_data_version: str | None = None
 
 
 

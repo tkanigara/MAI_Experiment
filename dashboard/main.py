@@ -21,7 +21,7 @@ try:
     from dashboard.schemas import require_fields
     from dashboard.services.csv_import import import_report_csv
     from dashboard.services.kpi_service import upsert_kpi_target
-    from dashboard.services.slides_report import generate_report_slides
+    from dashboard.services.agentic_report import generate_agentic_report
 except ModuleNotFoundError:
     from config import DASHBOARD_DIR, STATIC_DIR
     from repositories.dashboard_repository import (
@@ -33,7 +33,7 @@ except ModuleNotFoundError:
     from schemas import require_fields
     from services.csv_import import import_report_csv
     from services.kpi_service import upsert_kpi_target
-    from services.slides_report import generate_report_slides
+    from services.agentic_report import generate_agentic_report
 
 
 repository = DashboardRepository()
@@ -115,9 +115,9 @@ def get_platforms(client_id: str):
 
 
 @app.get("/api/clients/{client_id}/platforms/{platform}/overview")
-def get_platform_overview(client_id: str, platform: str):
+def get_platform_overview(client_id: str, platform: str, period_id: Optional[str] = None):
     try:
-        return json_response(repository.overview(client_id, platform))
+        return json_response(repository.overview(client_id, platform, period_id))
     except ValueError as exc:
         raise bad_request(exc)
 
@@ -172,7 +172,7 @@ def generate_slides(payload: dict):
         period_id = str(payload.get("period_id") or "").strip()
         require_fields({"client_id": client_id, "period_id": period_id}, ["client_id", "period_id"])
         return json_response(
-            generate_report_slides(
+            generate_agentic_report(
                 client_id=client_id,
                 period_id=period_id,
                 dry_run=parse_bool(payload.get("dry_run")),

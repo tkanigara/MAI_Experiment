@@ -94,10 +94,11 @@ export default function App() {
 
   async function loadPlatformData(client) {
     if (!client) return;
+    const periodQuery = currentMonth?.id ? `?period_id=${encodeURIComponent(currentMonth.id)}` : "";
     const entries = await Promise.all(
       platformFlags(client).map(async (platform) => {
         try {
-          return [platform, await api(`/api/clients/${client.id}/platforms/${platform}/overview`)];
+          return [platform, await api(`/api/clients/${client.id}/platforms/${platform}/overview${periodQuery}`)];
         } catch {
           return [platform, { platform, report: null, metrics: [], kpi_results: [], top_posts: [], low_posts: [] }];
         }
@@ -108,15 +109,17 @@ export default function App() {
 
   async function saveKpi(payload) {
     if (!selectedClient || !currentPlatform) return;
+    const periodDate = new Date(`${currentMonth?.period_start || new Date().toISOString()}`);
     await api("/api/kpi-targets", {
       method: "POST",
       body: JSON.stringify({
         client_id: selectedClient.id,
         platform: currentPlatform,
         metric_name: payload.metric_name,
-        period_year: 2026,
+        period_year: periodDate.getUTCFullYear(),
+        period_month: periodDate.getUTCMonth() + 1,
         target_month: payload.target_month,
-        target_year: payload.target_year,
+        target_year: payload.target_year ?? editKpi?.target_year ?? null,
         unit: payload.unit,
       }),
     });
@@ -146,6 +149,7 @@ export default function App() {
           platform: target.platform,
           metric_name: target.metric_name,
           period_year: target.period_year,
+          period_month: target.period_month,
           target_month: target.target_month,
           target_year: target.target_year,
           unit: target.unit,
