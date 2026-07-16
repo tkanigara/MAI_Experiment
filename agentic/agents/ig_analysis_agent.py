@@ -3,12 +3,12 @@ from utils.llm_output import get_llm_text
 from models.gemini import llm
 from langchain_core.messages import HumanMessage, SystemMessage
 from prompts.ig_analyst_prompt import KPI_PROMPT, SOCMED_OVERVIEW, FOLLOWERS_GROWTH, ENGAGEMENT_PERFORMANCE, INSTAGRAM_ANALYST, SYSTEM_PROMPT
-from tools.retrieva_ig_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance, retrieve_top_performing_content, retrieve_followers_growth_history, retrieve_engagement_performance_history
+from tools.retrieva_ig_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance, retrieve_top_performing_content, retrieve_followers_growth_history, retrieve_engagement_performance_history, retrieve_competitor_analysis
 from utils.logger import node
 from typing import Any
 import json
 import re
-
+from pprint import pprint
 def ig_analysis_agent(state: State) -> State:
     with node("Instagram Agent analysis running"):
     #Kpi 
@@ -59,6 +59,7 @@ def ig_analysis_agent(state: State) -> State:
             "client_code": state.Metadata.client_code,
             "report_date": state.request.report_date.isoformat()
         })
+
 
         ENGAGEMENT_PROMPT = ENGAGEMENT_PERFORMANCE
         messages_engagement = [
@@ -122,6 +123,12 @@ def ig_analysis_agent_2nd(state: State) -> State:
             "report_date": state.request.report_date.isoformat(),
             "platform": "instagram"
         })
+
+        competitor_analysis = retrieve_competitor_analysis.invoke({
+            "client_code": state.Metadata.client_code,
+            "report_date": state.request.report_date.isoformat(),
+            "platform": "instagram",
+        })
         data = {
             "KPI": kpi_data,
             "Social Media Overview": socmed,
@@ -137,8 +144,8 @@ def ig_analysis_agent_2nd(state: State) -> State:
             },
 
             "Top Content Performance": top_content,
+            "Competitor Analysis": competitor_analysis,
         }
-        SYSTEM_PROMPT = SYSTEM_PROMPT
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(
@@ -147,6 +154,10 @@ def ig_analysis_agent_2nd(state: State) -> State:
         ]
 
         analysis = llm.invoke(messages)
+        print("=" * 80)
+        print("INPUT TO LLM")
+        pprint(data)
+        print("=" * 80)
         content = analysis.content
 
         if isinstance(content, list):
@@ -180,7 +191,8 @@ def ig_analysis_agent_2nd(state: State) -> State:
             top_content_performance=(
                 result.get("top_content_performance")
                 or result.get("top_performance_content")
-            )
+            ),
+            competitor_analysis=result["competitor_analysis"]
         )
 
     return {

@@ -676,3 +676,139 @@ def retrieve_all_content(client_code: str, report_date: str, platform: str) -> d
 
     finally:
         conn.close()
+
+@tool
+def retrieve_competitor_analysis(
+    client_code: str,
+    platform: str,
+    report_date: str,
+) -> dict:
+    """
+    Retrieve client metrics and competitor metrics for competitor analysis.
+    """
+
+    conn = get_connection()
+
+    try:
+        report_date = datetime.strptime(report_date, "%Y-%m-%d").date()
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    ir.client_id,
+                    ir.report_period_id,
+                    ir.total_followers,
+                    ir.follower_growth_rate,
+                    ir.total_posts,
+                    ir.engagement_rate,
+                    ir.total_engagement
+                FROM facebook_reports ir
+                INNER JOIN clients c
+                    ON c.id = ir.client_id
+                INNER JOIN report_periods rp
+                    ON rp.id = ir.report_period_id
+                WHERE
+                    c.client_code = %s
+                    AND rp.period_start <= %s
+                    AND rp.period_end >= %s
+                LIMIT 1;
+                """,
+                (
+                    client_code,
+                    report_date,
+                    report_date,
+                ),
+            )
+
+            row = cursor.fetchone()
+
+            if row is None:
+                return {
+                    "success": False,
+                    "message": "Client data not found"
+                }
+
+            client_data = {
+                "client_id": str(row[0]),
+                "report_period_id": str(row[1]),
+                "total_followers": to_number(row[2]),
+                "follower_growth_rate": to_number(row[3]),
+                "total_posts": to_number(row[4]),
+                "engagement_rate": to_number(row[5]),
+                "total_engagement": to_number(row[6]),
+            }
+
+            cursor.execute(
+                """
+                SELECT
+                    cr.client_id,
+                    cr.report_period_id,
+                    cr.platform,
+                    cr.profile_name,
+                    cr.total_followers,
+                    cr.follower_growth,
+                    cr.follower_growth_rate,
+                    cr.total_posts,
+                    cr.total_engagement,
+                    cr.engagement_rate,
+                    cr.reach,
+                    cr.impressions
+                FROM competitor_profile_reports cr
+                INNER JOIN clients c
+                    ON c.id = cr.client_id
+                INNER JOIN report_periods rp
+                    ON rp.id = cr.report_period_id
+                WHERE
+                    c.client_code = %s
+                    AND cr.platform = %s
+                    AND rp.period_start <= %s
+                    AND rp.period_end >= %s
+                ORDER BY
+                    cr.total_followers DESC,
+                    cr.profile_name ASC;
+                """,
+                (
+                    client_code,
+                    platform,
+                    report_date,
+                    report_date,
+                ),
+            )
+
+            rows = cursor.fetchall()
+
+            competitors = []
+
+            for row in rows:
+                competitors.append(
+                    {
+                        "client_id": str(row[0]),
+                        "report_period_id": str(row[1]),
+                        "platform": row[2],
+                        "competitor_name": row[3],
+                        "total_followers": to_number(row[4]),
+                        "follower_growth": to_number(row[5]),
+                        "follower_growth_rate": to_number(row[6]),
+                        "total_posts": to_number(row[7]),
+                        "total_engagement": to_number(row[8]),
+                        "engagement_rate": to_number(row[9]),
+                        "reach": to_number(row[10]),
+                        "impressions": to_number(row[11]),
+                    }
+                )
+
+            return {
+                "success": True,
+                "Client": client_data,
+                "Competitors": competitors,
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+    finally:
+        conn.close()

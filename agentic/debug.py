@@ -1,34 +1,30 @@
 from pprint import pprint
 
-from tools.retrieval_fb_data import (
-    retrieve_engagement_performance,
-    retrieve_engagement_performance_history,
-    retrieve_followers_growth_history,
-    retrieve_followers_growth
-)
+from tools.retrieval_fb_data import retrieve_competitor_analysis
 
 client_code = "mai001"
+platform = "facebook"
 report_date = "2026-07-08"
 
-# Current Period
-current = retrieve_followers_growth.invoke(
+result = retrieve_competitor_analysis.invoke(
     {
         "client_code": client_code,
+        "platform": platform,
         "report_date": report_date,
     }
 )
 
-print("===== CURRENT =====")
-pprint(current)
+print("===== COMPETITOR ANALYSIS =====")
 
-if current["success"]:
+if result["success"]:
 
-    history = retrieve_followers_growth_history.invoke(
-        {
-            "client_code": client_code,
-            "current_report_period_id": current["report_period_id"],
-        }
-    )
+    print("\n----- CLIENT -----")
+    pprint(result["Client"])
 
-    print("\n===== HISTORY =====")
-    pprint(history)
+    print("\n----- COMPETITORS -----")
+    pprint(result["Competitors"])
+
+    print(f"\nTotal Competitors: {len(result['Competitors'])}")
+
+else:
+    pprint(result)

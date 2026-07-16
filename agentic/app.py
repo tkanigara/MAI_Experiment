@@ -20,7 +20,7 @@ initial_state = State(
         generate_slides=False,
         slides_dry_run=False,
         persist_insights=True,
-        reuse_cached_insights=True,
+        reuse_cached_insights=False,
     ),
 )
 
@@ -45,6 +45,8 @@ print(instagram.growth_performance_analysis)
 print("\n=== Top Performing Content ===")
 print(instagram.top_content_performance)
 
+print("\n=== Competitor Analysis ===")
+print(instagram.competitor_analysis)
 
 facebook = result["facebook_result"]
 print("===============FACEBOOK ANALYSIS RESULT ==========")
@@ -64,6 +66,9 @@ print(facebook.growth_performance_analysis)
 print("\n=== Top Performing Content ===")
 print(facebook.top_content_performance)
 
+print("\n=== Competitor Analysis ===")
+print(facebook.competitor_analysis)
+
 tiktok = result["tiktok_result"]
 print("===============TIKTOK ANALYSIS RESULT ==========")
 print("===========================================")
@@ -82,6 +87,9 @@ print(tiktok.growth_performance_analysis)
 print("\n=== Top Performing Content ===")
 print(tiktok.top_content_performance)
 
+print("\n=== Competitor Analysis ===")
+print(tiktok.competitor_analysis)
+
 youtube = result["youtube_result"]
 print("===============YOUTUBE ANALYSIS RESULT ==========")
 print("===========================================")
@@ -99,6 +107,9 @@ print(youtube.growth_performance_analysis)
 
 print("\n=== Top Performing Content ===")
 print(youtube.top_content_performance)
+
+print("\n=== Competitor Analysis ===")
+print(youtube.competitor_analysis)
 
 print("===============PLATFORM SUMMARIES ==========")
 for platform, field_name in (

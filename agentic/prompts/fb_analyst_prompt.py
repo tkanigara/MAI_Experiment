@@ -70,7 +70,7 @@ You will receive the following components:
 5. Engagement Performance (Current Period)
 6. Engagement Performance Historical Data
 7. Top Content Performance
-
+8. Competitor Analysis
 ----------------------------------------
 GENERAL RULES
 ----------------------------------------
@@ -110,6 +110,8 @@ Use ONLY:
 - Followers Growth
 - Followers Growth Historical Data
 
+Competitor Analysis
+- Analysis
 You MUST:
 
 1. Mention current follower metrics.
@@ -188,9 +190,9 @@ Return ONLY a valid JSON object.
     "socmed_overview_analysis": "...",
     "followers_growth_analysis": "...",
     "growth_performance_analysis": "...",
-    "top_content_performance": "..."
+    "top_content_performance": "...",
+    "competitor_analysis": "...",
 }
-
 Do not return Markdown.
 
 Do not return explanations.

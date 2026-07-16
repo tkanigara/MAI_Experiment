@@ -33,6 +33,7 @@ class instagram_result_analysis(BaseModel):
     followers_growth_analysis: str | None = None
     growth_performance_analysis: str | None = None
     top_content_performance: str | None = None
+    competitor_analysis: str | None = None
 
 class facebook_result_analysis(BaseModel):
     client_code: str | None = None
@@ -42,6 +43,7 @@ class facebook_result_analysis(BaseModel):
     followers_growth_analysis: str | None = None
     growth_performance_analysis: str | None = None
     top_content_performance: str | None = None
+    competitor_analysis: str | None = None
 
 class tiktok_result_analysis(BaseModel):
     client_code: str | None = None
@@ -51,6 +53,7 @@ class tiktok_result_analysis(BaseModel):
     followers_growth_analysis: str | None = None
     growth_performance_analysis: str | None = None
     top_content_performance: str | None = None
+    competitor_analysis: str | None = None
 
 class youtube_result_analysis(BaseModel):
     client_code: str | None = None
@@ -60,7 +63,8 @@ class youtube_result_analysis(BaseModel):
     followers_growth_analysis: str | None = None
     growth_performance_analysis: str | None = None
     top_content_performance: str | None = None
-
+    competitor_analysis: str | None = None
+    
 class SummaryInstagram(BaseModel):
     client_code: str | None = None
     key_summary: str | None = None
