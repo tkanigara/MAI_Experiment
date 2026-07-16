@@ -2,8 +2,8 @@ from CentralArch.state import State, facebook_result_analysis
 from models.gemini import llm
 from utils.llm_output import get_llm_text
 from langchain_core.messages import HumanMessage, SystemMessage
-from prompts.fb_analyst_prompt import KPI_PROMPT, SOCMED_OVERVIEW, FOLLOWERS_GROWTH, ENGAGEMENT_PERFORMANCE, FACEBOOK_ANALYST
-from tools.retrieval_fb_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance, retrieve_top_performing_content
+from prompts.fb_analyst_prompt import KPI_PROMPT, SOCMED_OVERVIEW, FOLLOWERS_GROWTH, ENGAGEMENT_PERFORMANCE, FACEBOOK_ANALYST, SYSTEM_PROMPT
+from tools.retrieval_fb_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance, retrieve_top_performing_content,  retrieve_followers_growth_history, retrieve_engagement_performance_history
 from utils.logger import node
 from typing import Any
 import json
@@ -102,11 +102,20 @@ def fb_analysis_agent_2nd(state: State) -> State:
             "report_date": state.request.report_date.isoformat()
         })
 
+        historical_foll_growth =  retrieve_followers_growth_history.invoke({
+            "client_code": state.Metadata.client_code,
+            "current_period": state.request.report_date.isoformat()
+        })
+
         eng_performance = retrieve_engagement_performance.invoke({
             "client_code": state.Metadata.client_code,
             "report_date": state.request.report_date.isoformat()
         })
 
+        historical_engagement_performance =  retrieve_engagement_performance_history.invoke({
+            "client_code": state.Metadata.client_code,
+            "current_period": state.request.report_date.isoformat()
+        })
         
         top_content = retrieve_top_performing_content.invoke({
             "client_code": state.Metadata.client_code,
@@ -114,15 +123,24 @@ def fb_analysis_agent_2nd(state: State) -> State:
             "platform": "facebook"
         })
 
-        data ={
-            "kpi": kpi_data,
+        data = {
+            "KPI": kpi_data,
             "Social Media Overview": socmed,
-            "Followers Growth": foll_growth,
-            "Engagement Performance": eng_performance,
-             "Top Content": top_content,
+
+            "Followers Growth": {
+                "Current Period": foll_growth,
+                "Historical Data": historical_foll_growth,
+            },
+
+            "Engagement Performance": {
+                "Current Period": eng_performance,
+                "Historical Data": historical_engagement_performance,
+            },
+
+            "Top Content Performance": top_content,
         }
 
-        SYSTEM_PROMPT = FACEBOOK_ANALYST
+        SYSTEM_PROMPT = SYSTEM_PROMPT
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(

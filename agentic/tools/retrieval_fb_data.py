@@ -225,6 +225,7 @@ def retrieve_followers_growth(client_code:str, report_date: str):
                 """ 
                 SELECT
                     fg.client_id,
+                    fg.report_period_id,
                     fg.total_followers,
                     fg.follower_growth,
                     fg.follower_growth_rate,
@@ -251,19 +252,98 @@ def retrieve_followers_growth(client_code:str, report_date: str):
                 }
             return {
                 "success": True,
+                "report_period_id": str(row[1]),
                 "Followers growth": {
                     "client_id": str(row[0]),
-                    "total_follower": to_number(row[1]),
-                    "follower_growth": to_number(row[2]),
-                    "follower_growth_rate": to_number(row[3]),
-                    "follows": to_number(row[4]),
-                    "unfollows": to_number(row[5])
+                    "total_follower": to_number(row[2]),
+                    "follower_growth": to_number(row[3]),
+                    "follower_growth_rate": to_number(row[4]),
+                    "follows": to_number(row[5]),
+                    "unfollows": to_number(row[6])
                 }
             }
     except Exception as e:
         return {
             "success": False,
             "error": str(e)
+        }
+
+    finally:
+        conn.close()
+
+
+@tool
+def retrieve_followers_growth_history(
+    client_code: str,
+    current_report_period_id: str,
+):
+    """
+    Retrieve all historical followers growth data before
+    the current report period.
+    """
+
+    conn = get_connection()
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    fg.client_id,
+                    fg.report_period_id,
+                    fg.total_followers,
+                    fg.follower_growth,
+                    fg.follower_growth_rate,
+                    fg.follows,
+                    fg.unfollows
+                FROM facebook_reports fg
+                INNER JOIN clients c
+                    ON c.id = fg.client_id
+                INNER JOIN report_periods rp
+                    ON rp.id = fg.report_period_id
+                WHERE
+                    c.client_code = %s
+                    AND rp.period_end < (
+                        SELECT period_end
+                        FROM report_periods
+                        WHERE id = %s
+                    )
+                ORDER BY rp.period_end DESC;
+                """,
+                (
+                    client_code,
+                    current_report_period_id,
+                ),
+            )
+
+            rows = cursor.fetchall()
+
+            if rows is None or len(rows) == 0:
+                return {
+                    "success": False,
+                    "message": "Historical Followers Growth not found"
+                }
+
+            return {
+                "success": True,
+                "Followers growth": [
+                    {
+                        "client_id": str(row[0]),
+                        "report_period_id": str(row[1]),
+                        "total_follower": to_number(row[2]),
+                        "follower_growth": to_number(row[3]),
+                        "follower_growth_rate": to_number(row[4]),
+                        "follows": to_number(row[5]),
+                        "unfollows": to_number(row[6]),
+                    }
+                    for row in rows
+                ]
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
         }
 
     finally:
@@ -283,6 +363,7 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
                 """ 
                 SELECT
                     ep.client_id,
+                    ep.report_period_id,
                     ep.impressions,
                     ep.reach,
                     ep.likes,
@@ -311,15 +392,16 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
                 }
             return {
                 "success": True,
+                "report_period_id": str(row[1]),
                 "Engagement Performance": {
                     "client_id": str(row[0]),
-                    "impressions": to_number(row[1]),
-                    "reach": to_number(row[2]),
-                    "likes": to_number(row[3]),
-                    "comments": to_number(row[4]),
-                    "shares": to_number(row[5]),
-                    "total_engagement":to_number(row[6]),
-                    "engagement_rate":to_number(row[7])
+                    "impressions": to_number(row[2]),
+                    "reach": to_number(row[3]),
+                    "likes": to_number(row[4]),
+                    "comments": to_number(row[5]),
+                    "shares": to_number(row[6]),
+                    "total_engagement": to_number(row[7]),
+                    "engagement_rate": to_number(row[8]),
                 }
             }
     except Exception as e:
@@ -331,6 +413,86 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
     finally:
         conn.close()
 
+@tool
+def retrieve_engagement_performance_history(
+    client_code: str,
+    current_report_period_id: str,
+):
+    """
+    Retrieve historical engagement performance data before
+    the current report period.
+    """
+
+    conn = get_connection()
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    ep.client_id,
+                    ep.report_period_id,
+                    ep.impressions,
+                    ep.reach,
+                    ep.likes,
+                    ep.comments,
+                    ep.shares,
+                    ep.total_engagement,
+                    ep.engagement_rate
+                FROM facebook_reports ep
+                INNER JOIN clients c
+                    ON c.id = ep.client_id
+                INNER JOIN report_periods rp
+                    ON rp.id = ep.report_period_id
+                WHERE
+                    c.client_code = %s
+                    AND rp.period_end < (
+                        SELECT period_end
+                        FROM report_periods
+                        WHERE id = %s
+                    )
+                ORDER BY rp.period_end DESC;
+                """,
+                (
+                    client_code,
+                    current_report_period_id,
+                ),
+            )
+
+            rows = cursor.fetchall()
+
+            if not rows:
+                return {
+                    "success": False,
+                    "message": "Historical Engagement Performance not found"
+                }
+
+            return {
+                "success": True,
+                "Engagement Performance": [
+                    {
+                        "client_id": str(row[0]),
+                        "report_period_id": str(row[1]),
+                        "impressions": to_number(row[2]),
+                        "reach": to_number(row[3]),
+                        "likes": to_number(row[4]),
+                        "comments": to_number(row[5]),
+                        "shares": to_number(row[6]),
+                        "total_engagement": to_number(row[7]),
+                        "engagement_rate": to_number(row[8]),
+                    }
+                    for row in rows
+                ]
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+    finally:
+        conn.close()
 @tool
 def retrieve_top_performing_content(client_code: str, report_date: str, platform: str):
     """

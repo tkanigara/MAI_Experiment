@@ -15,11 +15,14 @@ def database_url() -> str:
         return configured.replace("postgresql+psycopg://", "postgresql://", 1)
 
     host = os.getenv("POSTGRES_HOST", "localhost")
-    port = os.getenv("POSTGRES_PORT", "55432")
+    port = os.getenv("POSTGRES_PORT", "15432")
     database = os.getenv("POSTGRES_DB", "mai_socmed_report")
     user = os.getenv("POSTGRES_USER", "mai_user")
     password = os.getenv("POSTGRES_PASSWORD", "mai_password")
     return f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 def get_connection():
+    print("DATABASE_URL =", os.getenv("DATABASE_URL"))
+    print("POSTGRES_PORT =", os.getenv("POSTGRES_PORT"))
+    print("Final URL =", database_url())
     return psycopg.connect(database_url())

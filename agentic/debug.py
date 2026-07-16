@@ -1,17 +1,34 @@
-from tools.retrieva_ig_data import retrieve_all_content, retrieve_top_performing_content
+from pprint import pprint
 
-result = retrieve_all_content.invoke({
-    "client_code": "mai001",
-    "report_date": "2026-06-08",
-    "platform": "instagram"
-})
+from tools.retrieval_fb_data import (
+    retrieve_engagement_performance,
+    retrieve_engagement_performance_history,
+    retrieve_followers_growth_history,
+    retrieve_followers_growth
+)
 
-print(f"retrieval All content{result}\n")
+client_code = "mai001"
+report_date = "2026-07-08"
 
-result_top_performance = retrieve_top_performing_content.invoke({
-    "client_code": "mai001",
-    "report_date": "2026-06-08",
-    "platform": "instagram"
-})
+# Current Period
+current = retrieve_followers_growth.invoke(
+    {
+        "client_code": client_code,
+        "report_date": report_date,
+    }
+)
 
-print(f"retrieval top performing content{result_top_performance}\n")
+print("===== CURRENT =====")
+pprint(current)
+
+if current["success"]:
+
+    history = retrieve_followers_growth_history.invoke(
+        {
+            "client_code": client_code,
+            "current_report_period_id": current["report_period_id"],
+        }
+    )
+
+    print("\n===== HISTORY =====")
+    pprint(history)
