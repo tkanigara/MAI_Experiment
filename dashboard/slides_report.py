@@ -1364,10 +1364,19 @@ def apply_report_insights(mapping: dict, insight_rows: list[dict]) -> None:
         "followers_growth_analysis": (
             "FOLLOWERS_GROWTH_TEXT",
             "INSIGHT_FOLLOWERS_GROWTH_TEXT",
+            "SUBSCRIBER_GROWTH_TEXT",
             "SUMMARY_POINT_3",
         ),
-        "growth_performance_analysis": ("REACH_INSIGHT_SUMMARY", "SUMMARY_POINT_4"),
+        "growth_performance_analysis": (
+            "ENGAGEMENT_TREND_TEXT",
+            "REACH_INSIGHT_SUMMARY",
+            "SUMMARY_POINT_4",
+        ),
         "top_content_performance": ("TOP_CONTENT_SUCCESS_DRIVER",),
+        "competitor_analysis": (
+            "COMPETITOR_STRATEGY_INSIGHT",
+            "BENCHMARK_NOTE",
+        ),
         "key_summary": ("KEY_SUMMARY", "KEY_SUMMARY_TEXT"),
     }
 
@@ -1392,6 +1401,17 @@ def apply_report_insights(mapping: dict, insight_rows: list[dict]) -> None:
             continue
         for suffix in platform_targets.get(insight_key, ()):
             mapping[placeholder(f"{prefix}_{suffix}")] = insight_text
+            # The Instagram section of the template still contains legacy,
+            # unprefixed insight placeholders alongside the newer IG_* names.
+            if prefix == "IG" and suffix in {
+                "FOLLOWERS_GROWTH_TEXT",
+                "INSIGHT_FOLLOWERS_GROWTH_TEXT",
+                "ENGAGEMENT_TREND_TEXT",
+                "BENCHMARK_NOTE",
+                "TOP_CONTENT_SUCCESS_DRIVER",
+                "COMPETITOR_STRATEGY_INSIGHT",
+            }:
+                mapping[placeholder(suffix)] = insight_text
 
 
 def split_action_plan(action_plan: str, limit: int = 3) -> list[str]:
