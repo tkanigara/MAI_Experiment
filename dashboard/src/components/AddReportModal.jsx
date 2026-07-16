@@ -155,7 +155,7 @@ export default function AddReportModal({
       </div>
       <div className="tabs">
         <button className={`tab ${tab === "csv" ? "active" : ""}`} onClick={() => setTab("csv")} type="button">
-          CSV Files ({uploadedCount}/7)
+          CSV Files ({uploadedCount}/{CSV_TYPES.length})
         </button>
         <button className={`tab ${tab === "kpi" ? "active" : ""}`} onClick={() => setTab("kpi")} type="button">
           KPI Targets
@@ -166,7 +166,7 @@ export default function AddReportModal({
           <>
             <div className="csv-action-bar">
               <div>
-                <strong>{uploadedCount} of 7 CSV files selected</strong>
+                <strong>{uploadedCount} of {CSV_TYPES.length} CSV files selected</strong>
                 <span>{uploadedCount ? "Ready to save selected files into the database." : "Choose CSV files first."}</span>
               </div>
               <button
@@ -179,7 +179,7 @@ export default function AddReportModal({
               </button>
             </div>
             <div className="upload-list">
-              {CSV_TYPES.map(({ key, title, description }) => {
+              {CSV_TYPES.map(({ key, title, description, optional }) => {
                 const result = importResult?.files?.find((item) => item.slot === key);
                 const hasWarning = (result?.warnings || []).length > 0;
                 return (
@@ -206,7 +206,7 @@ export default function AddReportModal({
                       )}
                     </div>
                     <StatusBadge
-                      text={files[key] ? (hasWarning ? "Partial" : "Ready") : "Required"}
+                      text={files[key] ? (hasWarning ? "Partial" : "Ready") : (optional ? "Optional" : "Required")}
                       state={files[key] ? (hasWarning ? "partial" : "ready") : "partial"}
                     />
                     <label className="file-button">
@@ -235,7 +235,7 @@ export default function AddReportModal({
                   {importResult.summary.platform_reports
                     ? `${Object.keys(importResult.summary.platform_reports).length} platform reports updated. `
                     : ""}
-                  {importResult.summary.competitor_rows || 0} competitor rows stored.
+                  {importResult.summary.competitor_rows || 0} competitor profiles and {importResult.summary.competitor_content_rows || 0} competitor posts stored.
                 </p>
               </section>
             )}

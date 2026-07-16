@@ -22,7 +22,4 @@ def database_url() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 def get_connection():
-    print("DATABASE_URL =", os.getenv("DATABASE_URL"))
-    print("POSTGRES_PORT =", os.getenv("POSTGRES_PORT"))
-    print("Final URL =", database_url())
-    return psycopg.connect(database_url())
+    return psycopg.connect(database_url(), connect_timeout=10)

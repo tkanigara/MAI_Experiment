@@ -111,6 +111,12 @@ PLATFORM_KPI_METRICS = {
     "tiktok": {"followers", "likes", "views"},
     "youtube": {"subscribers", "engagement", "views"},
 }
+CUMULATIVE_KPI_FIELDS = {
+    "instagram": {"engagement": "total_engagement", "reach": "reach"},
+    "facebook": {"engagement": "total_engagement", "reach": "reach"},
+    "tiktok": {"likes": "likes", "views": "total_views"},
+    "youtube": {"engagement": "total_engagement", "views": "total_views"},
+}
 CSV_IMPORT_SLOTS = {
     "account": {
         "label": "Account Data",
@@ -143,6 +149,13 @@ CSV_IMPORT_SLOTS = {
             "Image Link",
         ],
         "important_columns": ["Follower", "Number of posts", "Engagement"],
+    },
+    "competitor_content": {
+        "label": "Competitor Content",
+        "platform": None,
+        "optional": True,
+        "required_columns": ["Date", "Profile", "Message", "Post-ID", "Link", "Image Link"],
+        "important_columns": ["Reactions, Comments & Shares", "Engagement", "Number of Likes"],
     },
     "ig_post": {
         "label": "Instagram Posts",
@@ -288,9 +301,16 @@ def engagement_percent(value):
 def parse_post_date(value):
     if not value:
         return None
-    for fmt in ("%d/%m/%Y, %H:%M", "%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+    normalized = str(value).replace("\u202f", " ").strip()
+    for fmt in (
+        "%d/%m/%Y, %H:%M",
+        "%d/%m/%Y %H:%M",
+        "%m/%d/%y, %I:%M %p",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
         try:
-            return datetime.strptime(value.strip(), fmt)
+            return datetime.strptime(normalized, fmt)
         except ValueError:
             continue
     return None
@@ -346,7 +366,35 @@ def platform_from_row(row: dict):
     return SOCIAL_NETWORK_PLATFORMS.get(str(row.get("Social network", "")).strip().upper())
 
 
-def post_json(row: dict, content_type: str):
+def platform_from_content_row(row: dict):
+    platform = platform_from_row(row)
+    if platform:
+        return platform
+    link = str(row.get("Link", "")).lower()
+    if "instagram." in link:
+        return "instagram"
+    if "facebook." in link or "fb.watch" in link:
+        return "facebook"
+    if "tiktok." in link:
+        return "tiktok"
+    if "youtube." in link or "youtu.be" in link:
+        return "youtube"
+    return None
+
+
+def content_type_from_row(row: dict, platform: str, fallback: str) -> str:
+    if fallback == "story" or number_from(row, "Number of Stories"):
+        return "story"
+    if number_from(row, "Number of Carousels/Albums"):
+        return "carousel"
+    if number_from(row, "Number of Reels/Shorts"):
+        return "short" if platform == "youtube" else "reel"
+    if number_from(row, "Number of Image Posts"):
+        return "image"
+    return fallback
+
+
+def post_json(row: dict, content_type: str, platform: str):
     total_engagement = parse_number(row.get("Reactions, Comments & Shares"))
     if total_engagement is None:
         total_engagement = numeric(row, "Number of Likes") + numeric(row, "Number of comments") + numeric(row, "Story shares")
@@ -356,7 +404,7 @@ def post_json(row: dict, content_type: str):
         "caption": row.get("Message") or "-",
         "permalink": row.get("Link"),
         "image_url": row.get("Image Link"),
-        "content_type": content_type,
+        "content_type": content_type_from_row(row, platform, content_type),
         "likes": numeric(row, "Number of Likes"),
         "comments": numeric(row, "Number of comments"),
         "shares": numeric(row, "Story shares"),
@@ -367,14 +415,18 @@ def post_json(row: dict, content_type: str):
     }
 
 
-def summarize_posts(rows: list[dict], content_type: str):
+def summarize_posts(rows: list[dict], content_type: str, platform: str):
     summary_rows = [row for row in rows if str(row.get("Post-ID", "")).strip().upper() == "SUMME"]
     content_rows = [row for row in rows if str(row.get("Post-ID", "")).strip().upper() != "SUMME"]
-    posts = [post_json(row, content_type) for row in content_rows]
+    posts = [post_json(row, content_type, platform) for row in content_rows]
+    content_type_counts = {}
+    for post in posts:
+        post_type = post.get("content_type") or content_type
+        content_type_counts[post_type] = content_type_counts.get(post_type, 0) + 1
     posts.sort(key=lambda item: item.get("total_engagement") or 0, reverse=True)
     low_posts = sorted(posts, key=lambda item: item.get("total_engagement") or 0)
     if summary_rows:
-        summary_post = post_json(summary_rows[0], content_type)
+        summary_post = post_json(summary_rows[0], content_type, platform)
         totals = {
             "likes": summary_post.get("likes") or 0,
             "comments": summary_post.get("comments") or 0,
@@ -394,7 +446,13 @@ def summarize_posts(rows: list[dict], content_type: str):
             "engagement": sum((item.get("total_engagement") or 0) for item in posts),
             "count": len(posts),
         }
-    return {"top_posts": posts[:5], "low_posts": low_posts[:5], "totals": totals, "raw_posts": posts}
+    return {
+        "top_posts": posts[:5],
+        "low_posts": low_posts[:5],
+        "totals": totals,
+        "raw_posts": posts,
+        "content_type_counts": content_type_counts,
+    }
 
 
 class DashboardRepository:
@@ -637,7 +695,7 @@ class DashboardRepository:
         for row in rows:
             uploaded_files = int(row["uploaded_files"] or 0)
             platform_reports = int(row["platform_reports"] or 0)
-            status = f"{uploaded_files} of 7 files uploaded" if uploaded_files else f"{platform_reports} platform reports"
+            status = f"{uploaded_files} of 8 files uploaded" if uploaded_files else f"{platform_reports} platform reports"
             months.append(
                 {
                     "id": row["id"],
@@ -890,6 +948,13 @@ class DashboardRepository:
                 },
             ).mappings().one()
             synced = self.sync_kpi_results(conn, payload, row["id"], metric_name)
+            synced += self.sync_yearly_kpi_results(
+                conn,
+                payload["client_id"],
+                platform,
+                metric_name,
+                int(payload["period_year"]),
+            )
             result = row_dict(row)
             result["synced_results"] = synced
             return result
@@ -942,6 +1007,70 @@ class DashboardRepository:
         )
         return result.rowcount
 
+    def sync_yearly_kpi_results(self, conn, client_id, platform, metric_name, period_year):
+        period_rows = conn.execute(
+            text(
+                """
+                SELECT kr.report_period_id
+                FROM kpi_results kr
+                JOIN report_periods rp ON rp.id = kr.report_period_id
+                WHERE kr.client_id = :client_id
+                  AND kr.platform = :platform
+                  AND kr.metric_name = :metric_name
+                  AND EXTRACT(YEAR FROM rp.period_start) = :period_year
+                """
+            ),
+            {
+                "client_id": client_id,
+                "platform": platform,
+                "metric_name": metric_name,
+                "period_year": period_year,
+            },
+        ).mappings()
+        count = 0
+        for row in period_rows:
+            target = self.effective_kpi_target(
+                conn,
+                client_id,
+                platform,
+                metric_name,
+                row["report_period_id"],
+            )
+            result = conn.execute(
+                text(
+                    """
+                    UPDATE kpi_results
+                    SET
+                        kpi_target_id = :target_id,
+                        target_year = :target_year,
+                        unit = COALESCE(:unit, unit),
+                        achievement_year = CASE
+                            WHEN CAST(:target_year AS NUMERIC) IS NOT NULL
+                             AND CAST(:target_year AS NUMERIC) <> 0
+                             AND actual_year IS NOT NULL
+                            THEN ROUND((actual_year / CAST(:target_year AS NUMERIC)) * 100, 2)
+                            ELSE NULL
+                        END,
+                        updated_at = now()
+                    WHERE client_id = :client_id
+                      AND platform = :platform
+                      AND metric_name = :metric_name
+                      AND report_period_id = :period_id
+                    """
+                ),
+                {
+                    "target_id": target.get("id"),
+                    "target_year": target.get("target_year"),
+                    "unit": target.get("unit"),
+                    "client_id": client_id,
+                    "platform": platform,
+                    "metric_name": metric_name,
+                    "period_id": row["report_period_id"],
+                },
+            )
+            count += result.rowcount
+        return count
+
     def import_csv_report(self, payload: dict, files: dict):
         client_id = payload.get("client_id")
         month_slug = payload.get("month_slug") or "june-2026"
@@ -954,14 +1083,15 @@ class DashboardRepository:
         for slot, spec in CSV_IMPORT_SLOTS.items():
             file_item = files.get(slot)
             if file_item is None or not getattr(file_item, "filename", ""):
-                missing_files.append(spec["label"])
+                if not spec.get("optional"):
+                    missing_files.append(spec["label"])
                 file_results.append(
                     {
                         "slot": slot,
                         "label": spec["label"],
                         "filename": None,
                         "rows": 0,
-                        "warnings": ["File was not uploaded."],
+                        "warnings": [] if spec.get("optional") else ["File was not uploaded."],
                     }
                 )
                 continue
@@ -987,12 +1117,12 @@ class DashboardRepository:
             self.store_raw_csv_rows(conn, run_id, client_id, profile_ids, parsed_files)
             post_summaries = {
                 "instagram": self.combine_post_summaries(
-                    summarize_posts(parsed_files.get("ig_post", {}).get("rows", []), "post"),
-                    summarize_posts(parsed_files.get("ig_story", {}).get("rows", []), "story"),
+                    summarize_posts(parsed_files.get("ig_post", {}).get("rows", []), "post", "instagram"),
+                    summarize_posts(parsed_files.get("ig_story", {}).get("rows", []), "story", "instagram"),
                 ),
-                "facebook": summarize_posts(parsed_files.get("fb_post", {}).get("rows", []), "post"),
-                "tiktok": summarize_posts(parsed_files.get("tt_post", {}).get("rows", []), "video"),
-                "youtube": summarize_posts(parsed_files.get("yt_post", {}).get("rows", []), "video"),
+                "facebook": summarize_posts(parsed_files.get("fb_post", {}).get("rows", []), "post", "facebook"),
+                "tiktok": summarize_posts(parsed_files.get("tt_post", {}).get("rows", []), "video", "tiktok"),
+                "youtube": summarize_posts(parsed_files.get("yt_post", {}).get("rows", []), "video", "youtube"),
             }
             reports = self.upsert_platform_reports(
                 conn,
@@ -1008,6 +1138,12 @@ class DashboardRepository:
                 client_id,
                 period_id,
                 parsed_files.get("competitor", {}).get("rows", []),
+            )
+            competitor_content_count = self.upsert_competitor_content(
+                conn,
+                client_id,
+                period_id,
+                parsed_files.get("competitor_content", {}).get("rows", []),
             )
             kpi_count = self.upsert_kpi_results_from_reports(conn, client_id, period_id, reports)
             conn.execute(
@@ -1025,6 +1161,7 @@ class DashboardRepository:
                 "warnings": warnings,
                 "platform_reports": reports,
                 "competitor_rows": competitor_count,
+                "competitor_content_rows": competitor_content_count,
                 "kpi_results": kpi_count,
             },
             "files": file_results,
@@ -1162,12 +1299,17 @@ class DashboardRepository:
                 )
 
     def combine_post_summaries(self, post_summary, story_summary):
+        content_type_counts = dict(post_summary.get("content_type_counts") or {})
+        for content_type, count in (story_summary.get("content_type_counts") or {}).items():
+            content_type_counts[content_type] = content_type_counts.get(content_type, 0) + count
         combined = {
             "top_posts": post_summary["top_posts"],
             "low_posts": post_summary["low_posts"],
             "raw_posts": post_summary["raw_posts"] + story_summary["raw_posts"],
             "totals": {},
             "story_count": story_summary["totals"]["count"],
+            "post_count": post_summary["totals"]["count"],
+            "content_type_counts": content_type_counts,
         }
         for key in ("likes", "comments", "shares", "reach", "views", "engagement", "count"):
             combined["totals"][key] = post_summary["totals"].get(key, 0) + story_summary["totals"].get(key, 0)
@@ -1184,6 +1326,16 @@ class DashboardRepository:
             totals = summary.get("totals", {})
             content_uploaded = any(slot in parsed_files for slot in PLATFORM_CONTENT_SLOTS.get(platform, ()))
             content_has_rows = bool(summary.get("raw_posts"))
+            content_type_counts = summary.get("content_type_counts") or {}
+            post_slot = {
+                "instagram": "ig_post",
+                "facebook": "fb_post",
+                "tiktok": "tt_post",
+                "youtube": "yt_post",
+            }[platform]
+            posts_uploaded = post_slot in parsed_files
+            stories_uploaded = platform == "instagram" and "ig_story" in parsed_files
+            uploaded_post_count = summary.get("post_count", totals.get("count"))
             account_likes = number_from(account or {}, "Number of Likes")
             account_comments = number_from(account or {}, "Number of comments")
             total_engagement = totals.get("engagement") if content_uploaded else None
@@ -1237,7 +1389,11 @@ class DashboardRepository:
                     "Subscribers lost",
                     "Lost Subscribers",
                 ),
-                "posts": parse_number((account or {}).get("Number of posts")) or (totals.get("count") if content_uploaded else None),
+                "posts": (
+                    uploaded_post_count
+                    if posts_uploaded
+                    else parse_number((account or {}).get("Number of posts"))
+                ),
                 "engagement_rate": engagement_percent((account or {}).get("Engagement")),
                 "likes": account_likes if account_likes is not None else (totals.get("likes") if content_uploaded else None),
                 "comments": account_comments if account_comments is not None else (totals.get("comments") if content_uploaded else None),
@@ -1245,7 +1401,17 @@ class DashboardRepository:
                 "reach": totals.get("reach") if content_uploaded else None,
                 "views": totals.get("views") if content_uploaded else None,
                 "engagement": total_engagement,
-                "story_posts": summary.get("story_count") if "ig_story" in parsed_files else None,
+                "reels_posts": content_type_counts.get("reel", 0) if posts_uploaded else None,
+                "carousel_posts": content_type_counts.get("carousel", 0) if posts_uploaded else None,
+                "single_posts": content_type_counts.get("image", 0) if posts_uploaded else None,
+                "story_posts": content_type_counts.get("story", 0) if stories_uploaded else None,
+                "video_posts": (
+                    sum(content_type_counts.get(kind, 0) for kind in ("video", "short"))
+                    if posts_uploaded
+                    else None
+                ),
+                "shorts_posts": content_type_counts.get("short", 0) if posts_uploaded else None,
+                "long_form_posts": content_type_counts.get("video", 0) if posts_uploaded else None,
                 "content_has_rows": content_has_rows,
                 "top_posts": json.dumps(summary.get("top_posts") or []) if content_has_rows else None,
                 "low_posts": json.dumps(summary.get("low_posts") or []) if content_has_rows else None,
@@ -1356,14 +1522,16 @@ class DashboardRepository:
                     total_followers, follower_growth, follower_growth_rate,
                     follows, unfollows, reach, impressions, total_engagement,
                     engagement_rate, likes, comments, shares, total_posts,
-                    story_posts, top_posts, low_posts, raw_sections
+                    reels_posts, carousel_posts, single_posts, story_posts,
+                    top_posts, low_posts, raw_sections
                 )
                 VALUES (
                     :client_id, :profile_id, :period_id, 'fanpage_karma_csv',
                     :followers, :follower_growth, :follower_growth_rate,
                     :follows, :unfollows, :reach, :views, :engagement,
                     :engagement_rate, :likes, :comments, :shares, :posts,
-                    :story_posts, CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
+                    :reels_posts, :carousel_posts, :single_posts, :story_posts,
+                    CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
                     CAST(:raw_sections AS JSONB)
                 )
                 ON CONFLICT (client_id, profile_id, report_period_id)
@@ -1381,6 +1549,9 @@ class DashboardRepository:
                     comments = COALESCE(EXCLUDED.comments, {table}.comments),
                     shares = COALESCE(EXCLUDED.shares, {table}.shares),
                     total_posts = COALESCE(EXCLUDED.total_posts, {table}.total_posts),
+                    reels_posts = COALESCE(EXCLUDED.reels_posts, {table}.reels_posts),
+                    carousel_posts = COALESCE(EXCLUDED.carousel_posts, {table}.carousel_posts),
+                    single_posts = COALESCE(EXCLUDED.single_posts, {table}.single_posts),
                     story_posts = COALESCE(EXCLUDED.story_posts, {table}.story_posts),
                     top_posts = CASE WHEN :content_has_rows THEN EXCLUDED.top_posts ELSE {table}.top_posts END,
                     low_posts = CASE WHEN :content_has_rows THEN EXCLUDED.low_posts ELSE {table}.low_posts END,
@@ -1409,7 +1580,7 @@ class DashboardRepository:
                     :followers, :follower_growth, :follower_growth_rate,
                     :follows, :unfollows, :views, :reach, :engagement,
                     :engagement_rate, :likes, :comments, :shares, :posts,
-                    :posts, CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
+                    :video_posts, CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
                     CAST(:raw_sections AS JSONB)
                 )
                 ON CONFLICT (client_id, profile_id, report_period_id)
@@ -1448,14 +1619,16 @@ class DashboardRepository:
                     total_subscribers, subscriber_growth, subscriber_growth_rate,
                     subscribers_lost, total_views, total_engagement,
                     engagement_rate, likes, comments, shares, total_posts,
-                    video_posts, top_posts, low_posts, raw_sections
+                    video_posts, shorts_posts, long_form_posts,
+                    top_posts, low_posts, raw_sections
                 )
                 VALUES (
                     :client_id, :profile_id, :period_id, 'fanpage_karma_csv',
                     :followers, :follower_growth, :follower_growth_rate,
                     :unfollows, :views, :engagement,
                     :engagement_rate, :likes, :comments, :shares, :posts,
-                    :posts, CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
+                    :video_posts, :shorts_posts, :long_form_posts,
+                    CAST(COALESCE(:top_posts, '[]') AS JSONB), CAST(COALESCE(:low_posts, '[]') AS JSONB),
                     CAST(:raw_sections AS JSONB)
                 )
                 ON CONFLICT (client_id, profile_id, report_period_id)
@@ -1472,6 +1645,8 @@ class DashboardRepository:
                     shares = COALESCE(EXCLUDED.shares, {table}.shares),
                     total_posts = COALESCE(EXCLUDED.total_posts, {table}.total_posts),
                     video_posts = COALESCE(EXCLUDED.video_posts, {table}.video_posts),
+                    shorts_posts = COALESCE(EXCLUDED.shorts_posts, {table}.shorts_posts),
+                    long_form_posts = COALESCE(EXCLUDED.long_form_posts, {table}.long_form_posts),
                     top_posts = CASE WHEN :content_has_rows THEN EXCLUDED.top_posts ELSE {table}.top_posts END,
                     low_posts = CASE WHEN :content_has_rows THEN EXCLUDED.low_posts ELSE {table}.low_posts END,
                     raw_sections = EXCLUDED.raw_sections,
@@ -1539,13 +1714,15 @@ class DashboardRepository:
                     INSERT INTO competitor_profile_reports (
                         client_id, competitor_id, competitor_profile_id,
                         report_period_id, platform, source, profile_name,
-                        total_followers, total_posts, total_engagement,
+                        total_followers, follower_growth, follower_growth_rate,
+                        total_posts, total_engagement,
                         engagement_rate, profile_url, image_url, raw_metrics
                     )
                     VALUES (
                         :client_id, :competitor_id, :profile_id,
                         :period_id, :platform, 'fanpage_karma_csv', :profile_name,
-                        :followers, :posts, :engagement,
+                        :followers, :follower_growth, :follower_growth_rate,
+                        :posts, :engagement,
                         :engagement_rate, :profile_url, :image_url, CAST(:raw_metrics AS JSONB)
                     )
                     ON CONFLICT (client_id, platform, report_period_id, profile_name)
@@ -1553,6 +1730,14 @@ class DashboardRepository:
                         competitor_id = EXCLUDED.competitor_id,
                         competitor_profile_id = EXCLUDED.competitor_profile_id,
                         total_followers = EXCLUDED.total_followers,
+                        follower_growth = COALESCE(
+                            EXCLUDED.follower_growth,
+                            competitor_profile_reports.follower_growth
+                        ),
+                        follower_growth_rate = COALESCE(
+                            EXCLUDED.follower_growth_rate,
+                            competitor_profile_reports.follower_growth_rate
+                        ),
                         total_posts = EXCLUDED.total_posts,
                         total_engagement = EXCLUDED.total_engagement,
                         engagement_rate = EXCLUDED.engagement_rate,
@@ -1570,6 +1755,16 @@ class DashboardRepository:
                     "platform": platform,
                     "profile_name": row.get("Profile"),
                     "followers": parse_number(row.get("Follower")),
+                    "follower_growth": number_from(
+                        row,
+                        "Follower Growth (absolute)",
+                        "Follower Growth Absolute",
+                    ),
+                    "follower_growth_rate": percent_from(
+                        row,
+                        "Follower Growth (in %)",
+                        "Follower Growth Rate",
+                    ),
                     "posts": parse_number(row.get("Number of posts")),
                     "engagement": numeric(row, "Number of Likes") + numeric(row, "Number of comments"),
                     "engagement_rate": engagement_percent(row.get("Engagement")),
@@ -1580,6 +1775,158 @@ class DashboardRepository:
             )
             count += 1
         return count
+
+    def upsert_competitor_content(self, conn, client_id, period_id, rows):
+        content_rows = []
+        for row in rows:
+            post_id = str(row.get("Post-ID", "")).strip()
+            if not post_id or post_id.upper() == "SUMME":
+                continue
+            platform = platform_from_content_row(row)
+            profile_name = str(row.get("Profile", "")).strip()
+            if not platform or not profile_name:
+                continue
+            fallback_type = "post" if platform in {"instagram", "facebook"} else "video"
+            post = post_json(row, fallback_type, platform)
+            content_rows.append(
+                {
+                    "platform": platform,
+                    "profile_name": profile_name,
+                    "source_profile_id": str(row.get("Profile-ID", "")).strip() or None,
+                    "post": post,
+                    "raw_row": row,
+                }
+            )
+
+        if not content_rows:
+            return 0
+
+        # A new export is the complete source of truth for this period's competitor posts.
+        conn.execute(
+            text(
+                """
+                DELETE FROM competitor_content_reports
+                WHERE client_id = :client_id
+                  AND report_period_id = :period_id
+                """
+            ),
+            {"client_id": client_id, "period_id": period_id},
+        )
+
+        content_rows.sort(
+            key=lambda item: (
+                item["platform"],
+                item["profile_name"].casefold(),
+                -(item["post"].get("total_engagement") or 0),
+            )
+        )
+        ranks = {}
+        for item in content_rows:
+            platform = item["platform"]
+            profile_name = item["profile_name"]
+            post = item["post"]
+            rank_key = (platform, profile_name.casefold())
+            ranks[rank_key] = ranks.get(rank_key, 0) + 1
+            content_rank = ranks[rank_key]
+
+            competitor = conn.execute(
+                text(
+                    """
+                    INSERT INTO client_competitors (client_id, competitor_name, metadata)
+                    VALUES (:client_id, :name, CAST(:metadata AS JSONB))
+                    ON CONFLICT (client_id, competitor_name)
+                    DO UPDATE SET metadata = EXCLUDED.metadata, is_active = TRUE, updated_at = now()
+                    RETURNING id
+                    """
+                ),
+                {
+                    "client_id": client_id,
+                    "name": profile_name,
+                    "metadata": json.dumps({"source": "competitor_content_csv"}),
+                },
+            ).mappings().one()
+            profile = conn.execute(
+                text(
+                    """
+                    INSERT INTO competitor_social_profiles (
+                        competitor_id, platform, source, source_profile_id,
+                        profile_name, profile_url, image_url, raw_profile
+                    )
+                    VALUES (
+                        :competitor_id, :platform, 'fanpage_karma', :source_profile_id,
+                        :profile_name, :profile_url, :image_url, CAST(:raw_profile AS JSONB)
+                    )
+                    ON CONFLICT (competitor_id, platform, source_profile_id)
+                    DO UPDATE SET
+                        profile_name = EXCLUDED.profile_name,
+                        profile_url = COALESCE(EXCLUDED.profile_url, competitor_social_profiles.profile_url),
+                        image_url = COALESCE(EXCLUDED.image_url, competitor_social_profiles.image_url),
+                        raw_profile = EXCLUDED.raw_profile,
+                        is_active = TRUE,
+                        updated_at = now()
+                    RETURNING id
+                    """
+                ),
+                {
+                    "competitor_id": competitor["id"],
+                    "platform": platform,
+                    "source_profile_id": item["source_profile_id"],
+                    "profile_name": profile_name,
+                    "profile_url": post.get("permalink"),
+                    "image_url": post.get("image_url"),
+                    "raw_profile": json.dumps(item["raw_row"]),
+                },
+            ).mappings().one()
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO competitor_content_reports (
+                        client_id, competitor_id, competitor_profile_id,
+                        report_period_id, platform, source, profile_name,
+                        post_id, published_at, caption, permalink, image_url,
+                        content_type, content_rank, performance_bucket,
+                        likes, comments, shares, saves, reposts, reactions,
+                        views, reach, total_engagement, engagement_rate, raw_metrics
+                    )
+                    VALUES (
+                        :client_id, :competitor_id, :competitor_profile_id,
+                        :period_id, :platform, 'fanpage_karma_csv', :profile_name,
+                        :post_id, :published_at, :caption, :permalink, :image_url,
+                        :content_type, :content_rank, :performance_bucket,
+                        :likes, :comments, :shares, :saves, :reposts, :reactions,
+                        :views, :reach, :total_engagement, :engagement_rate, CAST(:raw_metrics AS JSONB)
+                    )
+                    """
+                ),
+                {
+                    "client_id": client_id,
+                    "competitor_id": competitor["id"],
+                    "competitor_profile_id": profile["id"],
+                    "period_id": period_id,
+                    "platform": platform,
+                    "profile_name": profile_name,
+                    "post_id": post.get("post_id"),
+                    "published_at": post.get("published_at"),
+                    "caption": post.get("caption"),
+                    "permalink": post.get("permalink"),
+                    "image_url": post.get("image_url"),
+                    "content_type": post.get("content_type"),
+                    "content_rank": content_rank,
+                    "performance_bucket": "best_competitor" if content_rank == 1 else "top",
+                    "likes": post.get("likes"),
+                    "comments": post.get("comments"),
+                    "shares": post.get("shares"),
+                    "saves": post.get("saves"),
+                    "reposts": post.get("reposts"),
+                    "reactions": post.get("reactions"),
+                    "views": post.get("views"),
+                    "reach": post.get("reach"),
+                    "total_engagement": post.get("total_engagement"),
+                    "engagement_rate": post.get("engagement_rate"),
+                    "raw_metrics": json.dumps(item["raw_row"]),
+                },
+            )
+        return len(content_rows)
 
     def upsert_kpi_results_from_reports(self, conn, client_id, period_id, reports):
         count = 0
@@ -1592,31 +1939,26 @@ class DashboardRepository:
                 "views": report.get("views"),
                 "likes": report.get("likes"),
             }
+            cumulative_actuals = self.kpi_year_to_date_actuals(
+                conn,
+                client_id,
+                period_id,
+                platform,
+            )
             for metric_name in PLATFORM_KPI_METRICS[platform]:
                 actual = metric_values.get(metric_name)
                 if actual is None:
                     continue
-                target = conn.execute(
-                    text(
-                        """
-                        SELECT id, target_month, target_year, unit
-                        FROM kpi_targets
-                        WHERE client_id = :client_id
-                          AND platform = :platform
-                          AND metric_name = :metric_name
-                          AND period_year = EXTRACT(YEAR FROM (SELECT period_start FROM report_periods WHERE id = :period_id))
-                          AND period_month = EXTRACT(MONTH FROM (SELECT period_start FROM report_periods WHERE id = :period_id))
-                        """
-                    ),
-                    {
-                        "client_id": client_id,
-                        "platform": platform,
-                        "metric_name": metric_name,
-                        "period_id": period_id,
-                    },
-                ).mappings().first()
-                target_month = target["target_month"] if target else None
-                target_year = target["target_year"] if target else None
+                actual_year = cumulative_actuals.get(metric_name, actual)
+                target = self.effective_kpi_target(
+                    conn,
+                    client_id,
+                    platform,
+                    metric_name,
+                    period_id,
+                )
+                target_month = target.get("target_month")
+                target_year = target.get("target_year")
                 conn.execute(
                     text(
                         """
@@ -1628,13 +1970,13 @@ class DashboardRepository:
                         )
                         VALUES (
                             :client_id, :profile_id, :period_id, :target_id,
-                            :platform, :metric_name, :actual, :actual,
+                            :platform, :metric_name, :actual, :actual_year,
                             :target_month, :target_year,
                             CASE WHEN CAST(:target_month AS NUMERIC) IS NOT NULL AND CAST(:target_month AS NUMERIC) <> 0
                                  THEN ROUND((CAST(:actual AS NUMERIC) / CAST(:target_month AS NUMERIC)) * 100, 2)
                                  ELSE NULL END,
                             CASE WHEN CAST(:target_year AS NUMERIC) IS NOT NULL AND CAST(:target_year AS NUMERIC) <> 0
-                                 THEN ROUND((CAST(:actual AS NUMERIC) / CAST(:target_year AS NUMERIC)) * 100, 2)
+                                 THEN ROUND((CAST(:actual_year AS NUMERIC) / CAST(:target_year AS NUMERIC)) * 100, 2)
                                  ELSE NULL END,
                             :unit, :source_table, :source_id
                         )
@@ -1658,19 +2000,127 @@ class DashboardRepository:
                         "client_id": client_id,
                         "profile_id": report.get("profile_id"),
                         "period_id": period_id,
-                        "target_id": target["id"] if target else None,
+                        "target_id": target.get("id"),
                         "platform": platform,
                         "metric_name": metric_name,
                         "actual": actual,
+                        "actual_year": actual_year,
                         "target_month": target_month,
                         "target_year": target_year,
-                        "unit": target["unit"] if target else None,
+                        "unit": target.get("unit"),
                         "source_table": PLATFORM_TABLES[platform],
                         "source_id": report.get("report_id"),
                     },
                 )
                 count += 1
         return count
+
+    def effective_kpi_target(self, conn, client_id, platform, metric_name, period_id):
+        row = conn.execute(
+            text(
+                """
+                WITH selected_period AS (
+                    SELECT period_start
+                    FROM report_periods
+                    WHERE id = :period_id
+                      AND client_id = :client_id
+                ),
+                current_month AS (
+                    SELECT kt.id, kt.target_month, kt.target_year, kt.unit
+                    FROM kpi_targets kt
+                    CROSS JOIN selected_period selected
+                    WHERE kt.client_id = :client_id
+                      AND kt.platform = :platform
+                      AND kt.metric_name = :metric_name
+                      AND kt.period_year = EXTRACT(YEAR FROM selected.period_start)
+                      AND kt.period_month = EXTRACT(MONTH FROM selected.period_start)
+                ),
+                latest_yearly AS (
+                    SELECT kt.id, kt.target_year, kt.unit
+                    FROM kpi_targets kt
+                    CROSS JOIN selected_period selected
+                    WHERE kt.client_id = :client_id
+                      AND kt.platform = :platform
+                      AND kt.metric_name = :metric_name
+                      AND kt.period_year = EXTRACT(YEAR FROM selected.period_start)
+                      AND kt.period_month <= EXTRACT(MONTH FROM selected.period_start)
+                      AND kt.target_year IS NOT NULL
+                    ORDER BY kt.period_month DESC
+                    LIMIT 1
+                )
+                SELECT
+                    COALESCE(current_month.id, latest_yearly.id) AS id,
+                    current_month.target_month,
+                    COALESCE(current_month.target_year, latest_yearly.target_year) AS target_year,
+                    COALESCE(current_month.unit, latest_yearly.unit) AS unit
+                FROM (SELECT 1) anchor
+                LEFT JOIN current_month ON TRUE
+                LEFT JOIN latest_yearly ON TRUE
+                """
+            ),
+            {
+                "client_id": client_id,
+                "platform": platform,
+                "metric_name": metric_name,
+                "period_id": period_id,
+            },
+        ).mappings().one()
+        return dict(row)
+
+    def kpi_year_to_date_actuals(self, conn, client_id, period_id, platform):
+        metric_fields = CUMULATIVE_KPI_FIELDS.get(platform, {})
+        if not metric_fields:
+            return {}
+        table = PLATFORM_TABLES[platform]
+        aggregate_columns = ", ".join(
+            f"SUM({field}) FILTER (WHERE report_rank = 1) AS {metric_name}"
+            for metric_name, field in metric_fields.items()
+        )
+        row = conn.execute(
+            text(
+                f"""
+                WITH selected_period AS (
+                    SELECT period_start
+                    FROM report_periods
+                    WHERE id = :period_id
+                      AND client_id = :client_id
+                ),
+                ranked_reports AS (
+                    SELECT
+                        r.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY r.report_period_id
+                            ORDER BY
+                                (r.profile_id IS NOT NULL) DESC,
+                                r.updated_at DESC,
+                                r.created_at DESC
+                        ) AS report_rank
+                    FROM {table} r
+                    JOIN report_periods rp ON rp.id = r.report_period_id
+                    CROSS JOIN selected_period selected
+                    WHERE r.client_id = :client_id
+                      AND EXTRACT(YEAR FROM rp.period_start) = EXTRACT(YEAR FROM selected.period_start)
+                      AND rp.period_start <= selected.period_start
+                      AND EXISTS (
+                          SELECT 1
+                          FROM social_content_reports content
+                          WHERE content.client_id = r.client_id
+                            AND content.report_period_id = r.report_period_id
+                            AND content.platform = :platform
+                            AND content.performance_bucket = 'all'
+                      )
+                )
+                SELECT {aggregate_columns}
+                FROM ranked_reports
+                """
+            ),
+            {"client_id": client_id, "period_id": period_id, "platform": platform},
+        ).mappings().one()
+        return {
+            metric_name: row.get(metric_name)
+            for metric_name in metric_fields
+            if row.get(metric_name) is not None
+        }
 
 
 def overview_metrics(platform: str, report: dict | None):
@@ -1745,19 +2195,29 @@ def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], 
     report_period = (report or {}).get("period_start")
     report_year = getattr(report_period, "year", None)
     report_month = getattr(report_period, "month", None)
-    targets_by_metric = {
-        row.get("metric_name"): dict(row)
-        for row in targets or []
-        if report_year is None
-        or (
-            int(row.get("period_year") or 0) == report_year
-            and int(row.get("period_month") or 0) == report_month
-        )
-    }
     result = []
     for metric_name in configured_metrics:
         row = rows_by_metric.get(metric_name) or {"metric_name": metric_name}
-        target = targets_by_metric.get(metric_name) or {}
+        target_candidates = [
+            dict(target)
+            for target in targets or []
+            if target.get("metric_name") == metric_name
+            and (
+                report_year is None
+                or (
+                    int(target.get("period_year") or 0) == report_year
+                    and int(target.get("period_month") or 0) <= report_month
+                )
+            )
+        ]
+        monthly_target = next(
+            (target for target in target_candidates if int(target.get("period_month") or 0) == report_month),
+            {},
+        )
+        yearly_target = next(
+            (target for target in target_candidates if target.get("target_year") is not None),
+            {},
+        )
         actual_month = row.get("actual_month")
         if actual_month is None:
             actual_month = kpi_actual_value(platform, report, metric_name)
@@ -1766,10 +2226,10 @@ def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], 
             actual_year = actual_month
         target_month = row.get("target_month")
         if target_month is None:
-            target_month = target.get("target_month")
+            target_month = monthly_target.get("target_month")
         target_year = row.get("target_year")
         if target_year is None:
-            target_year = target.get("target_year")
+            target_year = monthly_target.get("target_year") or yearly_target.get("target_year")
         achievement_month = row.get("achievement_month")
         if achievement_month is None:
             achievement_month = achievement(actual_month, target_month)
@@ -1786,7 +2246,7 @@ def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], 
                 "target_year": target_year,
                 "achievement_month": achievement_month,
                 "achievement_year": achievement_year,
-                "unit": row.get("unit") or target.get("unit"),
+                "unit": row.get("unit") or monthly_target.get("unit") or yearly_target.get("unit"),
             }
         )
     return result

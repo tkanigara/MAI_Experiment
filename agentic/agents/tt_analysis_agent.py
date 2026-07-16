@@ -105,7 +105,10 @@ def tt_analysis_agent_2nd(state: State) -> State:
 
         historical_foll_growth =  retrieve_followers_growth_history.invoke({
             "client_code": state.Metadata.client_code,
-            "current_period": state.request.report_date.isoformat()
+            "current_report_period_id": (
+                foll_growth.get("report_period_id")
+                or state.Metadata.report_period_id
+            ),
         })
 
         eng_performance = retrieve_engagement_performance.invoke({
@@ -115,7 +118,10 @@ def tt_analysis_agent_2nd(state: State) -> State:
 
         historical_engagement_performance =  retrieve_engagement_performance_history.invoke({
             "client_code": state.Metadata.client_code,
-            "current_period": state.request.report_date.isoformat()
+            "current_report_period_id": (
+                eng_performance.get("report_period_id")
+                or state.Metadata.report_period_id
+            ),
         })
 
         top_content = retrieve_top_performing_content.invoke({
@@ -191,7 +197,7 @@ def tt_analysis_agent_2nd(state: State) -> State:
                 result.get("top_content_performance")
                 or result.get("top_performance_content")
             ),
-            competitor_analysis=result["competitor_analysis"]
+            competitor_analysis=result.get("competitor_analysis")
         )
 
     return {

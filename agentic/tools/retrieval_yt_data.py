@@ -217,11 +217,10 @@ def retrieve_followers_growth(client_code:str, report_date: str):
                 SELECT
                     fg.client_id,
                     fg.report_period_id,
-                    fg.total_followers,
-                    fg.follower_growth,
-                    fg.follower_growth_rate,
-                    fg.follows,
-                    fg.unfollows
+                    fg.total_subscribers,
+                    fg.subscriber_growth,
+                    fg.subscriber_growth_rate,
+                    fg.subscribers_lost
                 FROM youtube_reports fg
                 INNER JOIN clients c
                     ON c.id = fg.client_id
@@ -239,18 +238,17 @@ def retrieve_followers_growth(client_code:str, report_date: str):
             if row is None :
                 return {
                     "succes": False,
-                    "message": "Followers Growth Not found"
+                    "message": "Subscribers Growth Not found"
                 }
             return {
                 "success": True,
                 "report_period_id": str(row[1]),
-                "Followers growth": {
+                "Subscribers growth": {
                     "client_id": str(row[0]),
-                    "total_follower": to_number(row[2]),
-                    "follower_growth": to_number(row[3]),
-                    "follower_growth_rate": to_number(row[4]),
-                    "follows": to_number(row[5]),
-                    "unfollows": to_number(row[6])
+                    "total_subscribers": to_number(row[2]),
+                    "subscriber_growth": to_number(row[3]),
+                    "subscriber_growth_rate": to_number(row[4]),
+                    "subscribers_lost": to_number(row[5]),
                 }
             }
     except Exception as e:
@@ -282,11 +280,10 @@ def retrieve_followers_growth_history(
                 SELECT
                     fg.client_id,
                     fg.report_period_id,
-                    fg.total_followers,
-                    fg.follower_growth,
-                    fg.follower_growth_rate,
-                    fg.follows,
-                    fg.unfollows
+                    fg.total_subscribers,
+                    fg.subscriber_growth,
+                    fg.subscriber_growth_rate,
+                    fg.subscribers_lost
                 FROM youtube_reports fg
                 INNER JOIN clients c
                     ON c.id = fg.client_id
@@ -312,20 +309,19 @@ def retrieve_followers_growth_history(
             if rows is None or len(rows) == 0:
                 return {
                     "success": False,
-                    "message": "Historical Followers Growth not found"
+                    "message": "Historical Subscribers Growth not found"
                 }
 
             return {
                 "success": True,
-                "Followers growth": [
+                "Subscribers growth": [
                     {
                         "client_id": str(row[0]),
                         "report_period_id": str(row[1]),
-                        "total_follower": to_number(row[2]),
-                        "follower_growth": to_number(row[3]),
-                        "follower_growth_rate": to_number(row[4]),
-                        "follows": to_number(row[5]),
-                        "unfollows": to_number(row[6]),
+                        "total_subscribers": to_number(row[2]),
+                        "subscriber_growth": to_number(row[3]),
+                        "subscriber_growth_rate": to_number(row[4]),
+                        "subscribers_lost": to_number(row[5]),
                     }
                     for row in rows
                 ]
@@ -355,11 +351,10 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
                 SELECT
                     ep.client_id,
                     ep.report_period_id,
-                    ep.impressions,
+                    ep.total_views,
                     ep.reach,
                     ep.likes,
                     ep.comments,
-                    ep.shares,
                     ep.total_engagement,
                     ep.engagement_rate
                 FROM youtube_reports ep
@@ -379,20 +374,19 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
             if row is None :
                 return {
                     "succes": False,
-                    "message": "Followers Growth Not found"
+                    "message": "Engagement Performance not found"
                 }
             return {
                 "success": True,
                 "report_period_id": str(row[1]),
                 "Engagement Performance": {
                     "client_id": str(row[0]),
-                    "impressions": to_number(row[2]),
+                    "views": to_number(row[2]),
                     "reach": to_number(row[3]),
                     "likes": to_number(row[4]),
                     "comments": to_number(row[5]),
-                    "shares": to_number(row[6]),
-                    "total_engagement": to_number(row[7]),
-                    "engagement_rate": to_number(row[8]),
+                    "total_engagement": to_number(row[6]),
+                    "engagement_rate": to_number(row[7]),
                 }
             }
     except Exception as e:
@@ -423,11 +417,10 @@ def retrieve_engagement_performance_history(
                 SELECT
                     ep.client_id,
                     ep.report_period_id,
-                    ep.impressions,
+                    ep.total_views,
                     ep.reach,
                     ep.likes,
                     ep.comments,
-                    ep.shares,
                     ep.total_engagement,
                     ep.engagement_rate
                 FROM youtube_reports ep
@@ -464,13 +457,12 @@ def retrieve_engagement_performance_history(
                     {
                         "client_id": str(row[0]),
                         "report_period_id": str(row[1]),
-                        "impressions": to_number(row[2]),
+                        "views": to_number(row[2]),
                         "reach": to_number(row[3]),
                         "likes": to_number(row[4]),
                         "comments": to_number(row[5]),
-                        "shares": to_number(row[6]),
-                        "total_engagement": to_number(row[7]),
-                        "engagement_rate": to_number(row[8]),
+                        "total_engagement": to_number(row[6]),
+                        "engagement_rate": to_number(row[7]),
                     }
                     for row in rows
                 ]
@@ -689,8 +681,8 @@ def retrieve_competitor_analysis(
                 SELECT
                     ir.client_id,
                     ir.report_period_id,
-                    ir.total_followers,
-                    ir.follower_growth_rate,
+                    ir.total_subscribers,
+                    ir.subscriber_growth_rate,
                     ir.total_posts,
                     ir.engagement_rate,
                     ir.total_engagement
@@ -723,8 +715,8 @@ def retrieve_competitor_analysis(
             client_data = {
                 "client_id": str(row[0]),
                 "report_period_id": str(row[1]),
-                "total_followers": to_number(row[2]),
-                "follower_growth_rate": to_number(row[3]),
+                "total_subscribers": to_number(row[2]),
+                "subscriber_growth_rate": to_number(row[3]),
                 "total_posts": to_number(row[4]),
                 "engagement_rate": to_number(row[5]),
                 "total_engagement": to_number(row[6]),
@@ -803,3 +795,4 @@ def retrieve_competitor_analysis(
 
     finally:
         conn.close()
+

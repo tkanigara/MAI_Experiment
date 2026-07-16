@@ -811,14 +811,10 @@ class SlidesReportRepository:
                 WHERE client_id = :client_id
                   AND report_period_id = :period_id
                   AND platform = :platform
+                  AND performance_bucket = 'best_competitor'
                 ORDER BY
-                    CASE performance_bucket
-                        WHEN 'best_competitor' THEN 1
-                        WHEN 'top' THEN 2
-                        ELSE 3
-                    END,
-                    content_rank ASC NULLS LAST,
-                    total_engagement DESC NULLS LAST
+                    total_engagement DESC NULLS LAST,
+                    content_rank ASC NULLS LAST
                 LIMIT 20
                 """
             ),
@@ -846,9 +842,31 @@ class SlidesReportRepository:
         rows = conn.execute(
             text(
                 f"""
+                WITH periods AS (
+                    SELECT id, period_label, period_start
+                    FROM report_periods
+                    WHERE client_id = :client_id
+                      AND period_start <= :period_start
+                    ORDER BY period_start DESC
+                    LIMIT 3
+                ),
+                ranked_reports AS (
+                    SELECT
+                        r.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY r.report_period_id
+                            ORDER BY
+                                (r.profile_id IS NOT NULL) DESC,
+                                r.updated_at DESC,
+                                r.created_at DESC
+                        ) AS report_rank
+                    FROM {table_name} r
+                    JOIN periods p ON p.id = r.report_period_id
+                    WHERE r.client_id = :client_id
+                )
                 SELECT
-                    rp.period_label,
-                    rp.period_start,
+                    p.period_label,
+                    p.period_start,
                     r.{follower_field} AS audience_total,
                     r.{growth_field} AS growth,
                     r.{growth_rate_field} AS growth_rate,
@@ -862,12 +880,11 @@ class SlidesReportRepository:
                     r.comments,
                     r.shares,
                     r.total_posts
-                FROM {table_name} r
-                JOIN report_periods rp ON rp.id = r.report_period_id
-                WHERE r.client_id = :client_id
-                  AND rp.period_start <= :period_start
-                ORDER BY rp.period_start DESC
-                LIMIT 3
+                FROM periods p
+                LEFT JOIN ranked_reports r
+                    ON r.report_period_id = p.id
+                   AND r.report_rank = 1
+                ORDER BY p.period_start DESC
                 """
             ),
             {
@@ -1133,7 +1150,10 @@ def add_competitor_content(mapping: dict, prefix: str, posts: list[dict]):
             "REPOST": fmt_number(post.get("reposts")),
             "REPOSTS": fmt_number(post.get("reposts")),
             "ER": fmt_percent(post.get("engagement_rate")),
+            "INT": fmt_number(post.get("total_engagement")),
+            "ENG": fmt_number(post.get("total_engagement")),
             "ENGAGEMENT": fmt_number(post.get("total_engagement")),
+            "TOTAL_ENGAGEMENT": fmt_number(post.get("total_engagement")),
         }
         for suffix, value in values.items():
             mapping[placeholder(f"{base}_{suffix}")] = value

@@ -356,7 +356,7 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
                 SELECT
                     ep.client_id,
                     ep.report_period_id,
-                    ep.impressions,
+                    ep.total_views,
                     ep.reach,
                     ep.likes,
                     ep.comments,
@@ -387,7 +387,7 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
                 "report_period_id": str(row[1]),
                 "Engagement Performance": {
                     "client_id": str(row[0]),
-                    "impressions": to_number(row[2]),
+                    "views": to_number(row[2]),
                     "reach": to_number(row[3]),
                     "likes": to_number(row[4]),
                     "comments": to_number(row[5]),
@@ -424,7 +424,7 @@ def retrieve_engagement_performance_history(
                 SELECT
                     ep.client_id,
                     ep.report_period_id,
-                    ep.impressions,
+                    ep.total_views,
                     ep.reach,
                     ep.likes,
                     ep.comments,
@@ -465,7 +465,7 @@ def retrieve_engagement_performance_history(
                     {
                         "client_id": str(row[0]),
                         "report_period_id": str(row[1]),
-                        "impressions": to_number(row[2]),
+                        "views": to_number(row[2]),
                         "reach": to_number(row[3]),
                         "likes": to_number(row[4]),
                         "comments": to_number(row[5]),

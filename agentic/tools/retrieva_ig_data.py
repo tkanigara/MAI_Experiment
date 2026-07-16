@@ -33,14 +33,11 @@ def retrieve_kpi(client_code: str,report_date: str,platform: str) -> dict:
                 INNER JOIN clients c
                     ON c.id = kt.client_id
 
-                INNER JOIN report_periods rp
-                    ON rp.id = kt.report_period_id
-
                 WHERE
                     c.client_code = %s
                     AND kt.platform = %s
-                    AND rp.period_start <= %s
-                    AND rp.period_end >= %s
+                    AND kt.period_year = EXTRACT(YEAR FROM %s::date)
+                    AND kt.period_month = EXTRACT(MONTH FROM %s::date)
 
                 ORDER BY kt.metric_name;
                 """,

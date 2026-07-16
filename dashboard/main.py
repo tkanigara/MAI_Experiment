@@ -128,6 +128,7 @@ def import_csv(
     month_slug: str = Form(...),
     account: Optional[UploadFile] = File(None),
     competitor: Optional[UploadFile] = File(None),
+    competitor_content: Optional[UploadFile] = File(None),
     ig_post: Optional[UploadFile] = File(None),
     ig_story: Optional[UploadFile] = File(None),
     fb_post: Optional[UploadFile] = File(None),
@@ -137,6 +138,7 @@ def import_csv(
     files = {
         "account": account,
         "competitor": competitor,
+        "competitor_content": competitor_content,
         "ig_post": ig_post,
         "ig_story": ig_story,
         "fb_post": fb_post,

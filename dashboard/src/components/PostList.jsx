@@ -2,8 +2,12 @@ import { captionText, formatNumber } from "../lib/format";
 
 const CONTENT_TYPE_LABELS = {
   post: "Feed post",
+  carousel: "Carousel",
+  image: "Image post",
+  reel: "Reel",
   story: "Story",
   video: "Video",
+  short: "Short",
 };
 
 function contentTypeLabel(type) {
