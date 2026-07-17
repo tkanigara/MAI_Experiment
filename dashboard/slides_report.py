@@ -310,9 +310,13 @@ def replace_image_placeholders_safe(
             )
             object_request_meta.append((placeholder_key, object_id))
 
-    for index in range(0, len(object_requests), chunk_size):
-        batch = object_requests[index : index + chunk_size]
-        batch_meta = object_request_meta[index : index + chunk_size]
+    object_api_calls = 0
+
+    def execute_object_batch(batch, batch_meta):
+        nonlocal object_api_calls
+        if not batch:
+            return
+        object_api_calls += 1
         try:
             slides_service.presentations().batchUpdate(
                 presentationId=presentation_id,
@@ -322,6 +326,15 @@ def replace_image_placeholders_safe(
                 replaced.append(placeholder_key)
                 replaced_object_ids.append(object_id)
         except Exception as exc:
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            # A single inaccessible CDN URL invalidates the complete Slides
+            # batch. Split only client errors so valid images can still pass;
+            # retrying 429/5xx by subdivision would only consume more quota.
+            if len(batch) > 1 and status == 400:
+                midpoint = len(batch) // 2
+                execute_object_batch(batch[:midpoint], batch_meta[:midpoint])
+                execute_object_batch(batch[midpoint:], batch_meta[midpoint:])
+                return
             reason = str(exc).splitlines()[0]
             for placeholder_key, _object_id in batch_meta:
                 failed.append(
@@ -331,6 +344,12 @@ def replace_image_placeholders_safe(
                         "reason": reason,
                     }
                 )
+
+    for index in range(0, len(object_requests), chunk_size):
+        execute_object_batch(
+            object_requests[index : index + chunk_size],
+            object_request_meta[index : index + chunk_size],
+        )
 
     fallback_requests = []
     fallback_request_meta = []
@@ -445,7 +464,8 @@ def replace_image_placeholders_safe(
     print(
         "[slides_report] image replacement: "
         f"attempted={len(filtered_mapping)} replaced={len(replaced_set)} "
-        f"failed={len(failed)} unmatched={len(unmatched)}",
+        f"failed={len(failed)} unmatched={len(unmatched)} "
+        f"objectApiCalls={object_api_calls}",
         flush=True,
     )
     for item in failed[:10]:
@@ -480,6 +500,7 @@ def replace_image_placeholders_safe(
         "failed": failed,
         "unmatched": unmatched,
         "skipped_non_template": sorted(set(image_mapping) - set(filtered_mapping)),
+        "object_api_calls": object_api_calls,
     }
 
 
@@ -639,6 +660,7 @@ class SlidesReportRepository:
 
             reports = {}
             content = {}
+            all_content = {}
             competitors = {}
             competitor_content = {}
             kpi_results = {}
@@ -663,6 +685,12 @@ class SlidesReportRepository:
                     ).mappings().first()
                 )
                 content[platform] = self.content_posts(conn, client_id, period_id, platform)
+                all_content[platform] = self.all_content_posts(
+                    conn,
+                    client_id,
+                    period_id,
+                    platform,
+                )
                 competitor_content[platform] = self.competitor_content_posts(
                     conn,
                     client_id,
@@ -743,6 +771,7 @@ class SlidesReportRepository:
                 "period": period,
                 "reports": reports,
                 "content": content,
+                "all_content": all_content,
                 "competitors": competitors,
                 "competitor_content": competitor_content,
                 "kpi_results": kpi_results,
@@ -790,6 +819,37 @@ class SlidesReportRepository:
             item.pop("bucket_rank", None)
             result.setdefault(bucket, []).append(item)
         return result
+
+    def all_content_posts(
+        self,
+        conn,
+        client_id: str,
+        period_id: str,
+        platform: str,
+    ) -> list[dict]:
+        rows = conn.execute(
+            text(
+                """
+                SELECT
+                    post_id, published_at, caption, permalink, image_url,
+                    content_type, likes, comments, shares, saves, reposts,
+                    reactions, views, reach, total_engagement, engagement_rate
+                FROM social_content_reports
+                WHERE client_id = :client_id
+                  AND report_period_id = :period_id
+                  AND platform = :platform
+                  AND performance_bucket = 'all'
+                ORDER BY published_at ASC NULLS LAST, created_at ASC
+                LIMIT 24
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_id": period_id,
+                "platform": platform,
+            },
+        ).mappings()
+        return [dict(row) for row in rows]
 
     def competitor_content_posts(
         self,
@@ -972,6 +1032,7 @@ def add_platform_mapping(mapping: dict, payload: dict, platform: str):
     prefix = PLATFORM_PREFIXES[platform]
     report = payload["reports"].get(platform)
     content = payload["content"].get(platform, {})
+    all_content = payload.get("all_content", {}).get(platform, [])
     competitors = payload["competitors"].get(platform, [])
     competitor_content = payload.get("competitor_content", {}).get(platform, [])
     trends = payload["trends"].get(platform, [])
@@ -1065,6 +1126,7 @@ def add_platform_mapping(mapping: dict, payload: dict, platform: str):
     add_competitor_content(mapping, prefix, competitor_content)
     add_posts(mapping, platform, prefix, "POST_TOP", content.get("top", []))
     add_posts(mapping, platform, prefix, "POST_LOW", content.get("low", []))
+    add_evidence_posts(mapping, prefix, all_content)
 
     if platform == "instagram":
         add_legacy_instagram_aliases(mapping)
@@ -1124,7 +1186,6 @@ def add_competitors(mapping: dict, prefix: str, competitors: list[dict]):
         mapping[placeholder(f"{base}_INT")] = fmt_number(row.get("total_engagement"))
         mapping[placeholder(f"{base}_ENG")] = fmt_number(row.get("total_engagement"))
         mapping[placeholder(f"{base}_ENGAGEMENT")] = fmt_number(row.get("total_engagement"))
-        mapping[placeholder(f"{prefix}_POST_COMP_{index}_IMAGE")] = clean_text(row.get("image_url"))
 
 
 def add_competitor_content(mapping: dict, prefix: str, posts: list[dict]):
@@ -1159,6 +1220,7 @@ def add_competitor_content(mapping: dict, prefix: str, posts: list[dict]):
             mapping[placeholder(f"{base}_{suffix}")] = value
             if prefix == "IG":
                 mapping[placeholder(f"{legacy_base}_{suffix}")] = value
+        mapping[placeholder(f"{prefix}_POST_COMP_{index}_IMAGE")] = values["IMAGE"]
 
 
 def add_posts(mapping: dict, platform: str, prefix: str, base_name: str, posts: list[dict]):
@@ -1202,6 +1264,29 @@ def add_posts(mapping: dict, platform: str, prefix: str, base_name: str, posts: 
                     placeholder(f"POST_TOP_{index}_{suffix}"),
                     "-",
                 )
+
+
+def add_evidence_posts(mapping: dict, prefix: str, posts: list[dict]):
+    padded = posts + [{} for _ in range(24)]
+    for index, post in enumerate(padded[:24], start=1):
+        base = f"{prefix}_EVIDENCE_{index}"
+        published_at = post.get("published_at")
+        if hasattr(published_at, "strftime"):
+            published_at = published_at.strftime("%d %B %Y").upper()
+        mapping[placeholder(f"{base}_DATE")] = clean_text(published_at, 28)
+        mapping[placeholder(f"{base}_CATEGORY")] = clean_text(
+            post.get("content_type"),
+            24,
+        )
+        mapping[placeholder(f"{base}_TITLE")] = clean_text(post.get("caption"), 72)
+        mapping[placeholder(f"{base}_IMAGE")] = clean_text(post.get("image_url"))
+        mapping[placeholder(f"{base}_ER")] = fmt_percent(post.get("engagement_rate"))
+        mapping[placeholder(f"{base}_ENGAGEMENT")] = fmt_number(
+            post.get("total_engagement")
+        )
+        mapping[placeholder(f"{base}_VIEWS")] = fmt_number(
+            post.get("views") or post.get("reach")
+        )
 
 
 def add_legacy_instagram_aliases(mapping: dict):

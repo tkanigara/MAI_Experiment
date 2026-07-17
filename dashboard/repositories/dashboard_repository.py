@@ -586,6 +586,64 @@ class DashboardRepository:
             )
             return {"deleted": True, "client_id": client_id, "client_name": client["client_name"]}
 
+    def delete_report_period(self, client_id: str, period_id: str):
+        with self.engine.begin() as conn:
+            period = conn.execute(
+                text(
+                    """
+                    SELECT id, period_label, period_start
+                    FROM report_periods
+                    WHERE id = CAST(:period_id AS UUID)
+                      AND client_id = CAST(:client_id AS UUID)
+                    """
+                ),
+                {"client_id": client_id, "period_id": period_id},
+            ).mappings().first()
+            if not period:
+                raise ValueError("Report month not found")
+
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM raw_api_responses
+                    WHERE run_id IN (
+                        SELECT id
+                        FROM etl_runs
+                        WHERE client_id = CAST(:client_id AS UUID)
+                          AND report_period_id = CAST(:period_id AS UUID)
+                    )
+                    """
+                ),
+                {"client_id": client_id, "period_id": period_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM etl_runs
+                    WHERE client_id = CAST(:client_id AS UUID)
+                      AND report_period_id = CAST(:period_id AS UUID)
+                    """
+                ),
+                {"client_id": client_id, "period_id": period_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM report_periods
+                    WHERE id = CAST(:period_id AS UUID)
+                      AND client_id = CAST(:client_id AS UUID)
+                    """
+                ),
+                {"client_id": client_id, "period_id": period_id},
+            )
+            label = period["period_label"] or period["period_start"].strftime("%B %Y")
+            return {
+                "deleted": True,
+                "client_id": client_id,
+                "period_id": period_id,
+                "period_label": label,
+            }
+
     def platforms(self, client_id: str):
         with self.engine.begin() as conn:
             client = conn.execute(

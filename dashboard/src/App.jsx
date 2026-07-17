@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import AddClientModal from "./components/AddClientModal";
 import AddReportModal from "./components/AddReportModal";
 import DeleteClientModal from "./components/DeleteClientModal";
+import DeleteReportMonthModal from "./components/DeleteReportMonthModal";
 import EditKpiModal from "./components/EditKpiModal";
 import Header from "./components/Header";
 import { api } from "./lib/api";
@@ -30,6 +31,8 @@ export default function App() {
   const [editClient, setEditClient] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
+  const [deleteReportMonthTarget, setDeleteReportMonthTarget] = useState(null);
+  const [isDeletingReportMonth, setIsDeletingReportMonth] = useState(false);
   const [generatingReportId, setGeneratingReportId] = useState("");
   const [reportJob, setReportJob] = useState(null);
   const [reportElapsed, setReportElapsed] = useState(0);
@@ -177,6 +180,17 @@ export default function App() {
     showToast("Client deleted.");
   }
 
+  async function deleteReportMonth(month) {
+    if (!selectedClient?.id || !month?.id) return;
+    setIsDeletingReportMonth(true);
+    await api(`/api/clients/${selectedClient.id}/report-periods/${month.id}`, { method: "DELETE" });
+    await loadClient(selectedClient);
+    setPlatformData({});
+    setDeleteReportMonthTarget(null);
+    setIsDeletingReportMonth(false);
+    showToast(`${month.label} report data deleted.`);
+  }
+
   async function generateSlidesReport(month) {
     if (!selectedClient || !month?.id) return;
     if (reportJob?.status === "running") return;
@@ -282,6 +296,7 @@ export default function App() {
         onOpenAddReport={() => setModal("add-report-csv")}
         onOpenKpiTargets={() => setModal("add-report-kpi")}
         onDeleteClient={setDeleteTarget}
+        onDeleteReportMonth={setDeleteReportMonthTarget}
         onGenerateReport={generateSlidesReport}
         generatingReportId={generatingReportId}
       />
@@ -395,6 +410,19 @@ export default function App() {
           onConfirm={() => {
             deleteClient(deleteTarget).catch((err) => {
               setIsDeletingClient(false);
+              setError(err.message);
+            });
+          }}
+        />
+      )}
+      {deleteReportMonthTarget && (
+        <DeleteReportMonthModal
+          month={deleteReportMonthTarget}
+          isDeleting={isDeletingReportMonth}
+          onClose={() => setDeleteReportMonthTarget(null)}
+          onConfirm={() => {
+            deleteReportMonth(deleteReportMonthTarget).catch((err) => {
+              setIsDeletingReportMonth(false);
               setError(err.message);
             });
           }}

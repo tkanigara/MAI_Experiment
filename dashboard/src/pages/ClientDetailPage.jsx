@@ -12,6 +12,7 @@ export default function ClientDetailPage({
   onOpenAddReport,
   onOpenKpiTargets,
   onDeleteClient,
+  onDeleteReportMonth,
   onGenerateReport,
   generatingReportId,
 }) {
@@ -70,6 +71,7 @@ export default function ClientDetailPage({
               platforms={platforms}
               onOpen={(slug) => onOpenMonth(`${clientSlug(client)}/${slug}`)}
               onGenerateReport={onGenerateReport}
+              onDelete={onDeleteReportMonth}
               isGenerating={generatingReportId === month.id}
             />
           ))}

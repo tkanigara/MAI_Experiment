@@ -106,6 +106,16 @@ def delete_client(client_id: str):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.delete("/api/clients/{client_id}/report-periods/{period_id}")
+def delete_report_period(client_id: str, period_id: str):
+    try:
+        return json_response(repository.delete_report_period(client_id, period_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.get("/api/clients/{client_id}/platforms")
 def get_platforms(client_id: str):
     try:

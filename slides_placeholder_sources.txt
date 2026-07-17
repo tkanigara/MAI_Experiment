@@ -267,7 +267,7 @@ competitor_profile_reports.engagement_rate:
 competitor_profile_reports.total_engagement:
   {{P_COMP_{N}_ENGAGEMENT}}
 
-competitor_profile_reports.image_url:
+competitor_content_reports.image_url from the ranked best content row for competitor N:
   {{P_POST_COMP_{N}_IMAGE}}
 
 First competitor row follower_growth_rate:
