@@ -15,11 +15,11 @@ initial_state = State(
     # )
         request=Request(
         user_intent="Generate Marketing Report",
-        client_code="par",
-        report_date=date(2026, 6, 8),
+        client_code="mai001",
+        report_date=date(2026, 7,8),
         generate_slides=False,
         slides_dry_run=False,
-        persist_insights=True,
+        persist_insights=False,
         reuse_cached_insights=False,
     ),
 )
@@ -45,6 +45,9 @@ print(instagram.growth_performance_analysis)
 print("\n=== Top Performing Content ===")
 print(instagram.top_content_performance)
 
+print("============= Low Content ===========")
+print(instagram.low_content_performance)
+
 print("\n=== Competitor Analysis ===")
 print(instagram.competitor_analysis)
 
@@ -65,6 +68,9 @@ print(facebook.growth_performance_analysis)
 
 print("\n=== Top Performing Content ===")
 print(facebook.top_content_performance)
+
+print("============= Low Content ===========")
+print(facebook.low_content_performance)
 
 print("\n=== Competitor Analysis ===")
 print(facebook.competitor_analysis)
@@ -87,6 +93,9 @@ print(tiktok.growth_performance_analysis)
 print("\n=== Top Performing Content ===")
 print(tiktok.top_content_performance)
 
+print("============= Low Content ===========")
+print(tiktok.low_content_performance)
+
 print("\n=== Competitor Analysis ===")
 print(tiktok.competitor_analysis)
 
@@ -107,6 +116,10 @@ print(youtube.growth_performance_analysis)
 
 print("\n=== Top Performing Content ===")
 print(youtube.top_content_performance)
+
+print("============= Low Content ===========")
+print(youtube.low_content_performance)
+
 
 print("\n=== Competitor Analysis ===")
 print(youtube.competitor_analysis)

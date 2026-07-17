@@ -2,7 +2,7 @@ from CentralArch.state import State, tiktok_result_analysis
 from models.gemini import llm
 from langchain_core.messages import HumanMessage, SystemMessage
 from prompts.tt_analyst_prompt import KPI_PROMPT, SOCMED_OVERVIEW, FOLLOWERS_GROWTH, ENGAGEMENT_PERFORMANCE, TIKTOK_ANALYST, SYSTEM_PROMPT
-from tools.retrieval_tt_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance, retrieve_top_performing_content, retrieve_followers_growth_history, retrieve_engagement_performance_history, retrieve_competitor_analysis
+from tools.retrieval_tt_data import retrieve_kpi, retrieve_socmed_overview, retrieve_followers_growth, retrieve_engagement_performance, retrieve_content_by_bucket, retrieve_followers_growth_history, retrieve_engagement_performance_history, retrieve_competitor_analysis
 from utils.logger import node
 from typing import Any
 import json
@@ -124,10 +124,18 @@ def tt_analysis_agent_2nd(state: State) -> State:
             ),
         })
 
-        top_content = retrieve_top_performing_content.invoke({
+        top_content = retrieve_content_by_bucket.invoke({
             "client_code": state.Metadata.client_code,
             "report_date": state.request.report_date.isoformat(),
-            "platform": "tiktok"
+            "platform": "tiktok",
+            "bucket": "top"
+        })
+
+        low_content = retrieve_content_by_bucket.invoke({
+            "client_code": state.Metadata.client_code,
+            "report_date": state.request.report_date.isoformat(),
+            "platform": "tiktok",
+            "bucket": "low"
         })
         
         competitor_analysis = retrieve_competitor_analysis.invoke({
@@ -150,6 +158,7 @@ def tt_analysis_agent_2nd(state: State) -> State:
             },
 
             "Top Content Performance": top_content,
+            "Low Content Performance": low_content,
             "Competitor Analysis": competitor_analysis,
         }
 
@@ -193,11 +202,9 @@ def tt_analysis_agent_2nd(state: State) -> State:
             socmed_overview_analysis=result["socmed_overview_analysis"],
             followers_growth_analysis=result["followers_growth_analysis"],
             growth_performance_analysis=result["growth_performance_analysis"],
-            top_content_performance=(
-                result.get("top_content_performance")
-                or result.get("top_performance_content")
-            ),
-            competitor_analysis=result.get("competitor_analysis")
+            top_content_performance=result["top_content_performance"],
+            low_content_performance=result["low_content_performance"],
+            competitor_analysis=result["competitor_analysis"]
         )
 
     return {

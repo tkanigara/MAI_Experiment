@@ -497,15 +497,23 @@ def retrieve_engagement_performance_history(
 
     finally:
         conn.close()
+
 @tool
-def retrieve_top_performing_content(client_code: str, report_date: str, platform: str):
+def retrieve_content_by_bucket(client_code: str, report_date: str, platform: str, bucket: str,):
     """
-    Retrieve Top Performing Content based on
-    client_code, report_date, and platform.
+    Retrieve content based on performance bucket.
     """
     conn = get_connection()
     try:
         report_date = datetime.strptime(report_date, "%Y-%m-%d").date()
+        bucket = bucket.lower()
+
+        if bucket not in {"top", "middle", "low"}:
+            return {
+                "success": False,
+                "message": "Invalid bucket. Use one of: top, middle, low."
+            }
+
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -541,22 +549,31 @@ def retrieve_top_performing_content(client_code: str, report_date: str, platform
                     AND cp.platform = %s
                     AND rp.period_start <= %s
                     AND rp.period_end >= %s
-                    AND cp.content_rank <= 5
-                ORDER BY cp.content_rank;
+                    AND LOWER(cp.performance_bucket) = %s
+                ORDER BY cp.content_rank
+                LIMIT 5;
                 """,
-                (client_code, platform, report_date, report_date,)
+                (
+                    client_code,
+                    platform,
+                    report_date,
+                    report_date,
+                    bucket,
+                ),
             )
 
             rows = cursor.fetchall()
+
             if not rows:
                 return {
                     "success": False,
-                    "message": "Top Performing Content not found"
+                    "message": f"{bucket.title()} Performing Content not found",
                 }
 
             return {
                 "success": True,
-                "Top Performing Content": [
+                "performance_bucket": bucket,
+                "Content": [
                     {
                         "client_id": str(row[0]),
                         "report_period_id": str(row[1]),
@@ -581,18 +598,17 @@ def retrieve_top_performing_content(client_code: str, report_date: str, platform
                         "engagement_rate": to_number(row[20]),
                     }
                     for row in rows
-                ]
+                ],
             }
 
     except Exception as e:
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
         }
 
     finally:
         conn.close()
-
 @tool
 def retrieve_all_content(client_code: str, report_date: str, platform: str) -> dict:
     """
@@ -697,10 +713,6 @@ def retrieve_competitor_analysis(
         report_date = datetime.strptime(report_date, "%Y-%m-%d").date()
 
         with conn.cursor() as cursor:
-
-            # ==========================
-            # Client Data
-            # ==========================
             cursor.execute(
                 """
                 SELECT
@@ -747,9 +759,6 @@ def retrieve_competitor_analysis(
                 "total_engagement": to_number(row[6]),
             }
 
-            # ==========================
-            # Competitor Data
-            # ==========================
             cursor.execute(
                 """
                 SELECT
@@ -823,3 +832,4 @@ def retrieve_competitor_analysis(
 
     finally:
         conn.close()
+

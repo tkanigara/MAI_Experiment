@@ -1,30 +1,39 @@
 from pprint import pprint
 
-from tools.retrieval_fb_data import retrieve_competitor_analysis
+from tools.retrieva_ig_data import (
+    retrieve_top_performing_content,
+    retrieve_content_by_bucket,
+)
 
 client_code = "mai001"
-platform = "facebook"
+platform = "instagram"
 report_date = "2026-07-08"
 
-result = retrieve_competitor_analysis.invoke(
+print("=" * 80)
+print("TOP PERFORMING CONTENT (OLD TOOL)")
+print("=" * 80)
+
+top_old = retrieve_top_performing_content.invoke(
     {
         "client_code": client_code,
-        "platform": platform,
         "report_date": report_date,
+        "platform": platform,
     }
 )
 
-print("===== COMPETITOR ANALYSIS =====")
+pprint(top_old)
 
-if result["success"]:
+print("\n" + "=" * 80)
+print("TOP PERFORMING CONTENT (NEW TOOL)")
+print("=" * 80)
 
-    print("\n----- CLIENT -----")
-    pprint(result["Client"])
+top_new = retrieve_content_by_bucket.invoke(
+    {
+        "client_code": client_code,
+        "report_date": report_date,
+        "platform": platform,
+        "bucket": "top",
+    }
+)
 
-    print("\n----- COMPETITORS -----")
-    pprint(result["Competitors"])
-
-    print(f"\nTotal Competitors: {len(result['Competitors'])}")
-
-else:
-    pprint(result)
+pprint(top_new)
