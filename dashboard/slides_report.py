@@ -5,9 +5,12 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 
+import requests as http_requests
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
@@ -47,6 +50,22 @@ PLATFORM_LABELS = {
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
 TEMPLATE_PLACEHOLDER_CACHE: dict[str, set[str]] = {}
+_SLIDES_WRITE_LOCK = Lock()
+_SLIDES_LAST_WRITE_AT = 0.0
+
+# Internal quota safeguards. These are implementation details rather than
+# deployment settings, so keep them out of .env unless they become operational
+# tuning knobs later.
+SLIDES_WRITE_MIN_INTERVAL_SECONDS = 1.05
+SLIDES_API_MAX_RETRIES = 2
+SLIDES_QUOTA_RETRY_SECONDS = 65.0
+SLIDES_IMAGE_PREFLIGHT_ENABLED = True
+SLIDES_IMAGE_VALIDATION_WORKERS = 8
+SLIDES_IMAGE_CONNECT_TIMEOUT_SECONDS = 3.0
+SLIDES_IMAGE_READ_TIMEOUT_SECONDS = 8.0
+SLIDES_IMAGE_MAX_API_CALLS = 20
+SLIDES_IMAGE_RETRY_INDIVIDUAL = False
+SLIDES_STRUCTURED_TEXT_OCCURRENCES_PER_BATCH = 200
 
 
 class StepProfiler:
@@ -78,6 +97,110 @@ def env_int(name: str, default: int) -> int:
         return max(1, int(os.getenv(name, str(default))))
     except (TypeError, ValueError):
         return default
+
+
+def execute_slides_batch_update(
+    slides_service,
+    presentation_id: str,
+    batch_requests: list[dict],
+) -> dict:
+    """Serialize and pace Slides writes so one report cannot burst the user quota."""
+    global _SLIDES_LAST_WRITE_AT
+
+    if not batch_requests:
+        return {"replies": []}
+
+    min_interval = SLIDES_WRITE_MIN_INTERVAL_SECONDS
+    max_retries = SLIDES_API_MAX_RETRIES
+    quota_retry_seconds = SLIDES_QUOTA_RETRY_SECONDS
+
+    for attempt in range(max_retries + 1):
+        try:
+            with _SLIDES_WRITE_LOCK:
+                elapsed = time.monotonic() - _SLIDES_LAST_WRITE_AT
+                if _SLIDES_LAST_WRITE_AT and elapsed < min_interval:
+                    time.sleep(min_interval - elapsed)
+                try:
+                    return (
+                        slides_service.presentations()
+                        .batchUpdate(
+                            presentationId=presentation_id,
+                            body={"requests": batch_requests},
+                        )
+                        .execute()
+                    )
+                finally:
+                    _SLIDES_LAST_WRITE_AT = time.monotonic()
+        except Exception as exc:
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            if status != 429 or attempt >= max_retries:
+                raise
+
+            response_headers = getattr(exc, "resp", None)
+            retry_after = None
+            if response_headers is not None:
+                try:
+                    retry_after = float(response_headers.get("retry-after", 0) or 0)
+                except (TypeError, ValueError, AttributeError):
+                    retry_after = None
+            delay = max(retry_after or 0, quota_retry_seconds * (attempt + 1))
+            print(
+                f"[slides_report] Slides quota reached; retrying batch in {delay:.0f}s "
+                f"(attempt {attempt + 1}/{max_retries})",
+                flush=True,
+            )
+            time.sleep(delay)
+
+    raise RuntimeError("Slides batch update retry loop ended unexpectedly")
+
+
+def validate_image_urls(image_mapping: dict[str, str]) -> dict[str, tuple[bool, str]]:
+    """Check public image URLs concurrently before spending Slides write calls."""
+    unique_urls = sorted({str(value).strip() for value in image_mapping.values() if value})
+    if not unique_urls:
+        return {}
+
+    connect_timeout = SLIDES_IMAGE_CONNECT_TIMEOUT_SECONDS
+    read_timeout = SLIDES_IMAGE_READ_TIMEOUT_SECONDS
+    worker_count = min(SLIDES_IMAGE_VALIDATION_WORKERS, len(unique_urls))
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MAI-Slides-Image-Validator/1.0)",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    }
+
+    def validate(url: str) -> tuple[bool, str]:
+        if not url.lower().startswith(("http://", "https://")):
+            return False, "URL must use http or https"
+        try:
+            with http_requests.get(
+                url,
+                headers=headers,
+                stream=True,
+                allow_redirects=True,
+                timeout=(connect_timeout, read_timeout),
+            ) as response:
+                if not 200 <= response.status_code < 300:
+                    return False, f"HTTP {response.status_code}"
+                content_type = response.headers.get("content-type", "").lower()
+                if content_type and not (
+                    content_type.startswith("image/")
+                    or "application/octet-stream" in content_type
+                ):
+                    return False, f"unsupported content type {content_type.split(';')[0]}"
+                return True, "ok"
+        except http_requests.RequestException as exc:
+            return False, exc.__class__.__name__
+
+    results: dict[str, tuple[bool, str]] = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {executor.submit(validate, url): url for url in unique_urls}
+        for future in as_completed(futures):
+            url = futures[future]
+            try:
+                results[url] = future.result()
+            except Exception as exc:
+                results[url] = (False, exc.__class__.__name__)
+    return results
 
 
 def database_url() -> str:
@@ -161,6 +284,18 @@ def row_dict(row):
     return dict(row) if row else None
 
 
+def content_identity(post: dict) -> tuple:
+    if post.get("post_id"):
+        return ("post_id", str(post["post_id"]))
+    if post.get("permalink"):
+        return ("permalink", str(post["permalink"]))
+    return (
+        "content",
+        str(post.get("caption") or ""),
+        str(post.get("published_at") or ""),
+    )
+
+
 def name_tokens(value: str) -> list[str]:
     return [token for token in re.split(r"[^a-z0-9]+", str(value or "").lower()) if token]
 
@@ -225,8 +360,164 @@ def is_self_profile(row: dict, self_terms: dict) -> bool:
     return False
 
 
+def iter_page_elements(page_elements: list[dict]):
+    for element in page_elements:
+        yield element
+        children = element.get("elementGroup", {}).get("children", [])
+        if children:
+            yield from iter_page_elements(children)
+
+
+def text_with_api_boundaries(text_elements: list[dict]) -> tuple[str, list[int]]:
+    """Reconstruct text while preserving Google Slides UTF-16 indices."""
+    characters = []
+    api_boundaries = []
+    cursor = 0
+    for element in text_elements:
+        text_run = element.get("textRun")
+        if not text_run:
+            continue
+        content = str(text_run.get("content", ""))
+        start_index = element.get("startIndex")
+        if start_index is not None:
+            cursor = int(start_index)
+        for character in content:
+            characters.append(character)
+            api_boundaries.append(cursor)
+            cursor += len(character.encode("utf-16-le")) // 2
+    api_boundaries.append(cursor)
+    return "".join(characters), api_boundaries
+
+
+def iter_text_containers(presentation: dict):
+    for slide in presentation.get("slides", []):
+        for element in iter_page_elements(slide.get("pageElements", [])):
+            object_id = element.get("objectId")
+            if not object_id:
+                continue
+            shape_text = element.get("shape", {}).get("text", {}).get("textElements", [])
+            if shape_text:
+                yield object_id, None, shape_text
+
+            table = element.get("table", {})
+            for row_index, row in enumerate(table.get("tableRows", [])):
+                for column_index, cell in enumerate(row.get("tableCells", [])):
+                    cell_text = cell.get("text", {}).get("textElements", [])
+                    if cell_text:
+                        yield (
+                            object_id,
+                            {
+                                "rowIndex": row_index,
+                                "columnIndex": column_index,
+                            },
+                            cell_text,
+                        )
+
+
 def extract_placeholders_from_presentation(presentation: dict) -> set[str]:
-    return set(PLACEHOLDER_PATTERN.findall(json.dumps(presentation, ensure_ascii=False)))
+    placeholders = set(
+        PLACEHOLDER_PATTERN.findall(json.dumps(presentation, ensure_ascii=False))
+    )
+    for _object_id, _cell_location, text_elements in iter_text_containers(presentation):
+        text_value, _boundaries = text_with_api_boundaries(text_elements)
+        placeholders.update(PLACEHOLDER_PATTERN.findall(text_value))
+    return placeholders
+
+
+def structured_text_replacement_operations(
+    presentation: dict,
+    mapping: dict,
+    skip_placeholders: set[str] | None = None,
+) -> tuple[list[list[dict]], list[str]]:
+    skip_placeholders = skip_placeholders or set()
+    operations = []
+    replaced_keys = []
+
+    for object_id, cell_location, text_elements in iter_text_containers(presentation):
+        text_value, api_boundaries = text_with_api_boundaries(text_elements)
+        matches = [
+            match
+            for match in PLACEHOLDER_PATTERN.finditer(text_value)
+            if match.group(0) in mapping and match.group(0) not in skip_placeholders
+        ]
+        for match in reversed(matches):
+            placeholder_key = match.group(0)
+            start_index = api_boundaries[match.start()]
+            end_index = api_boundaries[match.end()]
+            replacement = mapping.get(placeholder_key, "-")
+            if is_image_placeholder_key(placeholder_key):
+                replacement = "-"
+
+            delete_text = {
+                "objectId": object_id,
+                "textRange": {
+                    "type": "FIXED_RANGE",
+                    "startIndex": start_index,
+                    "endIndex": end_index,
+                },
+            }
+            insert_text = {
+                "objectId": object_id,
+                "insertionIndex": start_index,
+                "text": str(replacement),
+            }
+            if cell_location is not None:
+                delete_text["cellLocation"] = cell_location
+                insert_text["cellLocation"] = cell_location
+
+            operations.append(
+                [
+                    {"deleteText": delete_text},
+                    {"insertText": insert_text},
+                ]
+            )
+            replaced_keys.append(placeholder_key)
+    return operations, replaced_keys
+
+
+def replace_structured_text_placeholders(
+    slides_service,
+    presentation_id: str,
+    mapping: dict,
+    skip_placeholders: set[str] | None = None,
+) -> dict:
+    """Replace placeholders split across multiple formatted text runs."""
+    presentation = (
+        slides_service.presentations()
+        .get(presentationId=presentation_id)
+        .execute()
+    )
+    operations, replaced_keys = structured_text_replacement_operations(
+        presentation,
+        mapping,
+        skip_placeholders=skip_placeholders,
+    )
+    batch_size = SLIDES_STRUCTURED_TEXT_OCCURRENCES_PER_BATCH
+    batch_sizes = []
+    for index in range(0, len(operations), batch_size):
+        operation_batch = operations[index : index + batch_size]
+        requests = [request for operation in operation_batch for request in operation]
+        batch_sizes.append(len(operation_batch))
+        execute_slides_batch_update(slides_service, presentation_id, requests)
+        print(
+            "[slides_report] structuredText "
+            f"batch={len(batch_sizes)} occurrences={len(operation_batch)} "
+            f"requests={len(requests)}",
+            flush=True,
+        )
+    print(
+        "[slides_report] structuredText "
+        f"totalOccurrences={len(replaced_keys)} totalBatches={len(batch_sizes)}",
+        flush=True,
+    )
+    return {
+        "sent_keys": replaced_keys,
+        "sent_key_count": len(replaced_keys),
+        "unique_key_count": len(set(replaced_keys)),
+        "batch_count": len(batch_sizes),
+        "batch_sizes": batch_sizes,
+        "total_requests": len(replaced_keys) * 2,
+    }
 
 
 def fetch_presentation_placeholders(slides_service, presentation_id: str) -> set[str]:
@@ -270,19 +561,61 @@ def replace_image_placeholders_safe(
     image_mapping: dict,
     allowed_placeholders: set[str] | None = None,
 ) -> dict:
-    filtered_mapping = {
+    template_filtered_mapping = {
         key: value
         for key, value in image_mapping.items()
         if allowed_placeholders is None or key in allowed_placeholders
     }
-    if not filtered_mapping:
+    skipped_non_template = sorted(set(image_mapping) - set(template_filtered_mapping))
+    attempted_total = len(template_filtered_mapping)
+    if not template_filtered_mapping:
         print("[slides_report] image replacement: no template image placeholders with valid URLs", flush=True)
         return {
             "attempted": 0,
             "replaced": [],
             "failed": [],
             "unmatched": [],
-            "skipped_non_template": sorted(set(image_mapping) - set(filtered_mapping)),
+            "skipped_non_template": skipped_non_template,
+        }
+
+    failed = []
+    filtered_mapping = dict(template_filtered_mapping)
+    if SLIDES_IMAGE_PREFLIGHT_ENABLED:
+        validation = validate_image_urls(filtered_mapping)
+        invalid_keys = []
+        for placeholder_key, image_url in filtered_mapping.items():
+            valid, reason = validation.get(str(image_url).strip(), (False, "validation unavailable"))
+            if valid:
+                continue
+            invalid_keys.append(placeholder_key)
+            failed.append(
+                {
+                    "placeholder": placeholder_key,
+                    "method": "preflight",
+                    "reason": reason,
+                }
+            )
+        for placeholder_key in invalid_keys:
+            filtered_mapping.pop(placeholder_key, None)
+        print(
+            "[slides_report] image preflight: "
+            f"checked={attempted_total} valid={len(filtered_mapping)} invalid={len(invalid_keys)}",
+            flush=True,
+        )
+
+    if not filtered_mapping:
+        print(
+            "[slides_report] image replacement: no publicly accessible image URLs",
+            flush=True,
+        )
+        return {
+            "attempted": attempted_total,
+            "replaced": [],
+            "failed": failed,
+            "unmatched": [],
+            "skipped_non_template": skipped_non_template,
+            "object_api_calls": 0,
+            "image_api_calls": 0,
         }
 
     image_object_ids = image_object_ids_by_placeholder(
@@ -292,8 +625,8 @@ def replace_image_placeholders_safe(
     )
     replaced = []
     replaced_object_ids = []
-    failed = []
     chunk_size = env_int("SLIDES_IMAGE_BATCH_SIZE", 20)
+    max_image_api_calls = SLIDES_IMAGE_MAX_API_CALLS
 
     object_requests = []
     object_request_meta = []
@@ -311,6 +644,20 @@ def replace_image_placeholders_safe(
             object_request_meta.append((placeholder_key, object_id))
 
     object_api_calls = 0
+    image_api_calls = 0
+
+    def execute_image_batch(batch):
+        nonlocal image_api_calls
+        if image_api_calls >= max_image_api_calls:
+            raise RuntimeError(
+                f"image API call budget exceeded ({max_image_api_calls})"
+            )
+        image_api_calls += 1
+        return execute_slides_batch_update(
+            slides_service,
+            presentation_id,
+            batch,
+        )
 
     def execute_object_batch(batch, batch_meta):
         nonlocal object_api_calls
@@ -318,10 +665,7 @@ def replace_image_placeholders_safe(
             return
         object_api_calls += 1
         try:
-            slides_service.presentations().batchUpdate(
-                presentationId=presentation_id,
-                body={"requests": batch},
-            ).execute()
+            execute_image_batch(batch)
             for placeholder_key, object_id in batch_meta:
                 replaced.append(placeholder_key)
                 replaced_object_ids.append(object_id)
@@ -374,14 +718,7 @@ def replace_image_placeholders_safe(
         batch = fallback_requests[index : index + chunk_size]
         batch_meta = fallback_request_meta[index : index + chunk_size]
         try:
-            response = (
-                slides_service.presentations()
-                .batchUpdate(
-                    presentationId=presentation_id,
-                    body={"requests": batch},
-                )
-                .execute()
-            )
+            response = execute_image_batch(batch)
             replies = response.get("replies", [])
             for placeholder_key, reply in zip(batch_meta, replies):
                 occurrences = (
@@ -409,7 +746,8 @@ def replace_image_placeholders_safe(
         for item in failed
         if item["method"] == "replaceAllShapesWithImage"
     } - set(replaced)
-    if retry_placeholders:
+    retry_individual = SLIDES_IMAGE_RETRY_INDIVIDUAL
+    if retry_placeholders and retry_individual:
         failed = [
             item
             for item in failed
@@ -418,7 +756,7 @@ def replace_image_placeholders_safe(
                 and item["placeholder"] in retry_placeholders
             )
         ]
-    for placeholder_key in sorted(retry_placeholders):
+    for placeholder_key in sorted(retry_placeholders if retry_individual else []):
         request = {
             "replaceAllShapesWithImage": {
                 "containsText": {
@@ -430,14 +768,7 @@ def replace_image_placeholders_safe(
             }
         }
         try:
-            response = (
-                slides_service.presentations()
-                .batchUpdate(
-                    presentationId=presentation_id,
-                    body={"requests": [request]},
-                )
-                .execute()
-            )
+            response = execute_image_batch([request])
             occurrences = (
                 response.get("replies", [{}])[0]
                 .get("replaceAllShapesWithImage", {})
@@ -463,9 +794,9 @@ def replace_image_placeholders_safe(
     unmatched = sorted(set(filtered_mapping) - replaced_set - matched_object_keys)
     print(
         "[slides_report] image replacement: "
-        f"attempted={len(filtered_mapping)} replaced={len(replaced_set)} "
+        f"attempted={attempted_total} replaced={len(replaced_set)} "
         f"failed={len(failed)} unmatched={len(unmatched)} "
-        f"objectApiCalls={object_api_calls}",
+        f"objectApiCalls={object_api_calls} imageApiCalls={image_api_calls}",
         flush=True,
     )
     for item in failed[:10]:
@@ -485,22 +816,20 @@ def replace_image_placeholders_safe(
             for object_id in replaced_object_ids
         ]
         try:
-            slides_service.presentations().batchUpdate(
-                presentationId=presentation_id,
-                body={"requests": clear_requests},
-            ).execute()
+            execute_image_batch(clear_requests)
         except Exception as exc:
             print(
                 f"[slides_report] image alt text cleanup skipped: {str(exc).splitlines()[0]}",
                 flush=True,
             )
     return {
-        "attempted": len(filtered_mapping),
+        "attempted": attempted_total,
         "replaced": sorted(replaced_set),
         "failed": failed,
         "unmatched": unmatched,
-        "skipped_non_template": sorted(set(image_mapping) - set(filtered_mapping)),
+        "skipped_non_template": skipped_non_template,
         "object_api_calls": object_api_calls,
+        "image_api_calls": image_api_calls,
     }
 
 
@@ -783,27 +1112,20 @@ class SlidesReportRepository:
         rows = conn.execute(
             text(
                 """
-                WITH ranked AS (
-                    SELECT
-                        post_id, published_at, caption, permalink, image_url,
-                        content_type, content_rank, performance_bucket,
-                        likes, comments, shares, saves, reposts, reactions,
-                        views, reach, total_engagement, engagement_rate,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY performance_bucket
-                            ORDER BY content_rank ASC NULLS LAST,
-                                     total_engagement DESC NULLS LAST
-                        ) AS bucket_rank
-                    FROM social_content_reports
-                    WHERE client_id = :client_id
-                      AND report_period_id = :period_id
-                      AND platform = :platform
-                      AND performance_bucket IN ('top', 'low')
-                )
-                SELECT *
-                FROM ranked
-                WHERE bucket_rank <= 3
-                ORDER BY performance_bucket, bucket_rank
+                SELECT
+                    post_id, published_at, caption, permalink, image_url,
+                    content_type, content_rank, performance_bucket,
+                    likes, comments, shares, saves, reposts, reactions,
+                    views, reach, total_engagement, engagement_rate
+                FROM social_content_reports
+                WHERE client_id = :client_id
+                  AND report_period_id = :period_id
+                  AND platform = :platform
+                  AND performance_bucket IN ('top', 'low')
+                ORDER BY
+                    CASE WHEN performance_bucket = 'top' THEN 0 ELSE 1 END,
+                    content_rank ASC NULLS LAST,
+                    total_engagement DESC NULLS LAST
                 """
             ),
             {
@@ -812,13 +1134,20 @@ class SlidesReportRepository:
                 "platform": platform,
             },
         ).mappings()
-        result = {"top": [], "low": []}
+        candidates = {"top": [], "low": []}
         for row in rows:
             item = dict(row)
             bucket = item.pop("performance_bucket")
-            item.pop("bucket_rank", None)
-            result.setdefault(bucket, []).append(item)
-        return result
+            candidates.setdefault(bucket, []).append(item)
+
+        top_posts = candidates["top"][:3]
+        top_identities = {content_identity(post) for post in top_posts}
+        low_posts = [
+            post
+            for post in candidates["low"]
+            if content_identity(post) not in top_identities
+        ][:3]
+        return {"top": top_posts, "low": low_posts}
 
     def all_content_posts(
         self,
@@ -908,7 +1237,7 @@ class SlidesReportRepository:
                     WHERE client_id = :client_id
                       AND period_start <= :period_start
                     ORDER BY period_start DESC
-                    LIMIT 3
+                    LIMIT 6
                 ),
                 ranked_reports AS (
                     SELECT
@@ -1133,8 +1462,8 @@ def add_platform_mapping(mapping: dict, payload: dict, platform: str):
 
 
 def add_monthly_trends(mapping: dict, prefix: str, platform: str, trends: list[dict]):
-    padded = trends + [{} for _ in range(3)]
-    for index, row in enumerate(padded[:3], start=1):
+    padded = trends + [{} for _ in range(6)]
+    for index, row in enumerate(padded[:6], start=1):
         month_label = "-"
         if row.get("period_start"):
             month_label = row["period_start"].strftime("%b")
@@ -1172,6 +1501,7 @@ def add_monthly_trends(mapping: dict, prefix: str, platform: str, trends: list[d
 
 def add_competitors(mapping: dict, prefix: str, competitors: list[dict]):
     padded = competitors + [{} for _ in range(5)]
+    mapping[placeholder(f"{prefix}_COMP_SELF_GROWTH")] = "-"
     if competitors:
         self_row = competitors[0]
         mapping[placeholder(f"{prefix}_COMP_SELF_GROWTH")] = fmt_percent(self_row.get("follower_growth_rate"))
@@ -1458,6 +1788,7 @@ def apply_report_insights(mapping: dict, insight_rows: list[dict]) -> None:
             "SUMMARY_POINT_4",
         ),
         "top_content_performance": ("TOP_CONTENT_SUCCESS_DRIVER",),
+        "low_content_performance": ("LOW_CONTENT_FAILURE_DRIVER",),
         "competitor_analysis": (
             "COMPETITOR_STRATEGY_INSIGHT",
             "BENCHMARK_NOTE",
@@ -1547,6 +1878,7 @@ def replace_text_placeholders_chunked(
     chunk_size = chunk_size or env_int("SLIDES_TEXT_BATCH_SIZE", 100)
     requests = []
     sent_keys = []
+    occurrences_changed: dict[str, int] = {}
     skipped_image_placeholders = []
     skipped_non_template_placeholders = []
     skipped_image_keys = (
@@ -1590,12 +1922,20 @@ def replace_text_placeholders_chunked(
             f"[slides_report] batchUpdate batch={batch_number} replaceTextRequests={len(batch)}",
             flush=True,
         )
-        slides_service.presentations().batchUpdate(
-            presentationId=presentation_id,
-            body={"requests": batch},
-        ).execute()
+        response = execute_slides_batch_update(slides_service, presentation_id, batch)
+        replies = response.get("replies", [])
+        batch_keys = sent_keys[index : index + chunk_size]
+        for offset, key in enumerate(batch_keys):
+            reply = replies[offset] if offset < len(replies) else {}
+            occurrences_changed[key] = (
+                reply.get("replaceAllText", {}).get("occurrencesChanged", 0)
+            )
     print(
-        f"[slides_report] batchUpdate totalPlaceholdersSent={len(sent_keys)} totalRequests={len(requests)} totalBatches={len(batch_sizes)} skippedNonTemplate={len(skipped_non_template_placeholders)}",
+        f"[slides_report] batchUpdate totalPlaceholdersSent={len(sent_keys)} "
+        f"totalRequests={len(requests)} totalBatches={len(batch_sizes)} "
+        f"occurrencesChanged={sum(occurrences_changed.values())} "
+        f"zeroMatches={sum(1 for value in occurrences_changed.values() if not value)} "
+        f"skippedNonTemplate={len(skipped_non_template_placeholders)}",
         flush=True,
     )
     return {
@@ -1606,6 +1946,8 @@ def replace_text_placeholders_chunked(
         "batch_sizes": batch_sizes,
         "skipped_image_placeholders": sorted(skipped_image_placeholders),
         "skipped_non_template_placeholders": sorted(skipped_non_template_placeholders),
+        "occurrences_changed": occurrences_changed,
+        "total_occurrences_changed": sum(occurrences_changed.values()),
     }
 
 
@@ -1737,6 +2079,32 @@ def generate_dashboard_slides_report(
     permission = share_presentation_as_editor(drive_service, presentation_id)
     profiler.record("share_file", start)
 
+    replace_images = should_replace_images()
+    image_mapping = image_placeholder_mapping(mapping) if replace_images else {}
+    image_keys_with_urls = set(image_mapping)
+
+    # Text is the primary report output. Replace it before image work so an
+    # inaccessible CDN image or a Slides image quota issue cannot leave the
+    # report full of raw text placeholders.
+    start = time.perf_counter()
+    batch_audit = replace_text_placeholders_chunked(
+        slides_service,
+        presentation_id,
+        mapping,
+        skip_image_placeholders=image_keys_with_urls,
+        allowed_placeholders=replacement_placeholders,
+    )
+    profiler.record("replace_text", start)
+
+    start = time.perf_counter()
+    structured_text_audit = replace_structured_text_placeholders(
+        slides_service,
+        presentation_id,
+        mapping,
+        skip_placeholders=image_keys_with_urls,
+    )
+    profiler.record("replace_structured_text", start)
+
     start = time.perf_counter()
     image_audit = {
         "attempted": 0,
@@ -1745,9 +2113,7 @@ def generate_dashboard_slides_report(
         "unmatched": [],
         "skipped_non_template": [],
     }
-    replace_images = should_replace_images()
     if replace_images:
-        image_mapping = image_placeholder_mapping(mapping)
         if image_mapping:
             image_audit = replace_image_placeholders_safe(
                 slides_service,
@@ -1759,15 +2125,48 @@ def generate_dashboard_slides_report(
         print("[slides] image_handling: image replacement disabled", flush=True)
     profiler.record("image_handling", start)
 
-    start = time.perf_counter()
-    batch_audit = replace_text_placeholders_chunked(
-        slides_service,
-        presentation_id,
-        mapping,
-        skip_image_placeholders=set(image_audit.get("replaced", [])),
-        allowed_placeholders=replacement_placeholders,
-    )
-    profiler.record("replace_text", start)
+    # Image placeholders with inaccessible URLs may also exist as visible text
+    # shapes. Replace those failures with the normal fallback after image work.
+    replaced_image_keys = set(image_audit.get("replaced", []))
+    failed_image_keys = image_keys_with_urls - replaced_image_keys
+    if replacement_placeholders is not None:
+        failed_image_keys &= replacement_placeholders
+    image_fallback_audit = {
+        "sent_keys": [],
+        "sent_key_count": 0,
+        "total_requests": 0,
+        "batch_count": 0,
+        "batch_sizes": [],
+        "skipped_image_placeholders": [],
+        "skipped_non_template_placeholders": [],
+    }
+    image_structured_fallback_audit = {
+        "sent_keys": [],
+        "sent_key_count": 0,
+        "unique_key_count": 0,
+        "batch_count": 0,
+        "batch_sizes": [],
+        "total_requests": 0,
+    }
+    if failed_image_keys:
+        start = time.perf_counter()
+        failed_image_mapping = {key: "-" for key in sorted(failed_image_keys)}
+        image_fallback_audit = replace_text_placeholders_chunked(
+            slides_service,
+            presentation_id,
+            failed_image_mapping,
+            skip_image_placeholders=False,
+            allowed_placeholders=replacement_placeholders,
+        )
+        profiler.record("replace_failed_image_text", start)
+
+        start = time.perf_counter()
+        image_structured_fallback_audit = replace_structured_text_placeholders(
+            slides_service,
+            presentation_id,
+            failed_image_mapping,
+        )
+        profiler.record("replace_failed_image_structured_text", start)
 
     post_replace_audit = None
     if fast_mode:
@@ -1780,7 +2179,13 @@ def generate_dashboard_slides_report(
             template_placeholders,
             mapping,
             payload,
-            sent_keys=set(batch_audit["sent_keys"]),
+            sent_keys=(
+                set(batch_audit["sent_keys"])
+                | set(structured_text_audit["sent_keys"])
+                | set(image_fallback_audit["sent_keys"])
+                | set(image_structured_fallback_audit["sent_keys"])
+                | replaced_image_keys
+            ),
             remaining_placeholders=remaining_placeholders,
         )
         log_audit("post_replace", post_replace_audit)
@@ -1795,6 +2200,9 @@ def generate_dashboard_slides_report(
             "images_replaced": bool(image_audit.get("replaced")),
             "image_replacement": image_audit,
             "batch_update": batch_audit,
+            "structured_text_batch_update": structured_text_audit,
+            "image_fallback_batch_update": image_fallback_audit,
+            "image_structured_fallback_batch_update": image_structured_fallback_audit,
             "post_replace_audit": post_replace_audit,
             "fast_mode": fast_mode,
             "filter_to_template": bool(replacement_placeholders),

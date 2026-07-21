@@ -11,6 +11,7 @@ ANALYSIS_SECTIONS = {
     "followers_growth_analysis": "audience_growth",
     "growth_performance_analysis": "engagement",
     "top_content_performance": "content",
+    "low_content_performance": "content",
     "competitor_analysis": "competitor",
 }
 

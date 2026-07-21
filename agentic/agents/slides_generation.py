@@ -17,6 +17,7 @@ def state_insight_overrides(state: State) -> list[dict]:
         "followers_growth_analysis",
         "growth_performance_analysis",
         "top_content_performance",
+        "low_content_performance",
         "competitor_analysis",
     )
     for platform, result in platform_results.items():

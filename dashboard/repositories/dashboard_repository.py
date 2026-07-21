@@ -302,10 +302,15 @@ def parse_post_date(value):
     if not value:
         return None
     normalized = str(value).replace("\u202f", " ").strip()
+    try:
+        return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        pass
     for fmt in (
         "%d/%m/%Y, %H:%M",
         "%d/%m/%Y %H:%M",
         "%m/%d/%y, %I:%M %p",
+        "%m/%d/%Y, %I:%M %p",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d",
     ):
@@ -401,6 +406,7 @@ def post_json(row: dict, content_type: str, platform: str):
     return {
         "post_id": row.get("Post-ID"),
         "published_at": json_safe(parse_post_date(row.get("Date"))),
+        "source_published_at": row.get("Date"),
         "caption": row.get("Message") or "-",
         "permalink": row.get("Link"),
         "image_url": row.get("Image Link"),
@@ -415,6 +421,18 @@ def post_json(row: dict, content_type: str, platform: str):
     }
 
 
+def content_identity(post: dict) -> tuple:
+    if post.get("post_id"):
+        return ("post_id", str(post["post_id"]))
+    if post.get("permalink"):
+        return ("permalink", str(post["permalink"]))
+    return (
+        "content",
+        str(post.get("caption") or ""),
+        str(post.get("published_at") or ""),
+    )
+
+
 def summarize_posts(rows: list[dict], content_type: str, platform: str):
     summary_rows = [row for row in rows if str(row.get("Post-ID", "")).strip().upper() == "SUMME"]
     content_rows = [row for row in rows if str(row.get("Post-ID", "")).strip().upper() != "SUMME"]
@@ -424,7 +442,13 @@ def summarize_posts(rows: list[dict], content_type: str, platform: str):
         post_type = post.get("content_type") or content_type
         content_type_counts[post_type] = content_type_counts.get(post_type, 0) + 1
     posts.sort(key=lambda item: item.get("total_engagement") or 0, reverse=True)
-    low_posts = sorted(posts, key=lambda item: item.get("total_engagement") or 0)
+    top_posts = posts[:3]
+    top_identities = {content_identity(post) for post in top_posts}
+    low_posts = [
+        post
+        for post in sorted(posts, key=lambda item: item.get("total_engagement") or 0)
+        if content_identity(post) not in top_identities
+    ][:3]
     if summary_rows:
         summary_post = post_json(summary_rows[0], content_type, platform)
         totals = {
@@ -447,8 +471,8 @@ def summarize_posts(rows: list[dict], content_type: str, platform: str):
             "count": len(posts),
         }
     return {
-        "top_posts": posts[:5],
-        "low_posts": low_posts[:5],
+        "top_posts": top_posts,
+        "low_posts": low_posts,
         "totals": totals,
         "raw_posts": posts,
         "content_type_counts": content_type_counts,
