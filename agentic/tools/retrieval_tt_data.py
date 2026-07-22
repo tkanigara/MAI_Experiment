@@ -1003,3 +1003,92 @@ def retrieve_competitor_analysis(
 
     finally:
         conn.close()
+@tool
+def retrieve_tiktok_performance(
+    client_code: str,
+    report_date: str,
+):
+    """
+    Retrieve TikTok performance metrics.
+
+    Args:
+        client_code: Client code.
+        report_date: YYYY-MM-DD.
+    """
+
+    conn = get_connection()
+
+    try:
+        report_date = datetime.strptime(
+            report_date,
+            "%Y-%m-%d"
+        ).date()
+
+        with conn.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    tr.client_id,
+                    tr.total_followers,
+                    tr.follows,
+                    tr.unfollows,
+                    tr.follower_growth,
+                    tr.total_engagement,
+                    tr.engagement_rate,
+                    tr.reach,
+                    tr.total_posts
+
+                FROM tiktok_reports tr
+
+                INNER JOIN clients c
+                    ON c.id = tr.client_id
+
+                INNER JOIN report_periods rp
+                    ON rp.id = tr.report_period_id
+
+                WHERE
+                    c.client_code = %s
+                    AND rp.period_start <= %s
+                    AND rp.period_end >= %s
+
+                LIMIT 1;
+                """,
+                (
+                    client_code,
+                    report_date,
+                    report_date,
+                ),
+            )
+
+            row = cursor.fetchone()
+
+            if row is None:
+                return {
+                    "success": False,
+                    "message": "TikTok report not found."
+                }
+
+            return {
+                "success": True,
+                "overview": {
+                    "client_id": str(row[0]),
+                    "total_followers": to_number(row[1]),
+                    "follows": to_number(row[2]),
+                    "unfollows": to_number(row[3]),
+                    "followers_growth": to_number(row[4]),
+                    "total_engagement": to_number(row[5]),
+                    "engagement_rate": to_number(row[6]),
+                    "reach": to_number(row[7]),
+                    "total_posts": to_number(row[8]),
+                }
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+    finally:
+        conn.close()

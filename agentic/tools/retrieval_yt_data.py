@@ -811,3 +811,91 @@ def retrieve_competitor_analysis(
     finally:
         conn.close()
 
+@tool
+def retrieve_youtube_performance(
+    client_code: str,
+    report_date: str,
+):
+    """
+    Retrieve YouTube performance metrics.
+
+    Args:
+        client_code: Client code.
+        report_date: YYYY-MM-DD.
+    """
+
+    conn = get_connection()
+
+    try:
+        report_date = datetime.strptime(
+            report_date,
+            "%Y-%m-%d"
+        ).date()
+
+        with conn.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    yr.client_id,
+                    yr.total_subscribers,
+                    yr.subscriber_growth,
+                    yr.subscribers_lost,
+                    yr.total_engagement,
+                    yr.engagement_rate,
+                    yr.reach,
+                    yr.total_posts
+
+                FROM youtube_reports yr
+
+                INNER JOIN clients c
+                    ON c.id = yr.client_id
+
+                INNER JOIN report_periods rp
+                    ON rp.id = yr.report_period_id
+
+                WHERE
+                    c.client_code = %s
+                    AND rp.period_start <= %s
+                    AND rp.period_end >= %s
+
+                LIMIT 1;
+                """,
+                (
+                    client_code,
+                    report_date,
+                    report_date,
+                ),
+            )
+
+            row = cursor.fetchone()
+
+            if row is None:
+                return {
+                    "success": False,
+                    "message": "YouTube report not found."
+                }
+
+            return {
+                "success": True,
+                "overview": {
+                    "client_id": str(row[0]),
+                    "total_followers": to_number(row[1]),      # total_subscribers
+                    "follows": None,
+                    "unfollows": to_number(row[3]),             # subscribers_lost
+                    "followers_growth": to_number(row[2]),      # subscriber_growth
+                    "total_engagement": to_number(row[4]),
+                    "engagement_rate": to_number(row[5]),
+                    "reach": to_number(row[6]),
+                    "total_posts": to_number(row[7]),
+                }
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+    finally:
+        conn.close()

@@ -9,6 +9,7 @@ def convert_number(value):
         return int(value) if value % 1 == 0 else float(value)
     return value
 
+
 @tool
 def retrieve_kpi(client_code: str,report_date: str,platform: str) -> dict:
     """
@@ -818,6 +819,96 @@ def retrieve_competitor_analysis(
                 "success": True,
                 "Client": client_data,
                 "Competitors": competitors,
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+    finally:
+        conn.close()
+
+@tool
+def retrieve_facebook_performance(
+    client_code: str,
+    report_date: str,
+):
+    """
+    Retrieve Facebook performance metrics.
+
+    Args:
+        client_code: Client code.
+        report_date: YYYY-MM-DD.
+    """
+
+    conn = get_connection()
+
+    try:
+        report_date = datetime.strptime(
+            report_date,
+            "%Y-%m-%d"
+        ).date()
+
+        with conn.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    fr.client_id,
+                    fr.total_followers,
+                    fr.follows,
+                    fr.unfollows,
+                    fr.follower_growth,
+                    fr.total_engagement,
+                    fr.engagement_rate,
+                    fr.reach,
+                    fr.total_posts
+
+                FROM facebook_reports fr
+
+                INNER JOIN clients c
+                    ON c.id = fr.client_id
+
+                INNER JOIN report_periods rp
+                    ON rp.id = fr.report_period_id
+
+                WHERE
+                    c.client_code = %s
+                    AND rp.period_start <= %s
+                    AND rp.period_end >= %s
+
+                LIMIT 1;
+                """,
+                (
+                    client_code,
+                    report_date,
+                    report_date,
+                ),
+            )
+
+            row = cursor.fetchone()
+
+            if row is None:
+                return {
+                    "success": False,
+                    "message": "Facebook report not found."
+                }
+
+            return {
+                "success": True,
+                "overview": {
+                    "client_id": str(row[0]),
+                    "total_followers": to_number(row[1]),
+                    "follows": to_number(row[2]),
+                    "unfollows": to_number(row[3]),
+                    "followers_growth": to_number(row[4]),
+                    "total_engagement": to_number(row[5]),
+                    "engagement_rate": to_number(row[6]),
+                    "reach": to_number(row[7]),
+                    "total_posts": to_number(row[8]),
+                }
             }
 
     except Exception as e:

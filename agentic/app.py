@@ -2,7 +2,7 @@ from CentralArch.graph import app
 from CentralArch.state import (
     State,
     Request, 
-    instagram_result_analysis, facebook_result_analysis, tiktok_result_analysis, youtube_result_analysis
+    instagram_result_analysis, facebook_result_analysis, tiktok_result_analysis, youtube_result_analysis, 
 )
 from datetime import date
 
@@ -123,6 +123,10 @@ print(youtube.low_content_performance)
 
 print("\n=== Competitor Analysis ===")
 print(youtube.competitor_analysis)
+
+print("\n =========== ALL SOCIAL MEDIA PERFORMANCE =======")
+all_socmed = result["summary_all_socmed"]
+print(all_socmed.summary)
 
 print("===============PLATFORM SUMMARIES ==========")
 for platform, field_name in (

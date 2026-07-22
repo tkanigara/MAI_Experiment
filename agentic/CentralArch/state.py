@@ -88,7 +88,11 @@ class SummaryYoutube(BaseModel):
     client_code: str | None = None
     key_summary: str | None = None
     action_plan: str | None = None
-    
+
+class SummaryAllSocmed(BaseModel):
+    client_code: str | None = None
+    summary: str | None = None
+
 class ReportGenerationResult(BaseModel):
     status: str = "not_requested"
     presentation_id: str | None = None
@@ -117,6 +121,9 @@ class State(BaseModel):
     summary_facebook: SummaryFacebook = Field(default_factory=SummaryFacebook)
     summary_tiktok: SummaryTiktok = Field(default_factory=SummaryTiktok)
     summary_youtube: SummaryYoutube = Field(default_factory=SummaryYoutube)
+
+    # Summary all platform
+    summary_all_socmed: SummaryAllSocmed = Field(default_factory=SummaryAllSocmed)
 
     # Google Slides generation result
     report_generation: ReportGenerationResult = Field(default_factory=ReportGenerationResult)

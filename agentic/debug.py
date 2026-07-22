@@ -1,39 +1,39 @@
-from pprint import pprint
+from tools.retrieval import retrieve_social_performance
+from datetime import date
 
-from tools.retrieva_ig_data import (
-    retrieve_top_performing_content,
-    retrieve_content_by_bucket,
-)
+ig = retrieve_social_performance.invoke({
+    "platform": "instagram",
+    "client_code": "mai001",
+    "report_date": "2026-07-08"
+})
 
-client_code = "mai001"
-platform = "instagram"
-report_date = "2026-07-08"
+fb = retrieve_social_performance.invoke({
+    "platform": "facebook",
+    "client_code": "mai001",
+    "report_date": "2026-07-08"
+})
 
-print("=" * 80)
-print("TOP PERFORMING CONTENT (OLD TOOL)")
-print("=" * 80)
+tt =retrieve_social_performance.invoke({
+    "platform": "tiktok",
+    "client_code": "mai001",
+    "report_date":"2026-07-08"
+})
 
-top_old = retrieve_top_performing_content.invoke(
-    {
-        "client_code": client_code,
-        "report_date": report_date,
-        "platform": platform,
-    }
-)
+yt = retrieve_social_performance.invoke({
+    "platform": "youtube",
+    "client_code": "mai001",
+    "report_date": "2026-07-08"
+})
 
-pprint(top_old)
+print("=============== INSTAGRAM ===============")
+print(f"{ig}\n")
 
-print("\n" + "=" * 80)
-print("TOP PERFORMING CONTENT (NEW TOOL)")
-print("=" * 80)
+print("=============== YOUTUBE ===============")
+print(f"{yt}\n")
 
-top_new = retrieve_content_by_bucket.invoke(
-    {
-        "client_code": client_code,
-        "report_date": report_date,
-        "platform": platform,
-        "bucket": "top",
-    }
-)
+print("=============== TIKTOK ===============")
+print(f"{tt}\n")
 
-pprint(top_new)
+print("=============== FACEBOOK ===============")
+print(f"{fb}\n")
+
