@@ -1,5 +1,6 @@
 from CentralArch.state import (
     State,
+    SummaryAllSocmed,
     SummaryFacebook,
     SummaryInstagram,
     SummaryTiktok,
@@ -69,6 +70,10 @@ def cached_insights_node(state: State) -> State:
                     **values,
                 ),
             )
+        state.summary_all_socmed = SummaryAllSocmed(
+            client_code=state.Metadata.client_code,
+            summary=cached["executive_summary"],
+        )
         state.analysis_cache_hit = True
         state.analysis_data_version = cached["data_version"]
     return state

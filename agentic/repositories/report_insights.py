@@ -197,6 +197,21 @@ def persist_agent_results(state) -> dict:
                         data_version,
                     )
                     written += 1
+
+            executive_summary = state.summary_all_socmed.summary
+            if executive_summary:
+                _upsert_insight(
+                    cursor,
+                    client_id,
+                    report_period_id,
+                    None,
+                    "executive_summary",
+                    "summary_result",
+                    executive_summary,
+                    1,
+                    data_version,
+                )
+                written += 1
         conn.commit()
         return {"written": written, "data_version": data_version}
     except Exception:
@@ -233,8 +248,11 @@ def load_cached_agent_results(
 
     cached = {platform: {} for platform in connected_platforms}
     summaries = {platform: {} for platform in connected_platforms}
+    executive_summary = None
     for platform, insight_key, insight_text in rows:
-        if platform in summaries and insight_key in SUMMARY_KEYS:
+        if platform is None and insight_key == "summary_result":
+            executive_summary = insight_text
+        elif platform in summaries and insight_key in SUMMARY_KEYS:
             summaries[platform][insight_key] = insight_text
         elif platform in cached:
             cached[platform][insight_key] = insight_text
@@ -250,8 +268,11 @@ def load_cached_agent_results(
         for platform in connected_platforms
     ):
         return None
+    if not executive_summary:
+        return None
     return {
         "data_version": data_version,
         "platforms": cached,
         "summaries": summaries,
+        "executive_summary": executive_summary,
     }

@@ -52,6 +52,17 @@ def state_insight_overrides(state: State) -> list[dict]:
                         "insight_text": insight_text,
                     }
                 )
+
+    executive_summary = state.summary_all_socmed.summary
+    if executive_summary:
+        rows.append(
+            {
+                "platform": None,
+                "section_key": "executive_summary",
+                "insight_key": "summary_result",
+                "insight_text": executive_summary,
+            }
+        )
     return rows
 
 

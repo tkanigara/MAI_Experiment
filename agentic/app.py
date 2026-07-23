@@ -15,8 +15,8 @@ initial_state = State(
     # )
         request=Request(
         user_intent="Generate Marketing Report",
-        client_code="mai001",
-        report_date=date(2026, 7,8),
+        client_code="demo",
+        report_date=date(2026, 6,23),
         generate_slides=False,
         slides_dry_run=False,
         persist_insights=False,
