@@ -16,6 +16,7 @@ export default function PlatformDetailPage({
   onNavigate,
   onOpenReportKpi,
   onEditKpi,
+  onOpenEditor,
 }) {
   const [showMissingData, setShowMissingData] = useState(false);
   const report = data?.report || {};
@@ -43,6 +44,9 @@ export default function PlatformDetailPage({
           <p>Performance summary, KPI results, and top content for {month.label}.</p>
         </div>
         <div className="page-actions">
+          <button className="secondary-button" onClick={onOpenEditor}>
+            Edit report data
+          </button>
           <button
             className={`secondary-button data-check-button ${hasMissingData ? "has-missing" : ""}`}
             onClick={() => setShowMissingData(true)}

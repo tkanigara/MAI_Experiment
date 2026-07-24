@@ -11,6 +11,7 @@ import ClientDetailPage from "./pages/ClientDetailPage";
 import ClientsPage from "./pages/ClientsPage";
 import MonthDetailPage from "./pages/MonthDetailPage";
 import PlatformDetailPage from "./pages/PlatformDetailPage";
+import ReportDataEditorPage from "./pages/ReportDataEditorPage";
 
 function routeParts() {
   return window.location.pathname.split("/").filter(Boolean);
@@ -50,6 +51,7 @@ export default function App() {
   );
   const currentMonth = reportMonths.find((month) => month.slug === route[2]);
   const currentPlatform = route[3];
+  const isReportEditor = currentPlatform === "edit";
 
   function navigate(path, replace = false) {
     if (window.location.pathname !== path) {
@@ -315,11 +317,27 @@ export default function App() {
         onOpenAddReport={() => setModal("add-report-csv")}
         onGenerateReport={generateSlidesReport}
         isGeneratingReport={generatingReportId === currentMonth.id}
+        onOpenEditor={() => navigate(`/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/edit`)}
       />
     );
   }
 
-  if (currentClient && selectedClient && currentMonth && currentPlatform) {
+  if (currentClient && selectedClient && currentMonth && isReportEditor) {
+    content = (
+      <ReportDataEditorPage
+        client={selectedClient}
+        month={currentMonth}
+        onNavigate={navigate}
+        onSaved={async () => {
+          await loadClient(selectedClient);
+          await loadPlatformData(selectedClient);
+          showToast("Report data updated.");
+        }}
+      />
+    );
+  }
+
+  if (currentClient && selectedClient && currentMonth && currentPlatform && !isReportEditor) {
     content = (
       <PlatformDetailPage
         client={selectedClient}
@@ -329,6 +347,7 @@ export default function App() {
         onNavigate={navigate}
         onOpenReportKpi={() => setModal("add-report-kpi")}
         onEditKpi={setEditKpi}
+        onOpenEditor={() => navigate(`/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/edit`)}
       />
     );
   }

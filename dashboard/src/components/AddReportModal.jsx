@@ -237,6 +237,16 @@ export default function AddReportModal({
                     : ""}
                   {importResult.summary.competitor_rows || 0} competitor profiles and {importResult.summary.competitor_content_rows || 0} competitor posts stored.
                 </p>
+                {importResult.summary.content_breakdown ? (
+                  <div className="import-platform-breakdown">
+                    {Object.entries(importResult.summary.content_breakdown.detected || {}).map(([platform, count]) => (
+                      <span key={platform}>{platform}: {count} rows</span>
+                    ))}
+                    {(importResult.summary.content_breakdown.unknown_count || 0) > 0 ? (
+                      <span>{importResult.summary.content_breakdown.unknown_count} unknown rows skipped</span>
+                    ) : null}
+                  </div>
+                ) : null}
               </section>
             )}
           </>

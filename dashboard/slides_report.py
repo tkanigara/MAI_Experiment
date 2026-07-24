@@ -1311,8 +1311,8 @@ def log_audit(label: str, audit: dict):
 
 
 class SlidesReportRepository:
-    def __init__(self):
-        self.engine = create_engine(database_url(), pool_pre_ping=True)
+    def __init__(self, engine=None):
+        self.engine = engine or create_engine(database_url(), pool_pre_ping=True)
 
     def report_payload(self, client_id: str, period_id: str) -> dict:
         with self.engine.begin() as conn:
@@ -1432,7 +1432,7 @@ class SlidesReportRepository:
                     for row in conn.execute(
                         text(
                             """
-                            SELECT metric_name, actual_month, actual_year, target_month,
+                            SELECT id, metric_name, actual_month, actual_year, target_month,
                                    target_year, achievement_month, achievement_year, unit
                             FROM kpi_results
                             WHERE client_id = :client_id
@@ -1627,6 +1627,8 @@ class SlidesReportRepository:
                     WHERE r.client_id = :client_id
                 )
                 SELECT
+                    r.id AS report_id,
+                    p.id AS source_period_id,
                     p.period_label,
                     p.period_start,
                     r.{follower_field} AS audience_total,
@@ -2416,7 +2418,8 @@ def generate_dashboard_slides_report(
     template_id = extract_presentation_id(template_value)
 
     start = time.perf_counter()
-    payload = SlidesReportRepository().report_payload(client_id, period_id)
+    slides_repository = SlidesReportRepository()
+    payload = slides_repository.report_payload(client_id, period_id)
     if insight_overrides:
         merged_insights = {
             (row.get("platform"), row.get("insight_key")): dict(row)
@@ -2430,6 +2433,19 @@ def generate_dashboard_slides_report(
 
     start = time.perf_counter()
     mapping = build_mapping(payload)
+    try:
+        from dashboard.services.report_editor import (
+            active_placeholder_overrides,
+        )
+    except ModuleNotFoundError:
+        from services.report_editor import active_placeholder_overrides
+    mapping.update(
+        active_placeholder_overrides(
+            slides_repository.engine,
+            client_id,
+            period_id,
+        )
+    )
     profiler.record("build_mapping", start)
 
     credentials_path = resolve_project_path(default_credentials())

@@ -22,6 +22,7 @@ try:
     from dashboard.services.csv_import import import_report_csv
     from dashboard.services.kpi_service import upsert_kpi_target
     from dashboard.services.agentic_report import generate_agentic_report
+    from dashboard.services.report_editor import ReportEditorService
 except ModuleNotFoundError:
     from config import DASHBOARD_DIR, STATIC_DIR
     from repositories.dashboard_repository import (
@@ -34,9 +35,11 @@ except ModuleNotFoundError:
     from services.csv_import import import_report_csv
     from services.kpi_service import upsert_kpi_target
     from services.agentic_report import generate_agentic_report
+    from services.report_editor import ReportEditorService
 
 
 repository = DashboardRepository()
+report_editor = ReportEditorService(repository.engine)
 app = FastAPI(title="MAI Social Media Dashboard API")
 
 
@@ -139,6 +142,7 @@ def import_csv(
     account: Optional[UploadFile] = File(None),
     competitor: Optional[UploadFile] = File(None),
     competitor_content: Optional[UploadFile] = File(None),
+    all_content: Optional[UploadFile] = File(None),
     ig_post: Optional[UploadFile] = File(None),
     ig_story: Optional[UploadFile] = File(None),
     fb_post: Optional[UploadFile] = File(None),
@@ -149,6 +153,7 @@ def import_csv(
         "account": account,
         "competitor": competitor,
         "competitor_content": competitor_content,
+        "all_content": all_content,
         "ig_post": ig_post,
         "ig_story": ig_story,
         "fb_post": fb_post,
@@ -193,6 +198,117 @@ def generate_slides(payload: dict):
         )
     except ValueError as exc:
         raise bad_request(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get(
+    "/api/clients/{client_id}/report-periods/{period_id}/editor"
+)
+def get_report_editor(client_id: str, period_id: str):
+    try:
+        return json_response(report_editor.get_editor(client_id, period_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.patch(
+    "/api/clients/{client_id}/report-periods/{period_id}"
+    "/editor/sections/{section}"
+)
+def update_report_editor_section(
+    client_id: str,
+    period_id: str,
+    section: str,
+    payload: dict,
+):
+    try:
+        return json_response(
+            report_editor.update_section(
+                client_id,
+                period_id,
+                section,
+                payload,
+            )
+        )
+    except RuntimeError as exc:
+        if str(exc).startswith("VERSION_CONFLICT:"):
+            raise HTTPException(status_code=409, detail=str(exc).split(":", 1)[1].strip())
+        raise HTTPException(status_code=500, detail=str(exc))
+    except ValueError as exc:
+        raise bad_request(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post(
+    "/api/clients/{client_id}/report-periods/{period_id}/assets"
+)
+def upload_report_asset(
+    client_id: str,
+    period_id: str,
+    actor: str = Form(...),
+    platform: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+):
+    try:
+        return json_response(
+            report_editor.upload_asset(
+                client_id,
+                period_id,
+                actor,
+                file.filename or "report-image",
+                file.content_type or "",
+                file.file.read(),
+                platform,
+            ),
+            status_code=201,
+        )
+    except ValueError as exc:
+        raise bad_request(exc)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        file.file.close()
+
+
+@app.post(
+    "/api/clients/{client_id}/report-periods/{period_id}"
+    "/overrides/{override_id}/restore"
+)
+def restore_report_override(
+    client_id: str,
+    period_id: str,
+    override_id: str,
+    payload: dict,
+):
+    try:
+        return json_response(
+            report_editor.restore_override(
+                client_id,
+                period_id,
+                override_id,
+                payload.get("actor"),
+            )
+        )
+    except ValueError as exc:
+        raise bad_request(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get(
+    "/api/clients/{client_id}/report-periods/{period_id}/edit-history"
+)
+def get_report_edit_history(client_id: str, period_id: str):
+    try:
+        return json_response(report_editor.history(client_id, period_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

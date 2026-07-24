@@ -18,11 +18,8 @@ export const CSV_TYPES = [
   { key: "account", title: "Account Data", description: "General account/profile data for all platforms." },
   { key: "competitor", title: "Competitor Data", description: "Competitor analysis data per platform in one CSV." },
   { key: "competitor_content", title: "Competitor Content", description: "Post-level competitor content for best-content analysis.", optional: true },
-  { key: "ig_post", title: "Instagram Posts", description: "Instagram post performance data." },
+  { key: "all_content", title: "All Platform Content", description: "Instagram, Facebook, TikTok, and YouTube posts in one CSV." },
   { key: "ig_story", title: "Instagram Stories", description: "Instagram story performance data." },
-  { key: "fb_post", title: "Facebook Posts", description: "Facebook post performance data." },
-  { key: "tt_post", title: "TikTok Posts", description: "TikTok post performance data." },
-  { key: "yt_post", title: "YouTube Posts", description: "YouTube post performance data." },
 ];
 
 const MONTH_NAMES = [
