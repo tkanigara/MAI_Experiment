@@ -302,6 +302,18 @@ def is_image_placeholder_key(key: str) -> bool:
     return key in CHART_IMAGE_PLACEHOLDERS or key.strip("{}").endswith("_IMAGE")
 
 
+def image_placeholder_priority(key: str) -> int:
+    if key in CHART_IMAGE_PLACEHOLDERS:
+        return 0
+    if key.startswith("{{IG_STORY_"):
+        return 1
+    if "_EVIDENCE_" in key:
+        return 2
+    if "_POST_TOP_" in key or "_POST_LOW_" in key:
+        return 3
+    return 4
+
+
 def normalized_chart_rows(rows: list[dict]) -> list[dict]:
     normalized = []
     for row in reversed(rows):
@@ -1062,11 +1074,22 @@ def replace_image_placeholders_safe(
                     }
                 )
 
-    for index in range(0, len(object_requests), chunk_size):
-        execute_object_batch(
-            object_requests[index : index + chunk_size],
-            object_request_meta[index : index + chunk_size],
-        )
+    prioritized_requests = sorted(
+        zip(object_requests, object_request_meta),
+        key=lambda item: image_placeholder_priority(item[1][0]),
+    )
+    for priority in range(5):
+        priority_items = [
+            item
+            for item in prioritized_requests
+            if image_placeholder_priority(item[1][0]) == priority
+        ]
+        for index in range(0, len(priority_items), chunk_size):
+            batch_items = priority_items[index : index + chunk_size]
+            execute_object_batch(
+                [item[0] for item in batch_items],
+                [item[1] for item in batch_items],
+            )
 
     fallback_requests = []
     fallback_request_meta = []
@@ -1087,30 +1110,41 @@ def replace_image_placeholders_safe(
         )
         fallback_request_meta.append(placeholder_key)
 
-    for index in range(0, len(fallback_requests), chunk_size):
-        batch = fallback_requests[index : index + chunk_size]
-        batch_meta = fallback_request_meta[index : index + chunk_size]
-        try:
-            response = execute_image_batch(batch)
-            replies = response.get("replies", [])
-            for placeholder_key, reply in zip(batch_meta, replies):
-                occurrences = (
-                    reply
-                    .get("replaceAllShapesWithImage", {})
-                    .get("occurrencesChanged", 0)
-                )
-                if occurrences:
-                    replaced.append(placeholder_key)
-        except Exception as exc:
-            reason = str(exc).splitlines()[0]
-            for placeholder_key in batch_meta:
-                failed.append(
-                    {
-                        "placeholder": placeholder_key,
-                        "method": "replaceAllShapesWithImage",
-                        "reason": reason,
-                    }
-                )
+    prioritized_fallback = sorted(
+        zip(fallback_requests, fallback_request_meta),
+        key=lambda item: image_placeholder_priority(item[1]),
+    )
+    for priority in range(5):
+        priority_items = [
+            item
+            for item in prioritized_fallback
+            if image_placeholder_priority(item[1]) == priority
+        ]
+        for index in range(0, len(priority_items), chunk_size):
+            batch_items = priority_items[index : index + chunk_size]
+            batch = [item[0] for item in batch_items]
+            batch_meta = [item[1] for item in batch_items]
+            try:
+                response = execute_image_batch(batch)
+                replies = response.get("replies", [])
+                for placeholder_key, reply in zip(batch_meta, replies):
+                    occurrences = (
+                        reply
+                        .get("replaceAllShapesWithImage", {})
+                        .get("occurrencesChanged", 0)
+                    )
+                    if occurrences:
+                        replaced.append(placeholder_key)
+            except Exception as exc:
+                reason = str(exc).splitlines()[0]
+                for placeholder_key in batch_meta:
+                    failed.append(
+                        {
+                            "placeholder": placeholder_key,
+                            "method": "replaceAllShapesWithImage",
+                            "reason": reason,
+                        }
+                    )
 
     # If a batched fallback failed because of a bad URL, retry each item once so
     # one inaccessible CDN URL does not block all other images in the same batch.

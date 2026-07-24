@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import sys
 import unittest
+from decimal import Decimal
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -11,6 +13,8 @@ from dashboard.repositories.dashboard_repository import (
     content_type_from_row,
     deduplicate_content_rows,
     split_combined_content_rows,
+    summarize_post_objects,
+    json_safe,
 )
 
 
@@ -105,6 +109,78 @@ class UnifiedContentImportTests(unittest.TestCase):
         )
         self.assertEqual(len(deduplicated), 1)
         self.assertEqual(duplicate_count, 1)
+
+    def test_stored_story_rows_can_be_preserved_during_feed_update(self):
+        summary = summarize_post_objects(
+            [
+                {
+                    "post_id": "story-1",
+                    "content_type": "story",
+                    "likes": 0,
+                    "comments": 0,
+                    "shares": 2,
+                    "reach": 100,
+                    "views": 120,
+                    "total_engagement": 2,
+                }
+            ],
+            "story",
+        )
+
+        self.assertEqual(summary["totals"]["count"], 1)
+        self.assertEqual(summary["totals"]["reach"], 100)
+        self.assertEqual(summary["content_type_counts"], {"story": 1})
+
+    def test_stored_decimal_metrics_can_be_added_to_csv_float_metrics(self):
+        stored_feed = summarize_post_objects(
+            [
+                {
+                    "post_id": "feed-1",
+                    "content_type": "image",
+                    "likes": Decimal("10"),
+                    "comments": Decimal("2"),
+                    "shares": Decimal("1"),
+                    "reach": Decimal("100"),
+                    "total_engagement": Decimal("13"),
+                }
+            ],
+            "post",
+        )
+        csv_story = summarize_post_objects(
+            [
+                {
+                    "post_id": "story-1",
+                    "content_type": "story",
+                    "shares": 2.0,
+                    "reach": 50.0,
+                    "total_engagement": 2.0,
+                }
+            ],
+            "story",
+        )
+
+        combined_engagement = (
+            stored_feed["totals"]["engagement"]
+            + csv_story["totals"]["engagement"]
+        )
+        combined_reach = (
+            stored_feed["totals"]["reach"]
+            + csv_story["totals"]["reach"]
+        )
+
+        self.assertEqual(combined_engagement, 15.0)
+        self.assertEqual(combined_reach, 150.0)
+
+    def test_preserved_content_is_json_safe(self):
+        serialized = json_safe(
+            {
+                "published_at": datetime(2026, 7, 1, 12, 30),
+                "total_engagement": Decimal("13.5"),
+            }
+        )
+
+        self.assertEqual(serialized["published_at"], "2026-07-01T12:30:00")
+        self.assertEqual(serialized["total_engagement"], 13.5)
 
 
 if __name__ == "__main__":

@@ -589,9 +589,35 @@ def summarize_posts(rows: list[dict], content_type: str, platform: str):
         content_type,
     )
     posts = [post_json(row, content_type, platform) for row in content_rows]
+    summary = summarize_post_objects(posts, content_type)
+    if summary_rows:
+        summary_post = post_json(summary_rows[0], content_type, platform)
+        summary["totals"].update(
+            {
+                "likes": summary_post.get("likes") or 0,
+                "comments": summary_post.get("comments") or 0,
+                "shares": summary_post.get("shares") or 0,
+                "saves": summary_post.get("saves") or 0,
+                "reposts": summary_post.get("reposts") or 0,
+                "reactions": summary_post.get("reactions") or 0,
+                "reach": summary_post.get("reach") or 0,
+                "views": summary_post.get("views") or 0,
+                "engagement": summary_post.get("total_engagement") or 0,
+            }
+        )
+    return summary
+
+
+def summarize_post_objects(posts: list[dict], fallback_content_type: str = "post"):
+    posts = [dict(post) for post in posts]
+
+    def total_value(item: dict, key: str) -> float:
+        value = parse_number(item.get(key))
+        return float(value) if value is not None else 0.0
+
     content_type_counts = {}
     for post in posts:
-        post_type = post.get("content_type") or content_type
+        post_type = post.get("content_type") or fallback_content_type
         content_type_counts[post_type] = content_type_counts.get(post_type, 0) + 1
     posts.sort(key=lambda item: item.get("total_engagement") or 0, reverse=True)
     top_posts = posts[:3]
@@ -601,33 +627,20 @@ def summarize_posts(rows: list[dict], content_type: str, platform: str):
         for post in sorted(posts, key=lambda item: item.get("total_engagement") or 0)
         if content_identity(post) not in top_identities
     ][:3]
-    if summary_rows:
-        summary_post = post_json(summary_rows[0], content_type, platform)
-        totals = {
-            "likes": summary_post.get("likes") or 0,
-            "comments": summary_post.get("comments") or 0,
-            "shares": summary_post.get("shares") or 0,
-            "saves": summary_post.get("saves") or 0,
-            "reposts": summary_post.get("reposts") or 0,
-            "reactions": summary_post.get("reactions") or 0,
-            "reach": summary_post.get("reach") or 0,
-            "views": summary_post.get("views") or 0,
-            "engagement": summary_post.get("total_engagement") or 0,
-            "count": len(posts),
-        }
-    else:
-        totals = {
-            "likes": sum((item.get("likes") or 0) for item in posts),
-            "comments": sum((item.get("comments") or 0) for item in posts),
-            "shares": sum((item.get("shares") or 0) for item in posts),
-            "saves": sum((item.get("saves") or 0) for item in posts),
-            "reposts": sum((item.get("reposts") or 0) for item in posts),
-            "reactions": sum((item.get("reactions") or 0) for item in posts),
-            "reach": sum((item.get("reach") or 0) for item in posts),
-            "views": sum((item.get("views") or 0) for item in posts),
-            "engagement": sum((item.get("total_engagement") or 0) for item in posts),
-            "count": len(posts),
-        }
+    totals = {
+        "likes": sum(total_value(item, "likes") for item in posts),
+        "comments": sum(total_value(item, "comments") for item in posts),
+        "shares": sum(total_value(item, "shares") for item in posts),
+        "saves": sum(total_value(item, "saves") for item in posts),
+        "reposts": sum(total_value(item, "reposts") for item in posts),
+        "reactions": sum(total_value(item, "reactions") for item in posts),
+        "reach": sum(total_value(item, "reach") for item in posts),
+        "views": sum(total_value(item, "views") for item in posts),
+        "engagement": sum(
+            total_value(item, "total_engagement") for item in posts
+        ),
+        "count": len(posts),
+    }
     return {
         "top_posts": top_posts,
         "low_posts": low_posts,
@@ -1454,26 +1467,65 @@ class DashboardRepository:
                 story_duplicates
             )
 
-            instagram_posts = summarize_posts(
-                instagram_post_rows,
-                "post",
-                "instagram",
-            )
-            instagram_stories = summarize_posts(
-                instagram_story_rows,
-                "story",
-                "instagram",
-            )
+            feed_uploaded = bool(instagram_post_rows)
+            stories_uploaded = bool(instagram_story_rows)
+            existing_instagram_content = []
+            if feed_uploaded != stories_uploaded:
+                existing_instagram_content = self.existing_social_content_posts(
+                    conn,
+                    client_id,
+                    period_id,
+                    "instagram",
+                )
+
+            if feed_uploaded:
+                instagram_posts = summarize_posts(
+                    instagram_post_rows,
+                    "post",
+                    "instagram",
+                )
+            else:
+                instagram_posts = summarize_post_objects(
+                    [
+                        post
+                        for post in existing_instagram_content
+                        if not self.is_story_post(post)
+                    ],
+                    "post",
+                )
+
+            if stories_uploaded:
+                instagram_stories = summarize_posts(
+                    instagram_story_rows,
+                    "story",
+                    "instagram",
+                )
+            else:
+                instagram_stories = summarize_post_objects(
+                    [
+                        post
+                        for post in existing_instagram_content
+                        if self.is_story_post(post)
+                    ],
+                    "story",
+                )
             instagram_summary = self.combine_post_summaries(
                 instagram_posts,
                 instagram_stories,
             )
             instagram_summary["uploaded"] = bool(
-                instagram_post_rows or instagram_story_rows
+                feed_uploaded or stories_uploaded
             )
-            instagram_summary["posts_uploaded"] = bool(instagram_post_rows)
-            instagram_summary["stories_uploaded"] = bool(
-                instagram_story_rows
+            instagram_summary["posts_uploaded"] = feed_uploaded
+            instagram_summary["stories_uploaded"] = stories_uploaded
+            instagram_summary["imported_count"] = (
+                len(instagram_posts.get("raw_posts") or [])
+                if feed_uploaded
+                else 0
+            ) + (
+                len(instagram_stories.get("raw_posts") or [])
+                if stories_uploaded
+                else 0
             )
 
             post_summaries = {"instagram": instagram_summary}
@@ -1499,6 +1551,7 @@ class DashboardRepository:
                 summary["stories_uploaded"] = False
                 summary["post_count"] = summary["totals"]["count"]
                 summary["story_count"] = 0
+                summary["imported_count"] = len(summary.get("raw_posts") or [])
                 post_summaries[platform] = summary
 
             if "all_content" not in parsed_files:
@@ -1514,7 +1567,10 @@ class DashboardRepository:
                 parsed_files.get("ig_story", {}).get("rows", [])
             )
             combined_breakdown["imported"] = {
-                platform: len(summary.get("raw_posts") or [])
+                platform: summary.get(
+                    "imported_count",
+                    len(summary.get("raw_posts") or []),
+                )
                 for platform, summary in post_summaries.items()
             }
             combined_breakdown["skipped"] = {
@@ -1821,6 +1877,42 @@ class DashboardRepository:
             combined["totals"][key] = post_summary["totals"].get(key, 0) + story_summary["totals"].get(key, 0)
         return combined
 
+    @staticmethod
+    def is_story_post(post: dict) -> bool:
+        content_type = str(post.get("content_type") or "").strip().lower()
+        permalink = str(post.get("permalink") or "").strip().lower()
+        return "story" in content_type or "/stories/" in permalink
+
+    def existing_social_content_posts(
+        self,
+        conn,
+        client_id,
+        period_id,
+        platform,
+    ) -> list[dict]:
+        rows = conn.execute(
+            text(
+                """
+                SELECT
+                    post_id, published_at, caption, permalink, image_url,
+                    content_type, likes, comments, shares, saves, reposts,
+                    reactions, views, reach, total_engagement, engagement_rate
+                FROM social_content_reports
+                WHERE client_id = :client_id
+                  AND report_period_id = :period_id
+                  AND platform = :platform
+                  AND performance_bucket = 'all'
+                ORDER BY published_at ASC NULLS LAST, created_at ASC
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_id": period_id,
+                "platform": platform,
+            },
+        ).mappings()
+        return [dict(row) for row in rows]
+
     def upsert_platform_reports(self, conn, client_id, period_id, profile_ids, account_rows, post_summaries, parsed_files):
         account_by_platform = {platform_from_row(row): row for row in account_rows if platform_from_row(row)}
         reports = {}
@@ -1950,8 +2042,16 @@ class DashboardRepository:
                 "shorts_posts": content_type_counts.get("short", 0) if posts_uploaded else None,
                 "long_form_posts": content_type_counts.get("video", 0) if posts_uploaded else None,
                 "content_has_rows": content_has_rows,
-                "top_posts": json.dumps(summary.get("top_posts") or []) if content_has_rows else None,
-                "low_posts": json.dumps(summary.get("low_posts") or []) if content_has_rows else None,
+                "top_posts": (
+                    json.dumps(json_safe(summary.get("top_posts") or []))
+                    if content_has_rows
+                    else None
+                ),
+                "low_posts": (
+                    json.dumps(json_safe(summary.get("low_posts") or []))
+                    if content_has_rows
+                    else None
+                ),
                 "raw_sections": json.dumps(
                     {
                         "account": account,
@@ -2111,7 +2211,7 @@ class DashboardRepository:
                 "reach": post.get("reach"),
                 "total_engagement": post.get("total_engagement"),
                 "engagement_rate": post.get("engagement_rate"),
-                "raw_metrics": json.dumps(post),
+                "raw_metrics": json.dumps(json_safe(post)),
             },
         )
 

@@ -13,6 +13,7 @@ from dashboard.slides_report import (
     SLIDES_IMAGE_REPLACE_METHOD,
     build_mapping,
     competitor_metric_style_mapping,
+    image_placeholder_priority,
     is_image_placeholder_key,
     replace_text_placeholders_chunked,
 )
@@ -42,6 +43,16 @@ class SlidesReportMappingTests(unittest.TestCase):
             is_image_placeholder_key("{{IG_ENGAGEMENT_BREAKDOWN}}")
         )
         self.assertEqual(SLIDES_IMAGE_REPLACE_METHOD, "CENTER_INSIDE")
+
+    def test_chart_and_story_images_are_prioritized(self):
+        self.assertLess(
+            image_placeholder_priority("{{IG_AUDIENCE_AND_GROWTH}}"),
+            image_placeholder_priority("{{IG_STORY_1_IMAGE}}"),
+        )
+        self.assertLess(
+            image_placeholder_priority("{{IG_STORY_1_IMAGE}}"),
+            image_placeholder_priority("{{TK_POST_TOP_1_IMAGE}}"),
+        )
 
     def test_chart_placeholder_is_preserved_for_image_replacement(self):
         slides_service = FakeSlidesService()
