@@ -23,6 +23,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY generate_slides_example.py ./generate_slides_example.py
+COPY preview_report_charts.py ./preview_report_charts.py
 COPY dashboard/repositories ./dashboard/repositories
 COPY dashboard/services ./dashboard/services
 COPY dashboard/routes ./dashboard/routes

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -12,6 +13,7 @@ from threading import Lock
 
 import requests as http_requests
 from dotenv import load_dotenv
+from googleapiclient.http import MediaFileUpload
 from sqlalchemy import create_engine, text
 
 
@@ -53,6 +55,23 @@ TEMPLATE_PLACEHOLDER_CACHE: dict[str, set[str]] = {}
 _SLIDES_WRITE_LOCK = Lock()
 _SLIDES_LAST_WRITE_AT = 0.0
 
+CHART_IMAGE_PLACEHOLDERS = frozenset(
+    {
+        "{{OVERVIEW_AUDIENCE_GROWTH}}",
+        "{{OVERVIEW_ENG_VS_FOL}}",
+        *{
+            f"{{{{{prefix}_{suffix}}}}}"
+            for prefix in PLATFORM_PREFIXES.values()
+            for suffix in (
+                "AUDIENCE_AND_GROWTH",
+                "IMPRESSION_AND_REACH",
+                "ENGAGEMENT_BREAKDOWN",
+                "COMP_POSITIONING",
+            )
+        },
+    }
+)
+
 # Internal quota safeguards. These are implementation details rather than
 # deployment settings, so keep them out of .env unless they become operational
 # tuning knobs later.
@@ -66,6 +85,9 @@ SLIDES_IMAGE_READ_TIMEOUT_SECONDS = 8.0
 SLIDES_IMAGE_MAX_API_CALLS = 20
 SLIDES_IMAGE_RETRY_INDIVIDUAL = False
 SLIDES_STRUCTURED_TEXT_OCCURRENCES_PER_BATCH = 200
+SLIDES_IMAGE_REPLACE_METHOD = "CENTER_INSIDE"
+COMPETITOR_HIGH_COLOR = (0.094, 0.475, 0.306)
+COMPETITOR_LOW_COLOR = (0.706, 0.137, 0.094)
 
 
 class StepProfiler:
@@ -277,7 +299,183 @@ def placeholder(name: str) -> str:
 
 
 def is_image_placeholder_key(key: str) -> bool:
-    return key.strip("{}").endswith("_IMAGE")
+    return key in CHART_IMAGE_PLACEHOLDERS or key.strip("{}").endswith("_IMAGE")
+
+
+def normalized_chart_rows(rows: list[dict]) -> list[dict]:
+    normalized = []
+    for row in reversed(rows):
+        normalized.append(
+            {
+                **row,
+                "net_growth": row.get("growth"),
+                "audience_growth_rate": row.get("growth_rate"),
+                "impressions": row.get("impressions_or_views"),
+                "reach": row.get("reach_or_views"),
+            }
+        )
+    return normalized
+
+
+def render_report_chart_files(
+    payload: dict,
+    output_dir: Path,
+    allowed_placeholders: set[str] | None = None,
+) -> dict[str, Path]:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from preview_report_charts import (
+        render_audience_and_growth_chart,
+        render_competitor_quadrant_chart,
+        render_engagement_breakdown_chart,
+        render_impressions_reach_chart,
+        render_platform_audience_growth_chart,
+        render_platform_engagement_scatter,
+    )
+
+    client = payload["client"]
+    period = payload["period"]
+    platform_rows = {}
+    chart_files: dict[str, Path] = {}
+
+    def requested(key: str) -> bool:
+        return allowed_placeholders is None or key in allowed_placeholders
+
+    for platform, prefix in PLATFORM_PREFIXES.items():
+        if not client.get(f"has_{platform}"):
+            continue
+        rows = normalized_chart_rows(payload.get("trends", {}).get(platform, []))
+        platform_rows[platform] = rows
+        platform_dir = output_dir / platform
+        specs = (
+            (
+                f"{{{{{prefix}_AUDIENCE_AND_GROWTH}}}}",
+                render_audience_and_growth_chart,
+                platform_dir / "audience_and_growth.png",
+            ),
+            (
+                f"{{{{{prefix}_IMPRESSION_AND_REACH}}}}",
+                render_impressions_reach_chart,
+                platform_dir / "impressions_and_reach.png",
+            ),
+            (
+                f"{{{{{prefix}_ENGAGEMENT_BREAKDOWN}}}}",
+                render_engagement_breakdown_chart,
+                platform_dir / "engagement_breakdown.png",
+            ),
+        )
+        for placeholder_key, renderer, output_path in specs:
+            if not requested(placeholder_key):
+                continue
+            figure = renderer(
+                rows,
+                client["client_name"],
+                platform,
+                output_path,
+            )
+            plt.close(figure)
+            chart_files[placeholder_key] = output_path
+
+        positioning_key = f"{{{{{prefix}_COMP_POSITIONING}}}}"
+        if requested(positioning_key):
+            positioning_path = platform_dir / "competitor_positioning.png"
+            figure = render_competitor_quadrant_chart(
+                rows,
+                payload.get("competitors", {}).get(platform, []),
+                client,
+                period,
+                platform,
+                positioning_path,
+            )
+            plt.close(figure)
+            chart_files[positioning_key] = positioning_path
+
+    if len(platform_rows) >= 2:
+        overview_specs = (
+            (
+                "{{OVERVIEW_AUDIENCE_GROWTH}}",
+                render_platform_audience_growth_chart,
+                output_dir / "overview_audience_growth.png",
+            ),
+            (
+                "{{OVERVIEW_ENG_VS_FOL}}",
+                render_platform_engagement_scatter,
+                output_dir / "overview_engagement_vs_followers.png",
+            ),
+        )
+        for placeholder_key, renderer, output_path in overview_specs:
+            if not requested(placeholder_key):
+                continue
+            figure = renderer(
+                platform_rows,
+                client,
+                period,
+                output_path,
+            )
+            plt.close(figure)
+            chart_files[placeholder_key] = output_path
+
+    return chart_files
+
+
+def upload_chart_images(
+    drive_service,
+    chart_files: dict[str, Path],
+) -> tuple[dict[str, str], list[str]]:
+    image_mapping = {}
+    uploaded_file_ids = []
+    for placeholder_key, image_path in chart_files.items():
+        media = MediaFileUpload(
+            str(image_path),
+            mimetype="image/png",
+            resumable=False,
+        )
+        uploaded = (
+            drive_service.files()
+            .create(
+                body={
+                    "name": image_path.name,
+                    "mimeType": "image/png",
+                },
+                media_body=media,
+                fields="id",
+            )
+            .execute()
+        )
+        file_id = uploaded["id"]
+        uploaded_file_ids.append(file_id)
+        (
+            drive_service.permissions()
+            .create(
+                fileId=file_id,
+                body={
+                    "type": "anyone",
+                    "role": "reader",
+                    "allowFileDiscovery": False,
+                },
+                sendNotificationEmail=False,
+            )
+            .execute()
+        )
+        image_mapping[placeholder_key] = (
+            f"https://drive.google.com/uc?export=download&id={file_id}"
+        )
+    return image_mapping, uploaded_file_ids
+
+
+def delete_temporary_drive_files(drive_service, file_ids: list[str]) -> None:
+    for file_id in file_ids:
+        try:
+            drive_service.files().delete(fileId=file_id).execute()
+        except Exception as exc:
+            print(
+                "[slides_report] temporary chart cleanup failed: "
+                f"{exc.__class__.__name__}",
+                flush=True,
+            )
 
 
 def row_dict(row):
@@ -422,6 +620,181 @@ def extract_placeholders_from_presentation(presentation: dict) -> set[str]:
         text_value, _boundaries = text_with_api_boundaries(text_elements)
         placeholders.update(PLACEHOLDER_PATTERN.findall(text_value))
     return placeholders
+
+
+def parse_metric_number(value) -> float | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip().replace(",", "").replace("%", "")
+    if not cleaned or cleaned in {"-", "N/A", "n/a", "None"}:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def competitor_metric_style_mapping(mapping: dict) -> dict[str, tuple[float, float, float]]:
+    styles = {}
+    for prefix in PLATFORM_PREFIXES.values():
+        rows = [
+            {
+                "followers": [
+                    placeholder(f"{prefix}_TOTAL_FOLLOWERS"),
+                    placeholder(f"{prefix}_TOTAL_SUBSCRIBERS"),
+                ],
+                "growth": [placeholder(f"{prefix}_COMP_SELF_GROWTH")],
+                "posts": [placeholder(f"{prefix}_TOTAL_POSTS")],
+                "engagement_rate": [
+                    placeholder(f"{prefix}_AVG_ER"),
+                    placeholder(f"{prefix}_ER"),
+                ],
+                "engagement": [
+                    placeholder(f"{prefix}_TOTAL_ENGAGEMENT"),
+                    placeholder(f"{prefix}_TOTAL_ENG"),
+                ],
+            }
+        ]
+        for index in range(1, 6):
+            base = f"{prefix}_COMP_{index}"
+            rows.append(
+                {
+                    "followers": [
+                        placeholder(f"{base}_FOL"),
+                        placeholder(f"{base}_SUB"),
+                    ],
+                    "growth": [placeholder(f"{base}_GROWTH")],
+                    "posts": [placeholder(f"{base}_POSTS")],
+                    "engagement_rate": [placeholder(f"{base}_ER")],
+                    "engagement": [
+                        placeholder(f"{base}_INT"),
+                        placeholder(f"{base}_ENG"),
+                        placeholder(f"{base}_ENGAGEMENT"),
+                    ],
+                }
+            )
+
+        for metric_name in (
+            "followers",
+            "growth",
+            "posts",
+            "engagement_rate",
+            "engagement",
+        ):
+            entries = []
+            for row in rows:
+                keys = row[metric_name]
+                value = next(
+                    (
+                        parsed
+                        for key in keys
+                        if (parsed := parse_metric_number(mapping.get(key))) is not None
+                    ),
+                    None,
+                )
+                if value is not None:
+                    entries.append((value, keys))
+
+            if len(entries) < 2:
+                continue
+            highest = max(value for value, _keys in entries)
+            lowest = min(value for value, _keys in entries)
+            if highest == lowest:
+                continue
+
+            for value, keys in entries:
+                color = None
+                if value == highest:
+                    color = COMPETITOR_HIGH_COLOR
+                elif value == lowest:
+                    color = COMPETITOR_LOW_COLOR
+                if color is None:
+                    continue
+                for key in keys:
+                    if key in mapping and parse_metric_number(mapping.get(key)) is not None:
+                        styles[key] = color
+    return styles
+
+
+def apply_competitor_metric_styles(
+    slides_service,
+    presentation_id: str,
+    mapping: dict,
+    allowed_placeholders: set[str] | None = None,
+) -> dict:
+    style_mapping = competitor_metric_style_mapping(mapping)
+    if allowed_placeholders is not None:
+        style_mapping = {
+            key: color
+            for key, color in style_mapping.items()
+            if key in allowed_placeholders
+        }
+    if not style_mapping:
+        return {
+            "styled_occurrences": 0,
+            "styled_keys": [],
+            "batch_count": 0,
+        }
+
+    presentation = (
+        slides_service.presentations()
+        .get(presentationId=presentation_id)
+        .execute()
+    )
+    requests = []
+    styled_keys = []
+    for object_id, cell_location, text_elements in iter_text_containers(presentation):
+        text_value, api_boundaries = text_with_api_boundaries(text_elements)
+        for match in PLACEHOLDER_PATTERN.finditer(text_value):
+            placeholder_key = match.group(0)
+            color = style_mapping.get(placeholder_key)
+            if color is None:
+                continue
+            update_style = {
+                "objectId": object_id,
+                "textRange": {
+                    "type": "FIXED_RANGE",
+                    "startIndex": api_boundaries[match.start()],
+                    "endIndex": api_boundaries[match.end()],
+                },
+                "style": {
+                    "foregroundColor": {
+                        "opaqueColor": {
+                            "rgbColor": {
+                                "red": color[0],
+                                "green": color[1],
+                                "blue": color[2],
+                            }
+                        }
+                    }
+                },
+                "fields": "foregroundColor",
+            }
+            if cell_location is not None:
+                update_style["cellLocation"] = cell_location
+            requests.append({"updateTextStyle": update_style})
+            styled_keys.append(placeholder_key)
+
+    batch_size = env_int("SLIDES_TEXT_BATCH_SIZE", 100)
+    batch_count = 0
+    for index in range(0, len(requests), batch_size):
+        execute_slides_batch_update(
+            slides_service,
+            presentation_id,
+            requests[index : index + batch_size],
+        )
+        batch_count += 1
+    print(
+        "[slides_report] competitorStyles "
+        f"occurrences={len(requests)} uniqueKeys={len(set(styled_keys))} "
+        f"batches={batch_count}",
+        flush=True,
+    )
+    return {
+        "styled_occurrences": len(requests),
+        "styled_keys": sorted(set(styled_keys)),
+        "batch_count": batch_count,
+    }
 
 
 def structured_text_replacement_operations(
@@ -637,7 +1010,7 @@ def replace_image_placeholders_safe(
                     "replaceImage": {
                         "imageObjectId": object_id,
                         "url": filtered_mapping[placeholder_key],
-                        "imageReplaceMethod": "CENTER_INSIDE",
+                        "imageReplaceMethod": SLIDES_IMAGE_REPLACE_METHOD,
                     }
                 }
             )
@@ -708,7 +1081,7 @@ def replace_image_placeholders_safe(
                         "matchCase": True,
                     },
                     "imageUrl": image_url,
-                    "replaceMethod": "CENTER_INSIDE",
+                    "replaceMethod": SLIDES_IMAGE_REPLACE_METHOD,
                 }
             }
         )
@@ -1169,7 +1542,7 @@ class SlidesReportRepository:
                   AND platform = :platform
                   AND performance_bucket = 'all'
                 ORDER BY published_at ASC NULLS LAST, created_at ASC
-                LIMIT 24
+                LIMIT 120
                 """
             ),
             {
@@ -1439,6 +1812,9 @@ def add_platform_mapping(mapping: dict, payload: dict, platform: str):
             placeholder(f"{prefix}_SUBSCRIBER_GROWTH_TEXT"): (
                 f"Subscribers berada di {fmt_number(audience_total)} pada periode ini."
             ),
+            placeholder(f"{prefix}_INSIGHT_SUBSCRIBER_GROWTH_TEXT"): (
+                f"Subscribers berada di {fmt_number(audience_total)} pada periode ini."
+            ),
             placeholder(f"{prefix}_ENGAGEMENT_TREND_TEXT"): (
                 f"Total engagement {label} periode ini mencapai {fmt_number(interactions)}."
             ),
@@ -1451,11 +1827,45 @@ def add_platform_mapping(mapping: dict, payload: dict, platform: str):
 
     add_kpi_mapping(mapping, prefix, platform, payload["kpi_results"].get(platform, []), report)
     add_monthly_trends(mapping, prefix, platform, trends)
-    add_competitors(mapping, prefix, competitors)
+    add_competitors(
+        mapping,
+        prefix,
+        competitors,
+        self_growth_rate=growth_rate,
+    )
     add_competitor_content(mapping, prefix, competitor_content)
     add_posts(mapping, platform, prefix, "POST_TOP", content.get("top", []))
     add_posts(mapping, platform, prefix, "POST_LOW", content.get("low", []))
-    add_evidence_posts(mapping, prefix, all_content)
+    if platform == "instagram":
+        story_content = [
+            post for post in all_content
+            if is_story_content(post)
+        ]
+        feed_content = [
+            post for post in all_content
+            if not is_story_content(post)
+        ]
+        add_evidence_posts(
+            mapping,
+            prefix,
+            feed_content,
+            family="EVIDENCE",
+            limit=48,
+        )
+        add_evidence_posts(
+            mapping,
+            prefix,
+            story_content,
+            family="STORY",
+            limit=48,
+        )
+    else:
+        add_evidence_posts(
+            mapping,
+            prefix,
+            all_content,
+            limit=48,
+        )
 
     if platform == "instagram":
         add_legacy_instagram_aliases(mapping)
@@ -1476,6 +1886,7 @@ def add_monthly_trends(mapping: dict, prefix: str, platform: str, trends: list[d
             "SUBSCRIBERS_GAINED": fmt_number(row.get("audience_gained")),
             "UNFOLLOWS": fmt_number(row.get("audience_lost")),
             "SUBSCRIBERS_LOST": fmt_number(row.get("audience_lost")),
+            "UNSUBSCRIBERS_GAINED": fmt_number(row.get("audience_lost")),
             "NET_GROWTH": fmt_number(row.get("growth")),
             "GROWTH_RATE": fmt_percent(row.get("growth_rate")),
             "REACH": fmt_number(row.get("reach_or_views")),
@@ -1499,12 +1910,16 @@ def add_monthly_trends(mapping: dict, prefix: str, platform: str, trends: list[d
             mapping[placeholder(f"{prefix}_{index}_{suffix}")] = value
 
 
-def add_competitors(mapping: dict, prefix: str, competitors: list[dict]):
+def add_competitors(
+    mapping: dict,
+    prefix: str,
+    competitors: list[dict],
+    self_growth_rate=None,
+):
     padded = competitors + [{} for _ in range(5)]
-    mapping[placeholder(f"{prefix}_COMP_SELF_GROWTH")] = "-"
-    if competitors:
-        self_row = competitors[0]
-        mapping[placeholder(f"{prefix}_COMP_SELF_GROWTH")] = fmt_percent(self_row.get("follower_growth_rate"))
+    mapping[placeholder(f"{prefix}_COMP_SELF_GROWTH")] = fmt_percent(
+        self_growth_rate
+    )
     for index, row in enumerate(padded[:5], start=1):
         base = f"{prefix}_COMP_{index}"
         mapping[placeholder(f"{base}_NAME")] = clean_text(row.get("profile_name"), 32)
@@ -1579,6 +1994,10 @@ def add_posts(mapping: dict, platform: str, prefix: str, base_name: str, posts: 
             mapping[placeholder(f"{key}_REPOSTS")] = fmt_number(post.get("reposts"))
             mapping[placeholder(f"{key}_ER")] = fmt_percent(post.get("engagement_rate"))
             mapping[placeholder(f"{key}_ENGAGEMENT")] = fmt_number(post.get("total_engagement"))
+            published_at = post.get("published_at")
+            if hasattr(published_at, "strftime"):
+                published_at = published_at.strftime("%d %B %Y").upper()
+            mapping[placeholder(f"{key}_DATE")] = clean_text(published_at, 28)
             for suffix in ("MEN", "WOMEN", "1824", "2534", "3544", "4554", "5564", "COUNTRY"):
                 mapping.setdefault(placeholder(f"{key}_{suffix}"), "-")
 
@@ -1588,7 +2007,7 @@ def add_posts(mapping: dict, platform: str, prefix: str, base_name: str, posts: 
                 "TITLE", "IMAGE", "TYPE", "VIEW", "VIEWS", "REACH", "LIKES",
                 "COMMENT", "COMMENTS", "SHARE", "SHARES", "SAVE", "SAVES",
                 "REPOST", "REPOSTS", "ER", "ENGAGEMENT", "MEN", "WOMEN",
-                "1824", "2534", "3544", "4554", "5564", "COUNTRY",
+                "1824", "2534", "3544", "4554", "5564", "COUNTRY", "DATE",
             ):
                 mapping[placeholder(f"POST_{index}_{suffix}")] = mapping.get(
                     placeholder(f"POST_TOP_{index}_{suffix}"),
@@ -1596,10 +2015,23 @@ def add_posts(mapping: dict, platform: str, prefix: str, base_name: str, posts: 
                 )
 
 
-def add_evidence_posts(mapping: dict, prefix: str, posts: list[dict]):
-    padded = posts + [{} for _ in range(24)]
-    for index, post in enumerate(padded[:24], start=1):
-        base = f"{prefix}_EVIDENCE_{index}"
+def is_story_content(post: dict) -> bool:
+    content_type = str(post.get("content_type") or "").strip().lower()
+    permalink = str(post.get("permalink") or "").strip().lower()
+    return "story" in content_type or "/stories/" in permalink
+
+
+def add_evidence_posts(
+    mapping: dict,
+    prefix: str,
+    posts: list[dict],
+    *,
+    family: str = "EVIDENCE",
+    limit: int = 24,
+):
+    padded = posts + [{} for _ in range(limit)]
+    for index, post in enumerate(padded[:limit], start=1):
+        base = f"{prefix}_{family}_{index}"
         published_at = post.get("published_at")
         if hasattr(published_at, "strftime"):
             published_at = published_at.strftime("%d %B %Y").upper()
@@ -1609,6 +2041,10 @@ def add_evidence_posts(mapping: dict, prefix: str, posts: list[dict]):
             24,
         )
         mapping[placeholder(f"{base}_TITLE")] = clean_text(post.get("caption"), 72)
+        if prefix == "IG" and family == "EVIDENCE":
+            mapping[placeholder(f"{base}__TITLE")] = mapping[
+                placeholder(f"{base}_TITLE")
+            ]
         mapping[placeholder(f"{base}_IMAGE")] = clean_text(post.get("image_url"))
         mapping[placeholder(f"{base}_ER")] = fmt_percent(post.get("engagement_rate"))
         mapping[placeholder(f"{base}_ENGAGEMENT")] = fmt_number(
@@ -1703,6 +2139,7 @@ def empty_defaults() -> dict:
         "RECOMMENDATION_3",
     ]
     insight_suffixes = [
+        "KPI_ANALYSIS",
         "SUMMARY_POINT_1",
         "SUMMARY_POINT_2",
         "SUMMARY_POINT_3",
@@ -1717,6 +2154,8 @@ def empty_defaults() -> dict:
     for prefix in PLATFORM_PREFIXES.values():
         for suffix in insight_suffixes:
             mapping[placeholder(f"{prefix}_{suffix}")] = "-"
+    for key in CHART_IMAGE_PLACEHOLDERS:
+        mapping[key] = "-"
     return mapping
 
 
@@ -1774,7 +2213,7 @@ def build_mapping(payload: dict) -> dict:
 
 def apply_report_insights(mapping: dict, insight_rows: list[dict]) -> None:
     platform_targets = {
-        "kpi_analysis": ("SUMMARY_POINT_1",),
+        "kpi_analysis": ("KPI_ANALYSIS", "SUMMARY_POINT_1"),
         "socmed_overview_analysis": ("PERFORMANCE_INSIGHT", "SUMMARY_POINT_2"),
         "followers_growth_analysis": (
             "FOLLOWERS_GROWTH_TEXT",
@@ -2082,6 +2521,20 @@ def generate_dashboard_slides_report(
     replace_images = should_replace_images()
     image_mapping = image_placeholder_mapping(mapping) if replace_images else {}
     image_keys_with_urls = set(image_mapping)
+    if replace_images:
+        chart_image_keys = set(CHART_IMAGE_PLACEHOLDERS)
+        if replacement_placeholders is not None:
+            chart_image_keys &= replacement_placeholders
+        image_keys_with_urls.update(chart_image_keys)
+
+    start = time.perf_counter()
+    competitor_style_audit = apply_competitor_metric_styles(
+        slides_service,
+        presentation_id,
+        mapping,
+        allowed_placeholders=replacement_placeholders,
+    )
+    profiler.record("format_competitor_metrics", start)
 
     # Text is the primary report output. Replace it before image work so an
     # inaccessible CDN image or a Slides image quota issue cannot leave the
@@ -2114,12 +2567,42 @@ def generate_dashboard_slides_report(
         "skipped_non_template": [],
     }
     if replace_images:
-        if image_mapping:
-            image_audit = replace_image_placeholders_safe(
-                slides_service,
-                presentation_id,
-                image_mapping,
-                allowed_placeholders=replacement_placeholders,
+        temporary_chart_file_ids = []
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="mai-slides-charts-",
+            ) as chart_temp_dir:
+                start = time.perf_counter()
+                chart_files = render_report_chart_files(
+                    payload,
+                    Path(chart_temp_dir),
+                    allowed_placeholders=replacement_placeholders,
+                )
+                profiler.record("render_charts", start)
+
+                start = time.perf_counter()
+                chart_image_mapping, temporary_chart_file_ids = (
+                    upload_chart_images(
+                        drive_service,
+                        chart_files,
+                    )
+                )
+                profiler.record("upload_charts", start)
+                mapping.update(chart_image_mapping)
+                image_mapping.update(chart_image_mapping)
+                image_keys_with_urls.update(chart_image_mapping)
+
+                if image_mapping:
+                    image_audit = replace_image_placeholders_safe(
+                        slides_service,
+                        presentation_id,
+                        image_mapping,
+                        allowed_placeholders=replacement_placeholders,
+                    )
+        finally:
+            delete_temporary_drive_files(
+                drive_service,
+                temporary_chart_file_ids,
             )
     else:
         print("[slides] image_handling: image replacement disabled", flush=True)
@@ -2199,6 +2682,7 @@ def generate_dashboard_slides_report(
             "permission": permission,
             "images_replaced": bool(image_audit.get("replaced")),
             "image_replacement": image_audit,
+            "competitor_metric_styles": competitor_style_audit,
             "batch_update": batch_audit,
             "structured_text_batch_update": structured_text_audit,
             "image_fallback_batch_update": image_fallback_audit,
