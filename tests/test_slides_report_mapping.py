@@ -5,6 +5,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 import sys
+import tempfile
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,6 +20,7 @@ from dashboard.slides_report import (
     image_placeholder_priority,
     is_image_placeholder_key,
     replace_text_placeholders_chunked,
+    upload_chart_images,
 )
 
 
@@ -37,6 +40,70 @@ class FakeSlidesService:
 
 
 class SlidesReportMappingTests(unittest.TestCase):
+    def test_chart_upload_retries_broken_pipe_then_succeeds(self):
+        upload_request = Mock()
+        upload_request.execute.side_effect = [
+            BrokenPipeError(32, "Broken pipe"),
+            {"id": "chart-file-id"},
+        ]
+        permission_request = Mock()
+        permission_request.execute.return_value = {"id": "permission-id"}
+
+        drive_service = Mock()
+        drive_service.files.return_value.create.return_value = upload_request
+        drive_service.permissions.return_value.create.return_value = (
+            permission_request
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            chart_path = Path(temp_dir) / "chart.png"
+            chart_path.write_bytes(b"chart")
+            with patch("dashboard.slides_report.time.sleep") as sleep:
+                mapping, uploaded_ids = upload_chart_images(
+                    drive_service,
+                    {"{{IG_AUDIENCE_AND_GROWTH}}": chart_path},
+                )
+
+        self.assertEqual(upload_request.execute.call_count, 2)
+        sleep.assert_called_once_with(1.0)
+        self.assertEqual(uploaded_ids, ["chart-file-id"])
+        self.assertEqual(
+            mapping["{{IG_AUDIENCE_AND_GROWTH}}"],
+            "https://drive.google.com/uc?export=download&id=chart-file-id",
+        )
+
+    def test_chart_upload_tracks_file_before_permission_failure(self):
+        upload_request = Mock()
+        upload_request.execute.return_value = {"id": "orphan-file-id"}
+        permission_request = Mock()
+        permission_request.execute.side_effect = BrokenPipeError(
+            32,
+            "Broken pipe",
+        )
+
+        drive_service = Mock()
+        drive_service.files.return_value.create.return_value = upload_request
+        drive_service.permissions.return_value.create.return_value = (
+            permission_request
+        )
+        uploaded_ids = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            chart_path = Path(temp_dir) / "chart.png"
+            chart_path.write_bytes(b"chart")
+            with (
+                patch("dashboard.slides_report.time.sleep"),
+                self.assertRaises(BrokenPipeError),
+            ):
+                upload_chart_images(
+                    drive_service,
+                    {"{{IG_AUDIENCE_AND_GROWTH}}": chart_path},
+                    uploaded_file_ids=uploaded_ids,
+                )
+
+        self.assertEqual(permission_request.execute.call_count, 4)
+        self.assertEqual(uploaded_ids, ["orphan-file-id"])
+
     def test_story_replies_are_imported_as_comments_with_numeric_types_normalized(self):
         post = post_json(
             {

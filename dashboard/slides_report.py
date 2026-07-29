@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -86,6 +87,8 @@ SLIDES_IMAGE_MAX_API_CALLS = 20
 SLIDES_IMAGE_RETRY_INDIVIDUAL = False
 SLIDES_STRUCTURED_TEXT_OCCURRENCES_PER_BATCH = 200
 SLIDES_IMAGE_REPLACE_METHOD = "CENTER_INSIDE"
+DRIVE_API_MAX_RETRIES = 3
+DRIVE_API_RETRY_BASE_SECONDS = 1.0
 COMPETITOR_HIGH_COLOR = (0.094, 0.475, 0.306)
 COMPETITOR_LOW_COLOR = (0.706, 0.137, 0.094)
 
@@ -119,6 +122,49 @@ def env_int(name: str, default: int) -> int:
         return max(1, int(os.getenv(name, str(default))))
     except (TypeError, ValueError):
         return default
+
+
+def is_retryable_drive_error(exc: Exception) -> bool:
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status in {429, 500, 502, 503, 504}:
+        return True
+    if isinstance(exc, (BrokenPipeError, ConnectionError, TimeoutError)):
+        return True
+    return (
+        isinstance(exc, OSError)
+        and exc.errno
+        in {
+            errno.EPIPE,
+            errno.ECONNABORTED,
+            errno.ECONNRESET,
+            errno.ETIMEDOUT,
+        }
+    )
+
+
+def execute_drive_request_with_retry(request, operation: str):
+    for attempt in range(DRIVE_API_MAX_RETRIES + 1):
+        try:
+            return request.execute(num_retries=0)
+        except Exception as exc:
+            if (
+                not is_retryable_drive_error(exc)
+                or attempt >= DRIVE_API_MAX_RETRIES
+            ):
+                raise
+
+            delay = DRIVE_API_RETRY_BASE_SECONDS * (2**attempt)
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            print(
+                "[slides_report] transient Drive error: "
+                f"operation={operation} error={exc.__class__.__name__} "
+                f"status={status or '-'} retry={attempt + 1}/"
+                f"{DRIVE_API_MAX_RETRIES} delay={delay:.0f}s",
+                flush=True,
+            )
+            time.sleep(delay)
+
+    raise RuntimeError("Drive API retry loop ended unexpectedly")
 
 
 def execute_slides_batch_update(
@@ -436,30 +482,39 @@ def render_report_chart_files(
 def upload_chart_images(
     drive_service,
     chart_files: dict[str, Path],
+    uploaded_file_ids: list[str] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     image_mapping = {}
-    uploaded_file_ids = []
+    tracked_file_ids = (
+        uploaded_file_ids if uploaded_file_ids is not None else []
+    )
     for placeholder_key, image_path in chart_files.items():
         media = MediaFileUpload(
             str(image_path),
             mimetype="image/png",
-            resumable=False,
+            resumable=True,
         )
-        uploaded = (
-            drive_service.files()
-            .create(
-                body={
-                    "name": image_path.name,
-                    "mimeType": "image/png",
-                },
-                media_body=media,
-                fields="id",
+        try:
+            upload_request = (
+                drive_service.files()
+                .create(
+                    body={
+                        "name": image_path.name,
+                        "mimeType": "image/png",
+                    },
+                    media_body=media,
+                    fields="id",
+                )
             )
-            .execute()
-        )
+            uploaded = execute_drive_request_with_retry(
+                upload_request,
+                f"upload_chart:{image_path.name}",
+            )
+        finally:
+            media.stream().close()
         file_id = uploaded["id"]
-        uploaded_file_ids.append(file_id)
-        (
+        tracked_file_ids.append(file_id)
+        permission_request = (
             drive_service.permissions()
             .create(
                 fileId=file_id,
@@ -470,18 +525,25 @@ def upload_chart_images(
                 },
                 sendNotificationEmail=False,
             )
-            .execute()
+        )
+        execute_drive_request_with_retry(
+            permission_request,
+            f"share_chart:{image_path.name}",
         )
         image_mapping[placeholder_key] = (
             f"https://drive.google.com/uc?export=download&id={file_id}"
         )
-    return image_mapping, uploaded_file_ids
+    return image_mapping, tracked_file_ids
 
 
 def delete_temporary_drive_files(drive_service, file_ids: list[str]) -> None:
     for file_id in file_ids:
         try:
-            drive_service.files().delete(fileId=file_id).execute()
+            delete_request = drive_service.files().delete(fileId=file_id)
+            execute_drive_request_with_retry(
+                delete_request,
+                "delete_temporary_chart",
+            )
         except Exception as exc:
             print(
                 "[slides_report] temporary chart cleanup failed: "
@@ -2641,6 +2703,7 @@ def generate_dashboard_slides_report(
                     upload_chart_images(
                         drive_service,
                         chart_files,
+                        uploaded_file_ids=temporary_chart_file_ids,
                     )
                 )
                 profiler.record("upload_charts", start)
