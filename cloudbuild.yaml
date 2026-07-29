@@ -1,0 +1,76 @@
+steps:
+  - id: backend-tests
+    name: python:3.11-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        pip install --no-cache-dir -r requirements.txt
+        python -m unittest discover -s tests -p "test_*.py"
+
+  - id: frontend-build
+    name: node:20-slim
+    dir: dashboard
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        npm ci
+        npm run build
+    waitFor:
+      - "-"
+
+  - id: docker-build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/app:$COMMIT_SHA
+      - --tag
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/app:staging-latest
+      - .
+    waitFor:
+      - backend-tests
+      - frontend-build
+
+  - id: push-commit-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/app:$COMMIT_SHA
+    waitFor:
+      - docker-build
+
+  - id: push-staging-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/app:staging-latest
+    waitFor:
+      - docker-build
+
+  - id: deploy-staging
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update
+      - ${_SERVICE_NAME}
+      - --project=$PROJECT_ID
+      - --region=${_REGION}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/app:$COMMIT_SHA
+      - --quiet
+    waitFor:
+      - push-commit-image
+      - push-staging-image
+
+substitutions:
+  _REGION: asia-southeast2
+  _REPOSITORY: mai-reporting
+  _SERVICE_NAME: mai-reporting-staging
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1800s

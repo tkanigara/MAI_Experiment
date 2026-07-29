@@ -38,4 +38,4 @@ COPY --from=frontend /app/dashboard/dist ./dashboard/dist
 
 EXPOSE 8000
 
-CMD ["uvicorn", "dashboard.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn dashboard.main:app --host 0.0.0.0 --port \"${PORT:-8000}\""]

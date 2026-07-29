@@ -1,4 +1,5 @@
 import argparse
+import errno
 import json
 import os
 import re
@@ -1504,7 +1505,16 @@ def get_google_services(credentials_file, token_file, oauth_port):
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             credentials = flow.run_local_server(port=oauth_port)
 
-        token_path.write_text(credentials.to_json(), encoding="utf-8")
+        try:
+            token_path.write_text(credentials.to_json(), encoding="utf-8")
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+                raise
+            print(
+                "[google_auth] OAuth token refreshed in memory; "
+                f"{token_path} is read-only, so the refreshed token was not persisted.",
+                flush=True,
+            )
 
     slides_service = build("slides", "v1", credentials=credentials)
     drive_service = build("drive", "v3", credentials=credentials)

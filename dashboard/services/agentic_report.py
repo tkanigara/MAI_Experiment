@@ -77,7 +77,10 @@ def generate_agentic_report(
             report_date=context["period_start"],
             generate_slides=True,
             slides_dry_run=dry_run,
-            persist_insights=env_bool("AGENTIC_PERSIST_INSIGHTS", True),
+            persist_insights=(
+                not dry_run
+                and env_bool("AGENTIC_PERSIST_INSIGHTS", True)
+            ),
             reuse_cached_insights=env_bool("AGENTIC_REUSE_CACHED_INSIGHTS", False),
         )
     )
