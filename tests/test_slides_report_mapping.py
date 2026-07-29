@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import unittest
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from dashboard.repositories.dashboard_repository import post_json
 from dashboard.slides_report import (
     COMPETITOR_HIGH_COLOR,
     COMPETITOR_LOW_COLOR,
@@ -35,6 +37,23 @@ class FakeSlidesService:
 
 
 class SlidesReportMappingTests(unittest.TestCase):
+    def test_story_replies_are_imported_as_comments_with_numeric_types_normalized(self):
+        post = post_json(
+            {
+                "Post-ID": "story-1",
+                "Number of Likes": Decimal("2"),
+                "Story replies": "3",
+                "Story shares": "1",
+                "Story views": "250",
+                "Story reach": "200",
+            },
+            "story",
+            "instagram",
+        )
+
+        self.assertEqual(post["comments"], 3.0)
+        self.assertEqual(post["total_engagement"], 6.0)
+
     def test_chart_placeholders_are_image_placeholders(self):
         self.assertTrue(
             is_image_placeholder_key("{{OVERVIEW_AUDIENCE_GROWTH}}")
@@ -126,6 +145,10 @@ class SlidesReportMappingTests(unittest.TestCase):
                         "caption": "Feed post",
                         "content_type": "reel",
                         "image_url": "https://example.com/feed.jpg",
+                        "reach": 875,
+                        "likes": 64,
+                        "comments": 7,
+                        "engagement_rate": 2.4,
                     },
                     {
                         "published_at": datetime(2026, 7, 3),
@@ -133,6 +156,9 @@ class SlidesReportMappingTests(unittest.TestCase):
                         "content_type": "story",
                         "permalink": "https://instagram.com/stories/example/1",
                         "image_url": "https://example.com/story.jpg",
+                        "reach": 420,
+                        "views": 510,
+                        "comments": 3,
                     },
                 ]
             },
@@ -167,6 +193,13 @@ class SlidesReportMappingTests(unittest.TestCase):
             mapping["{{IG_STORY_1_IMAGE}}"],
             "https://example.com/story.jpg",
         )
+        self.assertEqual(mapping["{{IG_EVIDENCE_1_REACH}}"], "875")
+        self.assertEqual(mapping["{{IG_EVIDENCE_1_LIKES}}"], "64")
+        self.assertEqual(mapping["{{IG_EVIDENCE_1_COMMENTS}}"], "7")
+        self.assertEqual(mapping["{{IG_STORY_1_REACH}}"], "420")
+        self.assertEqual(mapping["{{IG_STORY_1_VIEWS}}"], "510")
+        self.assertEqual(mapping["{{IG_STORY_1_COMMENTS}}"], "3")
+        self.assertEqual(mapping["{{IG_STORY_1_VISITS}}"], "-")
         self.assertNotEqual(
             mapping["{{IG_EVIDENCE_1_IMAGE}}"],
             mapping["{{IG_STORY_1_IMAGE}}"],

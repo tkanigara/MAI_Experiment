@@ -2083,11 +2083,17 @@ def add_evidence_posts(
             ]
         mapping[placeholder(f"{base}_IMAGE")] = clean_text(post.get("image_url"))
         mapping[placeholder(f"{base}_ER")] = fmt_percent(post.get("engagement_rate"))
+        mapping[placeholder(f"{base}_REACH")] = fmt_number(post.get("reach"))
+        mapping[placeholder(f"{base}_LIKES")] = fmt_number(post.get("likes"))
+        mapping[placeholder(f"{base}_COMMENTS")] = fmt_number(post.get("comments"))
         mapping[placeholder(f"{base}_ENGAGEMENT")] = fmt_number(
             post.get("total_engagement")
         )
         mapping[placeholder(f"{base}_VIEWS")] = fmt_number(
             post.get("views") or post.get("reach")
+        )
+        mapping[placeholder(f"{base}_VISITS")] = fmt_number(
+            post.get("profile_visits")
         )
 
 

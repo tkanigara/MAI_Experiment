@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as path_effects
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 from sqlalchemy import text
@@ -481,86 +482,123 @@ def render_audience_and_growth_chart(
     axis.yaxis.set_major_formatter(FuncFormatter(compact_number))
     axis.set_xticks(x_values, labels)
     axis.set_xlim(-0.5, len(rows) - 0.5)
+    axis.set_ylabel(
+        f"Total {config['audience']}",
+        color=COLORS["muted"],
+        labelpad=10,
+    )
 
     handles = []
     if available(totals):
-        audience_line = axis.plot(
-            x_values,
-            totals,
-            color=COLORS["blue"],
-            linewidth=2.8,
-            marker="o",
-            markersize=7,
-            label=f"Total {config['audience']}",
-            zorder=3,
-        )[0]
-        annotate_points(axis, x_values, totals, COLORS["blue"])
-        valid_totals = [value for value in totals if not math.isnan(value)]
-        minimum, maximum = min(valid_totals), max(valid_totals)
-        padding = max((maximum - minimum) * 0.25, maximum * 0.01, 1)
-        axis.set_ylim(max(0, minimum - padding), maximum + padding)
-        handles.append(audience_line)
-
-    growth_axis = axis.twinx()
-    growth_axis.spines["top"].set_visible(False)
-    growth_axis.spines["right"].set_color(COLORS["grid"])
-    growth_axis.tick_params(colors=COLORS["muted"], labelsize=9)
-    growth_axis.yaxis.set_major_formatter(FuncFormatter(compact_number))
-    growth_axis.axhline(0, color=COLORS["grid"], linewidth=0.9, zorder=0)
-    if available(net_growth):
-        growth_values = [
+        audience_values = [
             0 if math.isnan(value) else value
-            for value in net_growth
+            for value in totals
         ]
-        bar_colors = [
-            COLORS["teal"] if value >= 0 else COLORS["red"]
-            for value in growth_values
-        ]
-        growth_bars = growth_axis.bar(
+        audience_bars = axis.bar(
             x_values,
-            growth_values,
-            width=0.46,
-            color=bar_colors,
-            alpha=0.78,
-            label="Net Growth",
-            zorder=1,
+            audience_values,
+            width=0.58,
+            color=PLATFORM_COLORS[platform],
+            alpha=0.86,
+            label=f"Total {config['audience']}",
+            zorder=2,
         )
-        valid_growth = [
-            value
-            for value in net_growth
-            if not math.isnan(value)
-        ]
-        growth_min = min(valid_growth)
-        growth_max = max(valid_growth)
-        if growth_min < 0 < growth_max:
-            growth_limit = max(abs(growth_min), abs(growth_max)) * 1.35
-            growth_axis.set_ylim(-growth_limit, growth_limit)
-        elif growth_max <= 0:
-            growth_axis.set_ylim(min(growth_min * 1.3, -1), 0)
-        else:
-            growth_axis.set_ylim(0, max(growth_max * 1.3, 1))
-
-        for index, bar in enumerate(growth_bars):
-            value = net_growth[index]
-            if math.isnan(value):
-                label = "N/A"
-            elif value > 0:
-                label = f"+{compact_number(value)}"
-            else:
-                label = compact_number(value)
-            height = bar.get_height()
-            growth_axis.annotate(
+        valid_totals = [value for value in totals if not math.isnan(value)]
+        maximum = max(valid_totals)
+        axis.set_ylim(0, max(maximum * 1.2, 1))
+        for index, bar in enumerate(audience_bars):
+            value = totals[index]
+            label = "N/A" if math.isnan(value) else compact_number(value)
+            axis.annotate(
                 label,
-                (bar.get_x() + bar.get_width() / 2, height),
-                xytext=(0, 5 if height >= 0 else -7),
+                (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                xytext=(0, 7),
                 textcoords="offset points",
                 ha="center",
-                va="bottom" if height >= 0 else "top",
-                fontsize=8,
+                va="bottom",
+                fontsize=8.5,
                 color=COLORS["ink"],
                 fontweight="semibold",
             )
-        handles.append(growth_bars)
+        handles.append(audience_bars)
+
+    growth_axis = axis.twinx()
+    growth_axis.spines["top"].set_visible(False)
+    growth_axis.spines["left"].set_visible(False)
+    growth_axis.spines["right"].set_color(COLORS["grid"])
+    growth_axis.tick_params(colors=COLORS["muted"], labelsize=9)
+    growth_axis.grid(False)
+    growth_axis.yaxis.set_major_formatter(FuncFormatter(compact_number))
+    growth_axis.set_ylabel(
+        "Net Growth",
+        color=COLORS["muted"],
+        labelpad=10,
+    )
+    positive_growth_color = "#0F6B5F"
+    negative_growth_color = "#B42318"
+    if available(net_growth):
+        plotted_growth = [
+            math.nan if math.isnan(value) else max(value, 0)
+            for value in net_growth
+        ]
+        growth_line = growth_axis.plot(
+            x_values,
+            plotted_growth,
+            color=positive_growth_color,
+            linewidth=1.8,
+            linestyle=(0, (4, 3)),
+            label="Net Growth",
+            zorder=4,
+        )[0]
+        valid_display_growth = [
+            value for value in plotted_growth if not math.isnan(value)
+        ]
+        growth_axis.set_ylim(
+            0,
+            max(max(valid_display_growth, default=0) * 1.35, 1),
+        )
+        for index, value in enumerate(net_growth):
+            if math.isnan(value):
+                continue
+            display_value = max(value, 0)
+            dot_color = (
+                positive_growth_color
+                if value >= 0
+                else negative_growth_color
+            )
+            growth_axis.scatter(
+                index,
+                display_value,
+                s=125,
+                color=dot_color,
+                edgecolor="white",
+                linewidth=1.5,
+                zorder=5,
+                clip_on=False,
+            )
+            value = net_growth[index]
+            if value > 0:
+                label = f"+{compact_number(value)}"
+            else:
+                label = compact_number(value)
+            growth_axis.annotate(
+                label,
+                (index, display_value),
+                xytext=(0, 9),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color=dot_color,
+                fontweight="semibold",
+                path_effects=[
+                    path_effects.withStroke(
+                        linewidth=3,
+                        foreground="white",
+                    )
+                ],
+            )
+        handles.append(growth_line)
 
     if not available(totals) and not available(net_growth):
         no_data(axis)
@@ -640,99 +678,131 @@ def render_engagement_breakdown_chart(
 ):
     labels, x_values, subtitle = chart_context(rows, client_name)
     metric_specs = (
-        ("Likes", values(rows, "likes"), COLORS["blue"]),
-        ("Comments", values(rows, "comments"), COLORS["teal"]),
-        ("Shares", values(rows, "shares"), COLORS["gold"]),
+        ("Likes", values(rows, "likes"), "#4F7FE5"),
+        ("Comments", values(rows, "comments"), "#D84B3A"),
+        ("Shares", values(rows, "shares"), "#F1B82D"),
+        (
+            "Total Engagement",
+            values(rows, "total_engagement"),
+            "#55A958",
+        ),
     )
-    fig, axes = plt.subplots(
-        1,
-        3,
-        figsize=(10, 5.625),
-        facecolor="white",
-    )
-    fig.suptitle(
+    fig, axis = create_chart_figure(
         f"{platform.title()} Engagement Breakdown",
-        x=0.07,
-        y=0.95,
-        ha="left",
-        fontsize=20,
-        fontweight="bold",
-        color=COLORS["ink"],
+        f"{subtitle} | Likes, comments, shares, and total engagement",
     )
-    fig.text(
-        0.07,
-        0.89,
-        f"{subtitle} | Independent scale per metric",
-        color=COLORS["muted"],
-        fontsize=10,
-    )
-    fig.subplots_adjust(
-        left=0.07,
-        right=0.97,
-        bottom=0.19,
-        top=0.73,
-        wspace=0.3,
-    )
+    style_axis(axis)
+    axis.yaxis.set_major_formatter(FuncFormatter(compact_number))
+    axis.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
+    axis.set_xticks(x_values, labels)
+    axis.set_xlim(-0.5, len(rows) - 0.5)
+    axis.set_ylabel("Engagement", color=COLORS["muted"], labelpad=10)
 
-    for axis, (metric_label, series, color) in zip(axes, metric_specs):
-        style_axis(axis)
-        axis.set_title(
-            metric_label,
-            loc="left",
-            fontsize=11,
-            fontweight="semibold",
-            color=COLORS["ink"],
-            pad=12,
-        )
-        axis.yaxis.set_major_formatter(FuncFormatter(compact_number))
-        axis.yaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
-        axis.set_xticks(x_values, labels, rotation=30, ha="right")
-        axis.set_xlim(-0.5, len(rows) - 0.5)
-
-        if not available(series):
-            no_data(axis)
-            continue
-
-        plot_values = [
-            0 if math.isnan(value) else value
-            for value in series
-        ]
-        bars = axis.bar(
-            x_values,
-            plot_values,
-            width=0.58,
-            color=color,
-        )
-        valid_values = [
-            value
-            for value in series
-            if not math.isnan(value)
-        ]
-        maximum = max(valid_values, default=0)
-        axis.set_ylim(0, max(maximum * 1.22, 1))
-
-        for index, bar in enumerate(bars):
-            value = series[index]
-            label = "N/A" if math.isnan(value) else compact_number(value)
-            axis.annotate(
-                label,
-                (bar.get_x() + bar.get_width() / 2, bar.get_height()),
-                xytext=(0, 5),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                color=(
-                    COLORS["muted"]
-                    if math.isnan(value)
-                    else COLORS["ink"]
-                ),
-                fontweight=(
-                    "normal"
-                    if math.isnan(value)
-                    else "semibold"
-                ),
+    if any(available(series) for _, series, _ in metric_specs):
+        bottoms = [0.0 for _ in rows]
+        handles = []
+        normalized_series = []
+        for metric_label, series, color in metric_specs:
+            plot_values = [
+                0 if math.isnan(value) else value
+                for value in series
+            ]
+            normalized_series.append(plot_values)
+            bars = axis.bar(
+                x_values,
+                plot_values,
+                width=0.58,
+                bottom=bottoms,
+                color=color,
+                alpha=0.88,
+                label=metric_label,
+                zorder=2,
             )
+            handles.append(bars)
+            bottoms = [
+                bottom + value
+                for bottom, value in zip(bottoms, plot_values)
+            ]
+
+        maximum = max(bottoms, default=0)
+        axis.set_ylim(0, max(maximum * 1.28, 1))
+
+        for month_index, stack_height in enumerate(bottoms):
+            if stack_height <= 0:
+                continue
+            month_values = [
+                series[month_index]
+                for series in normalized_series
+            ]
+            if stack_height < maximum * 0.18:
+                visible_indexes = [
+                    index
+                    for index, value in enumerate(month_values)
+                    if value > 0
+                ]
+                outside_step = maximum * 0.055
+                outside_start = stack_height + (maximum * 0.035)
+                label_positions = {
+                    metric_index: outside_start
+                    + (position * outside_step)
+                    for position, metric_index in enumerate(visible_indexes)
+                }
+            else:
+                likes = month_values[0]
+                upper_height = max(stack_height - likes, 0)
+                label_positions = {
+                    0: likes / 2,
+                    1: likes + (upper_height * 0.20),
+                    2: likes + (upper_height * 0.43),
+                    3: likes + (upper_height * 0.72),
+                }
+
+            for metric_index, (metric_label, _, color) in enumerate(
+                metric_specs
+            ):
+                value = month_values[metric_index]
+                if value <= 0:
+                    continue
+                axis.annotate(
+                    compact_number(value),
+                    (month_index, label_positions[metric_index]),
+                    ha="center",
+                    va="center",
+                    fontsize=8.5,
+                    color=color,
+                    fontweight="semibold",
+                    path_effects=[
+                        path_effects.withStroke(
+                            linewidth=3,
+                            foreground="white",
+                        )
+                    ],
+                    zorder=5,
+                )
+
+        legend_handles = list(reversed(handles))
+        legend_labels = [
+            metric_specs[index][0]
+            for index in reversed(range(len(metric_specs)))
+        ]
+        legend = axis.legend(
+            handles=legend_handles,
+            labels=legend_labels,
+            frameon=False,
+            loc="lower left",
+            bbox_to_anchor=(0, 1.03),
+            borderaxespad=0,
+            fontsize=8.5,
+            ncol=4,
+        )
+        legend_colors = [
+            metric_specs[index][2]
+            for index in reversed(range(len(metric_specs)))
+        ]
+        for legend_text, color in zip(legend.get_texts(), legend_colors):
+            legend_text.set_color(color)
+    else:
+        no_data(axis)
 
     return save_chart(fig, output_path)
 
@@ -763,92 +833,89 @@ def render_platform_audience_growth_chart(
     output_path: Path,
 ):
     metrics = latest_platform_metrics(platform_rows)
-    fig, (audience_axis, growth_axis) = plt.subplots(
-        1,
-        2,
-        figsize=(10, 5.625),
-        facecolor="white",
-        sharey=True,
-        gridspec_kw={"width_ratios": (1.2, 1)},
+    fig, audience_axis = create_chart_figure(
+        "Current Audience and Net Growth by Platform",
+        (
+            f"{client['client_name']} | {period['period_label']} | "
+            "Audience uses a logarithmic scale"
+        ),
     )
-    fig.suptitle(
-        "Cross-Platform Audience & Net Growth",
-        x=0.07,
-        y=0.95,
-        ha="left",
-        fontsize=20,
-        fontweight="bold",
-        color=COLORS["ink"],
-    )
-    fig.text(
-        0.07,
-        0.89,
-        f"{client['client_name']} | {period['period_label']}",
-        color=COLORS["muted"],
-        fontsize=10,
-    )
+    growth_axis = audience_axis.twinx()
+    style_axis(audience_axis)
+    growth_axis.spines["top"].set_visible(False)
+    growth_axis.spines["left"].set_visible(False)
+    growth_axis.spines["right"].set_color(COLORS["grid"])
+    growth_axis.tick_params(axis="y", colors=COLORS["muted"], labelsize=8.5)
+    growth_axis.grid(False)
 
-    positions = list(reversed(range(len(metrics))))
+    positions = list(range(len(metrics)))
     labels = [metric["label"] for metric in metrics]
-    audience_axis.set_title("Current Followers / Subscribers", loc="left", fontsize=11)
-    growth_axis.set_title("Net Growth", loc="left", fontsize=11)
-    for axis in (audience_axis, growth_axis):
-        style_axis(axis)
-        axis.grid(False)
-        axis.grid(axis="x", color=COLORS["grid"], linewidth=0.8, alpha=0.8)
-        axis.set_axisbelow(True)
-    audience_axis.set_yticks(positions, labels)
-    audience_axis.tick_params(axis="y", pad=8)
-    growth_axis.tick_params(axis="y", left=False, labelleft=False)
-
-    valid_audience = [
+    audience_values = [
         metric["audience"]
-        for metric in metrics
         if not math.isnan(metric["audience"]) and metric["audience"] > 0
+        else math.nan
+        for metric in metrics
     ]
+    bar_values = [
+        max(value, 1) if not math.isnan(value) else 1
+        for value in audience_values
+    ]
+    colors = [PLATFORM_COLORS[metric["platform"]] for metric in metrics]
+    bars = audience_axis.bar(
+        positions,
+        [max(value - 1, 0.01) for value in bar_values],
+        bottom=1,
+        width=0.58,
+        color=colors,
+        alpha=0.88,
+        zorder=2,
+    )
+    audience_axis.set_xticks(positions, labels)
+    audience_axis.tick_params(axis="x", pad=8)
+    audience_axis.set_ylabel(
+        "Current Followers / Subscribers",
+        color=COLORS["muted"],
+        labelpad=10,
+    )
+    audience_axis.grid(
+        axis="y",
+        color=COLORS["grid"],
+        linewidth=0.8,
+        alpha=0.8,
+    )
+    audience_axis.set_axisbelow(True)
+
+    valid_audience = [value for value in audience_values if not math.isnan(value)]
     if valid_audience:
-        maximum_audience = max(valid_audience)
-        audience_axis.set_xscale("log")
-        audience_axis.set_xlim(1, maximum_audience * 2.2)
-        audience_axis.xaxis.set_major_formatter(FuncFormatter(compact_number))
-        for position, metric in zip(positions, metrics):
-            value = metric["audience"]
-            if math.isnan(value) or value <= 0:
-                audience_axis.text(
-                    1.2,
-                    position,
+        audience_axis.set_yscale("log")
+        audience_axis.set_ylim(
+            max(min(valid_audience) / 2.5, 1),
+            max(valid_audience) * 2.1,
+        )
+        audience_axis.yaxis.set_major_formatter(FuncFormatter(compact_number))
+        for bar, value in zip(bars, audience_values):
+            if math.isnan(value):
+                audience_axis.annotate(
                     "N/A",
-                    va="center",
+                    (bar.get_x() + bar.get_width() / 2, 1),
+                    xytext=(0, 8),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
                     color=COLORS["muted"],
-                    fontsize=9,
+                    fontsize=8.5,
                 )
                 continue
-            color = PLATFORM_COLORS[metric["platform"]]
-            audience_axis.hlines(
-                position,
-                1,
-                value,
-                color=color,
-                linewidth=3,
-                alpha=0.75,
-            )
-            audience_axis.scatter(
-                value,
-                position,
-                s=115,
-                color=color,
-                edgecolor="white",
-                linewidth=1.4,
-                zorder=3,
-            )
             audience_axis.annotate(
                 compact_number(value),
-                (value, position),
-                xytext=(8, 0),
+                (bar.get_x() + bar.get_width() / 2, value),
+                xytext=(0, 7),
                 textcoords="offset points",
-                va="center",
+                ha="center",
+                va="bottom",
                 fontsize=8.5,
                 color=COLORS["ink"],
+                fontweight="semibold",
             )
     else:
         no_data(audience_axis)
@@ -858,51 +925,98 @@ def render_platform_audience_growth_chart(
         for metric in metrics
         if not math.isnan(metric["net_growth"])
     ]
+    positive_growth_color = "#0F6B5F"
+    negative_growth_color = "#B42318"
     if valid_growth:
-        growth_extent = max(max(abs(value) for value in valid_growth) * 1.35, 1)
-        growth_axis.set_xlim(-growth_extent, growth_extent)
-        growth_axis.axvline(0, color=COLORS["ink"], linewidth=1.1)
-        growth_axis.xaxis.set_major_formatter(FuncFormatter(compact_number))
+        plotted_growth = [max(value, 0) for value in valid_growth]
+        growth_maximum = max(max(plotted_growth), 1)
+        growth_axis.set_ylim(0, growth_maximum * 1.35)
+        growth_axis.set_ylabel(
+            "Net Growth",
+            color=COLORS["muted"],
+            labelpad=10,
+        )
+        growth_axis.yaxis.set_major_formatter(FuncFormatter(compact_number))
         for position, metric in zip(positions, metrics):
             value = metric["net_growth"]
             if math.isnan(value):
-                growth_axis.text(
-                    0,
-                    position,
+                growth_axis.annotate(
                     "N/A",
+                    (position, 0),
+                    xytext=(0, 9),
+                    textcoords="offset points",
                     ha="center",
-                    va="center",
+                    va="bottom",
                     color=COLORS["muted"],
-                    fontsize=9,
+                    fontsize=8,
                 )
                 continue
-            color = PLATFORM_COLORS[metric["platform"]]
-            growth_axis.barh(
+            display_value = max(value, 0)
+            dot_color = (
+                positive_growth_color
+                if value >= 0
+                else negative_growth_color
+            )
+            growth_axis.scatter(
                 position,
-                value,
-                height=0.42,
-                color=color,
-                alpha=0.9,
+                display_value,
+                s=145,
+                color=dot_color,
+                edgecolor="white",
+                linewidth=1.5,
+                zorder=5,
+                clip_on=False,
             )
             growth_axis.annotate(
                 f"{value:+,.0f}",
-                (value, position),
-                xytext=(6 if value >= 0 else -6, 0),
+                (position, display_value),
+                xytext=(0, 9),
                 textcoords="offset points",
-                ha="left" if value >= 0 else "right",
-                va="center",
+                ha="center",
+                va="bottom",
                 fontsize=8.5,
-                color=COLORS["ink"],
+                color=dot_color,
+                fontweight="semibold",
+                path_effects=[
+                    path_effects.withStroke(
+                        linewidth=3,
+                        foreground="white",
+                    )
+                ],
             )
     else:
-        no_data(growth_axis)
+        growth_axis.set_ylim(0, 1)
+        growth_axis.set_yticks([])
 
-    fig.subplots_adjust(
-        left=0.17,
-        right=0.95,
-        bottom=0.14,
-        top=0.76,
-        wspace=0.20,
+    audience_legend = Line2D(
+        [0],
+        [0],
+        marker="s",
+        color="none",
+        markerfacecolor=COLORS["blue"],
+        markeredgecolor="none",
+        markersize=9,
+        label="Current audience (platform colors)",
+    )
+    growth_legend = Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="none",
+        markerfacecolor=positive_growth_color,
+        markeredgecolor="white",
+        markeredgewidth=1.2,
+        markersize=9,
+        label="Net growth (negative values plotted at zero)",
+    )
+    audience_axis.legend(
+        handles=[audience_legend, growth_legend],
+        frameon=False,
+        loc="lower left",
+        bbox_to_anchor=(0, 1.03),
+        borderaxespad=0,
+        fontsize=8.5,
+        ncol=2,
     )
     return save_chart(fig, output_path)
 
@@ -929,7 +1043,7 @@ def render_platform_engagement_scatter(
         or math.isnan(metric["engagement_rate"])
     ]
     fig, axis = create_chart_figure(
-        "Engagement Rate vs Audience Size",
+        "Cross-Platform Engagement vs Audience Quadrant",
         (
             f"{client['client_name']} | {period['period_label']} | "
             "Bubble size represents total engagement"
@@ -948,6 +1062,108 @@ def render_platform_engagement_scatter(
     )
 
     if plotted:
+        audience_values = [metric["audience"] for metric in plotted]
+        engagement_rates = [metric["engagement_rate"] for metric in plotted]
+        audience_midpoint = math.exp(
+            sum(math.log(value) for value in audience_values)
+            / len(audience_values)
+        )
+        engagement_midpoint = sum(engagement_rates) / len(engagement_rates)
+        x_min = max(min(audience_values) / 2, 1)
+        x_max = max(audience_values) * 2
+        y_min = 0
+        y_max = max(max(engagement_rates) * 1.4, engagement_midpoint * 1.6, 1)
+        y_split = (engagement_midpoint - y_min) / (y_max - y_min)
+
+        axis.set_xscale("log")
+        axis.set_xlim(x_min, x_max)
+        axis.set_ylim(y_min, y_max)
+        axis.xaxis.set_major_formatter(FuncFormatter(compact_number))
+        axis.axvline(
+            audience_midpoint,
+            color=COLORS["ink"],
+            linewidth=1.1,
+            zorder=2,
+        )
+        axis.axhline(
+            engagement_midpoint,
+            color=COLORS["ink"],
+            linewidth=1.1,
+            zorder=2,
+        )
+        axis.axvspan(
+            audience_midpoint,
+            x_max,
+            ymin=y_split,
+            ymax=1,
+            color="#2A8C82",
+            alpha=0.045,
+        )
+        axis.axvspan(
+            x_min,
+            audience_midpoint,
+            ymin=y_split,
+            ymax=1,
+            color="#356D9A",
+            alpha=0.035,
+        )
+        axis.axvspan(
+            x_min,
+            audience_midpoint,
+            ymin=0,
+            ymax=y_split,
+            color="#C45A55",
+            alpha=0.035,
+        )
+        axis.axvspan(
+            audience_midpoint,
+            x_max,
+            ymin=0,
+            ymax=y_split,
+            color="#C9962E",
+            alpha=0.03,
+        )
+        axis.text(
+            0.985,
+            0.965,
+            "High Audience | High ER",
+            transform=axis.transAxes,
+            ha="right",
+            va="top",
+            color=COLORS["muted"],
+            fontsize=8,
+        )
+        axis.text(
+            0.015,
+            0.965,
+            "Low Audience | High ER",
+            transform=axis.transAxes,
+            ha="left",
+            va="top",
+            color=COLORS["muted"],
+            fontsize=8,
+        )
+        axis.text(
+            0.015,
+            0.035,
+            "Low Audience | Low ER",
+            transform=axis.transAxes,
+            ha="left",
+            va="bottom",
+            color=COLORS["muted"],
+            fontsize=8,
+        )
+        axis.text(
+            0.985,
+            0.035,
+            "High Audience | Low ER",
+            transform=axis.transAxes,
+            ha="right",
+            va="bottom",
+            color=COLORS["muted"],
+            fontsize=8,
+        )
+
         engagement_values = [
             max(metric["total_engagement"], 0)
             if not math.isnan(metric["total_engagement"])
@@ -1004,12 +1220,6 @@ def render_platform_engagement_scatter(
                     label=metric["label"],
                 )
             )
-        axis.set_xscale("log")
-        audience_values = [metric["audience"] for metric in plotted]
-        axis.set_xlim(min(audience_values) / 2, max(audience_values) * 2)
-        axis.xaxis.set_major_formatter(FuncFormatter(compact_number))
-        maximum_rate = max(metric["engagement_rate"] for metric in plotted)
-        axis.set_ylim(0, max(maximum_rate * 1.35, 1))
         axis.legend(
             handles=legend_handles,
             frameon=False,

@@ -444,17 +444,24 @@ def content_type_from_row(row: dict, platform: str, fallback: str) -> str:
 
 def post_json(row: dict, content_type: str, platform: str):
     total_engagement = parse_number(row.get("Reactions, Comments & Shares"))
-    likes = numeric(row, "Number of Likes")
-    comments = numeric(row, "Number of comments")
-    shares = number_from(
-        row,
-        "Number of Shares",
-        "Shares",
-        "Story shares",
-    ) or 0
-    saves = number_from(row, "Number of Saves", "Saves") or 0
-    reposts = number_from(row, "Number of Reposts", "Reposts") or 0
-    reactions = number_from(row, "Number of Reactions", "Reactions") or 0
+    likes = float(number_from(row, "Number of Likes") or 0)
+    comments = float(
+        number_from(row, "Number of comments", "Story replies") or 0
+    )
+    shares = float(
+        number_from(
+            row,
+            "Number of Shares",
+            "Shares",
+            "Story shares",
+        )
+        or 0
+    )
+    saves = float(number_from(row, "Number of Saves", "Saves") or 0)
+    reposts = float(number_from(row, "Number of Reposts", "Reposts") or 0)
+    reactions = float(
+        number_from(row, "Number of Reactions", "Reactions") or 0
+    )
     if total_engagement is None:
         total_engagement = (
             likes
