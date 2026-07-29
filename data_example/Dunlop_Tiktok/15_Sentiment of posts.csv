@@ -1,0 +1,4 @@
+﻿Profile;Social network;Sentiment of posts;Profile-ID;Post-ID;Link;Image Link;
+"negative";null;0.0;NEGATIVE;null;null;
+"neutral";null;5.0;NEUTRAL;null;null;
+"positive";null;17.0;POSITIVE;null;null;

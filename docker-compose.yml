@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mai_postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: mai_socmed_report
+      POSTGRES_USER: mai_user
+      POSTGRES_PASSWORD: mai_password
+
+    ports:
+      - "15432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mai_user -d mai_socmed_report"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  adminer:
+    image: adminer:latest
+    container_name: mai_adminer
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: mai_dashboard
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: 8000
+
+      DATABASE_URL: postgresql+psycopg://mai_user:mai_password@postgres:5432/mai_socmed_report
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+      - ./token.json:/app/token.json
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

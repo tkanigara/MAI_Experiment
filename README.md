@@ -11,22 +11,43 @@ Flow v1:
 
 ```text
 Meta Instagram API
--> CSV backup lokal
--> KPI processed
--> Gemini AI insight atau fallback rule-based
+-> raw CSV per client/platform
+-> processed JSON per client/platform
 -> Google Sheets intermediate
 -> opsional Google Slides
 ```
 
+Struktur ETL lokal:
+
+```text
+data/
+  demo_client/
+    instagram/
+      instagram_account_raw_<run_id>.csv
+      instagram_media_raw_<run_id>.csv
+      instagram_processed_<run_id>.json
+```
+
+File `*_raw_*.csv` adalah hasil extract dari source API. File
+`*_processed_*.json` adalah hasil transform yang sudah siap dipakai untuk
+analysis/reporting. Google Sheets diperlakukan sebagai consumer dari data
+processed, bukan tempat utama untuk membersihkan data.
+
 ## File Penting
 
-- `meta_export.py`: script utama untuk mengambil data dari Meta Graph API.
+- `extract_instagram_raw.py`: command sederhana untuk mengambil raw CSV Instagram saja.
+- `ETL_Pipeline/extract/meta_instagram.py`: helper low-level Meta Graph API khusus Instagram.
+- `meta_export.py`: script legacy untuk diagnosis/Facebook/export lama.
+- `ETL_Pipeline/extract/instagram.py`: extract Instagram raw CSV ke `data/<client>/instagram/`.
+- `ETL_Pipeline/transform/instagram.py`: transform raw CSV menjadi processed payload.
+- `ETL_Pipeline/load/load.py`: simpan processed payload sebagai JSON.
 - `analytics_pipeline.py`: hitung KPI Instagram dari CSV.
 - `ai_insight_pipeline.py`: buat insight JSON dari KPI via Gemini atau fallback.
 - `push_to_sheets.py`: tulis raw/KPI/AI insight/report run ke Google Sheets intermediate.
 - `run_pipeline.py`: entrypoint scheduler-ready.
 - `.env`: tempat token dan ID disimpan secara lokal.
-- `data/processed/`: folder output CSV dan hasil diagnosis.
+- `data/<client>/instagram/`: folder output raw CSV dan processed JSON Instagram.
+- `data/processed/`: folder legacy output CSV dan hasil diagnosis.
 
 Folder `data/`, file `.env`, `token.json`, `credentials.json`, dan `*.json`
 sudah masuk `.gitignore`, jadi credential service account seperti
@@ -38,6 +59,9 @@ Buat atau isi file `.env` di folder ini:
 
 ```env
 META_ACCESS_TOKEN=isi_token_meta_di_sini
+META_ACCESS_TOKEN_SECRET_ID=mai-meta-access-token
+SECRET_MANAGER_PROJECT_ID=optimum-essence-497706-i6
+SECRET_MANAGER_SERVICE_ACCOUNT_FILE=optimum-essence-497706-i6-1c879e7ef3bd.json
 IG_BUSINESS_ID=isi_instagram_business_id_di_sini
 FB_PAGE_ID=isi_facebook_page_id_di_sini
 META_API_VERSION=v23.0
@@ -60,6 +84,7 @@ GOOGLE_TOKEN_FILE=token.json
 Catatan:
 
 - `META_ACCESS_TOKEN` wajib ada.
+- Kalau `META_ACCESS_TOKEN` dikosongkan, script bisa mengambilnya dari Google Secret Manager lewat `META_ACCESS_TOKEN_SECRET_ID`.
 - `IG_BUSINESS_ID` dipakai untuk export Instagram.
 - `FB_PAGE_ID` dipakai untuk export Facebook.
 - `META_API_VERSION` boleh diganti kalau versi API yang dipakai berbeda.
@@ -70,6 +95,27 @@ Catatan:
 - `GOOGLE_CREDENTIALS_FILE` dan `GOOGLE_TOKEN_FILE` tetap bisa dipakai untuk Google Slides via OAuth.
 
 Script akan membaca `.env` otomatis saat dijalankan.
+
+### Meta token dari Google Secret Manager
+
+Untuk menyimpan token Meta di Google Secret Manager, kosongkan
+`META_ACCESS_TOKEN` dan isi:
+
+```env
+META_ACCESS_TOKEN=
+META_ACCESS_TOKEN_SECRET_ID=mai-meta-access-token
+SECRET_MANAGER_PROJECT_ID=optimum-essence-497706-i6
+SECRET_MANAGER_SERVICE_ACCOUNT_FILE=optimum-essence-497706-i6-1c879e7ef3bd.json
+```
+
+Buat secret bernama `mai-meta-access-token` di Google Cloud Secret Manager,
+lalu isi secret value dengan Meta access token. Service account yang dipakai di
+`SECRET_MANAGER_SERVICE_ACCOUNT_FILE` harus punya role Secret Manager Secret
+Accessor untuk secret/project tersebut. Kalau `SECRET_MANAGER_SERVICE_ACCOUNT_FILE`
+kosong, script fallback ke `GOOGLE_APPLICATION_CREDENTIALS`, lalu Application
+Default Credentials dari `gcloud auth application-default login`. Saat
+`META_ACCESS_TOKEN` kosong, pipeline akan mengambil token dari secret itu saat
+runtime.
 
 ## Scheduler Pipeline V1
 
@@ -94,12 +140,18 @@ python .\run_pipeline.py --client-id demo_client --frequency weekly --generate-s
 Tab Google Sheets intermediate yang dibuat/dipastikan oleh pipeline:
 
 ```text
-instagram_account_raw
-instagram_media_raw
-instagram_kpi_processed
-ai_insights
+instagram
+facebook
+youtube
+tiktok
 report_runs
 ```
+
+V1 baru mengisi tab `instagram`. Isi tab ini adalah data siap pakai dalam satu
+baris per post: metadata run/client, account Instagram, posting ID, waktu post,
+jenis konten, permalink/media URL, KPI post, KPI total periode, ranking top
+content, dan AI insight/recommendation. Tab `facebook`, `youtube`, dan `tiktok`
+dibuat sebagai struktur awal untuk fase berikutnya.
 
 Contoh Windows Task Scheduler action:
 
@@ -297,43 +349,68 @@ Cara membaca hasil diagnosis:
 - Kalau response `fb_page_id` punya `instagram_business_account`, berarti Page tersebut terhubung ke akun Instagram Business/Creator.
 - Kalau `ig_business_id` berhasil, `IG_BUSINESS_ID` valid dan token bisa membaca akun Instagram tersebut.
 
-## Export Instagram
+## Extract Instagram Raw CSV
+
+Untuk mengambil raw CSV Instagram saja, tanpa transform, Sheets, atau Slides:
 
 ```powershell
-python .\meta_export.py --platform instagram --limit 25
+python .\extract_instagram_raw.py --client-id japaholic --limit 25
 ```
+
+Dengan filter periode insight:
+
+```powershell
+python .\extract_instagram_raw.py --client-id japaholic --limit 25 --since 2026-06-01 --until 2026-06-14
+```
+
+Dengan filter bulan laporan:
+
+```powershell
+python .\extract_instagram_raw.py --client-id japaholic --limit 100 --month 2026-05
+```
+
+`--month` menerima format `YYYY-MM`, nama bulan Inggris seperti `june`, atau
+nama bulan Indonesia seperti `mei 2026`. Untuk bulan berjalan, tanggal akhir
+otomatis berhenti di hari extract; untuk bulan yang sudah lewat, tanggal akhir
+otomatis memakai hari terakhir bulan tersebut. Nama file raw akan membawa bulan
+laporan, misalnya `instagram_media_raw_2026-05_<run_id>.csv`.
 
 Output:
 
 ```text
-data/processed/instagram_account_YYYYMMDD_HHMMSS.csv
-data/processed/instagram_media_YYYYMMDD_HHMMSS.csv
-data/processed/instagram_account_daily.csv
+data/<client_id>/instagram/instagram_account_raw_<run_id>.csv
+data/<client_id>/instagram/instagram_media_raw_<run_id>.csv
 ```
 
-Data yang dicoba diambil:
+Data account raw yang diambil:
 
-- account profile: username, followers count, follows count, media count;
-- account-level insight seperti reach, views/impressions, profile views, website clicks, accounts engaged, total interactions jika tersedia;
-- audience demographics jika tersedia dari Meta API;
-- id media;
-- caption;
-- timestamp;
-- username;
-- media type;
-- permalink;
-- media URL atau thumbnail URL;
-- like/comment count;
-- insight yang tersedia seperti reach, views, shares, saved, total interactions, dan lainnya.
+- `id`, `username`, `name`;
+- `followers_count`, `follows_count`, `media_count`;
+- `profile_picture_url`;
+- `snapshot_date`, `snapshot_time`;
+- `raw_demographic_age_gender` dan `raw_demographic_country` dari `follower_demographics`;
+- `raw_reached_demographic_age_gender` dan `raw_reached_demographic_country` dari `reached_audience_demographics`.
 
-Tidak semua metric pasti tersedia. Kalau Meta menolak metric tertentu, error-nya
-akan disimpan di kolom `metric_errors`.
+Data media raw yang diambil per postingan:
 
-Catatan:
+- `id`, `timestamp`, `username`;
+- `media_type`, `media_product_type`;
+- `permalink`, `media_url`, `thumbnail_url`;
+- `like_count`, `comments_count` dari media fields;
+- `insight_views`, `insight_reach`, `insight_likes`, `insight_comments`;
+- `insight_reposts`, `insight_shares`, `insight_saved`, `insight_total_interactions`.
 
-- `instagram_account_*.csv` dipakai untuk mengisi placeholder seperti `{{IG_TOTAL_FOLLOWERS}}`.
-- `instagram_account_daily.csv` menyimpan snapshot harian agar nanti bisa menghitung growth.
-- Demographics bisa tetap kosong jika Meta tidak mengembalikan data karena permission, threshold privacy, atau metric tidak tersedia untuk akun tersebut.
+Untuk kebutuhan laporan per postingan, row media juga membawa raw demographic account:
+
+- `audience_demographic_source = instagram_account_insights`;
+- `account_raw_demographic_age_gender`;
+- `account_raw_demographic_country`;
+- `account_raw_reached_demographic_age_gender`;
+- `account_raw_reached_demographic_country`.
+
+Catatan penting: Meta Graph API menyediakan metric seperti views/reach/likes/comments/shares/saved/reposts sebagai insight per media. Demografi umur, gender, dan country tidak tersedia sebagai insight per media biasa, jadi data demografi yang ditempel ke setiap row media berasal dari account/reached audience insights. Tahap transform/report boleh mengolah raw demographic ini menjadi persentase seperti Men/Women, Country, dan Age bucket.
+
+Kolom yang tidak dipakai laporan tidak diambil/ditulis ke CSV raw, misalnya `caption`, `metric_errors`, `raw_insights`, `raw_media`, dan payload debug besar lain.
 
 ## Export Facebook
 
@@ -376,13 +453,13 @@ tetap masuk CSV. Proses fallback ini bisa membuat runtime terasa lebih lama.
 Kalau mau lebih cepat:
 
 ```powershell
-python .\meta_export.py --platform instagram --limit 5
+python .\extract_instagram_raw.py --client-id japaholic --limit 5
 ```
 
 Kalau sudah yakin token dan metric-nya stabil, limit bisa dinaikkan:
 
 ```powershell
-python .\meta_export.py --platform instagram --limit 100
+python .\extract_instagram_raw.py --client-id japaholic --limit 100
 ```
 
 ## Progress Saat Berjalan
@@ -406,10 +483,12 @@ Untuk Facebook post, `--since` dan `--until` bisa dipakai:
 python .\meta_export.py --platform facebook --since 2026-05-01 --until 2026-05-13
 ```
 
-Untuk Instagram media, filter tanggal belum dipakai untuk membatasi daftar media.
-Saat ini parameter tersebut hanya diteruskan ke request insight jika metric
-mendukungnya. Nanti bisa dikembangkan supaya filter tanggal dilakukan setelah
-media list diambil.
+Untuk Instagram raw extract, `--since` dan `--until` diteruskan ke request media insight dan dipakai untuk filter timestamp media. Daftar media hasil akhir tetap dibatasi oleh `--limit`.
+
+Untuk Instagram raw extract, `--month` bisa dipakai sebagai pengganti
+`--since/--until`. Jika `--month 2026-05`, extractor memakai periode
+`2026-05-01` sampai `2026-05-31` dan hanya menulis media yang timestamp-nya ada
+di bulan tersebut. Jangan gabungkan `--month` dengan `--since/--until`.
 
 ## Masalah Umum
 
@@ -446,7 +525,7 @@ python .\meta_export.py --platform diagnose
 Kalau diagnosis juga gagal dengan error token invalid, berarti masalahnya ada
 di token sebelum masuk ke urusan Page ID atau IG Business ID.
 
-Metric kosong atau muncul di `metric_errors`
+Metric Instagram kosong
 
 Biasanya karena permission token kurang, metric tidak tersedia untuk jenis media
 tersebut, atau nama metric sudah berubah di versi Meta API yang sedang dipakai.

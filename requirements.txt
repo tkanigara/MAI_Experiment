@@ -1,5 +1,10 @@
 requests
+fastapi
+rich
+uvicorn[standard]
+python-multipart
 pandas
+matplotlib
 python-dotenv
 google-api-python-client
 google-auth
@@ -10,3 +15,11 @@ langchain
 langchain-core
 langchain-google-genai
 google-generativeai
+google-cloud-secret-manager
+google-cloud-storage
+gspread
+gspread_dataframe
+SQLAlchemy
+psycopg[binary]
+langchain-huggingface
+typing_extensions

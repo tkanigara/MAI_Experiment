@@ -1,4 +1,5 @@
 import argparse
+import errno
 import json
 import os
 import re
@@ -12,9 +13,9 @@ from dotenv import load_dotenv
 
 DEFAULT_TEMPLATE_URL = (
     "https://docs.google.com/presentation/d/"
-    "1ZeYnxJOVIjjEbHqa6BJBh30JE3m2SVQuyEcOu4WaiMY/edit?usp=sharing"
+    "1VL_VaXXyC3AI-Sk3ajSO-hAX0y14yLxhRREUFGw9u6g/edit?usp=sharing"
 )
-DEFAULT_DATA_DIR = Path("data/processed")
+DEFAULT_DATA_DIR = Path("data")
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -24,6 +25,29 @@ SCOPES = [
     "https://www.googleapis.com/auth/presentations",
     "https://www.googleapis.com/auth/drive",
 ]
+
+SHEETS_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
+
+
+def default_template():
+    return (
+        os.getenv("SLIDES_TEMPLATE_ID")
+        or os.getenv("GOOGLE_SLIDES_TEMPLATE_ID")
+        or DEFAULT_TEMPLATE_URL
+    )
+
+
+def default_slides_credentials():
+    auth_mode = os.getenv("GOOGLE_SLIDES_AUTH", "").strip().lower()
+    if auth_mode in ("oauth", "user_oauth", "user-oauth"):
+        return os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    return (
+        os.getenv("GOOGLE_SLIDES_SERVICE_ACCOUNT_FILE")
+        or os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    )
 
 AI_PLACEHOLDER_KEYS = {
     "executive_summary": "{{EXECUTIVE_SUMMARY}}",
@@ -58,16 +82,261 @@ def extract_presentation_id(value):
     return value.strip()
 
 
-def latest_instagram_csv(data_dir):
-    files = sorted(data_dir.glob("instagram_media_*.csv"), key=lambda path: path.stat().st_mtime)
+def default_data_dir():
+    return Path(os.getenv("DATA_FOLDER", DEFAULT_DATA_DIR))
+
+
+def report_period_to_month(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}", value):
+        return value
+    for fmt in ("%B %Y", "%b %Y"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%Y-%m")
+        except ValueError:
+            pass
+    return ""
+
+
+def latest_instagram_csv(data_dir, client_id=None, report_month=None):
+    data_dir = Path(data_dir)
+    search_root = data_dir
+    if client_id:
+        client_root = data_dir / client_id / "instagram"
+        if client_root.exists():
+            search_root = client_root
+
+    files = []
+    for pattern in ("instagram_media_raw*.csv", "instagram_media_*.csv"):
+        files.extend(search_root.rglob(pattern))
+    files = sorted(set(files), key=lambda path: path.stat().st_mtime)
+
+    if client_id and search_root == data_dir:
+        files = [path for path in files if client_id in path.parts]
+
+    if report_month:
+        files = [path for path in files if report_period_from_media_csv(path) == report_month]
+
     if not files:
-        raise FileNotFoundError(f"Tidak ada file instagram_media_*.csv di {data_dir}")
+        client_note = f" untuk client '{client_id}'" if client_id else ""
+        period_note = f" periode {report_month}" if report_month else ""
+        raise FileNotFoundError(
+            f"Tidak ada file instagram_media_*.csv{client_note}{period_note} di {data_dir}"
+        )
     return files[-1]
 
 
 def latest_optional_csv(data_dir, pattern):
-    files = sorted(data_dir.glob(pattern), key=lambda path: path.stat().st_mtime)
+    files = sorted(Path(data_dir).rglob(pattern), key=lambda path: path.stat().st_mtime)
     return files[-1] if files else None
+
+
+def latest_account_csv_for_media(media_csv_path):
+    media_csv_path = Path(media_csv_path)
+    current_period = report_period_from_media_csv(media_csv_path)
+    files = sorted(
+        media_csv_path.parent.glob("instagram_account_*.csv"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    if current_period:
+        period_files = [
+            path for path in files if report_period_from_account_csv(path) == current_period
+        ]
+        if period_files:
+            return period_files[-1]
+    return files[-1] if files else None
+
+
+def extract_run_stamp(path):
+    match = re.search(r"_(\d{8})_(\d{6})(?:\.csv)?$", Path(path).name)
+    if not match:
+        return None
+    return datetime.strptime("_".join(match.groups()), "%Y%m%d_%H%M%S")
+
+
+def report_period_from_filename(path):
+    match = re.search(r"_raw_(\d{4}-\d{2})_", Path(path).name)
+    return match.group(1) if match else ""
+
+
+def report_period_from_media_csv(path):
+    filename_period = report_period_from_filename(path)
+    if filename_period:
+        return filename_period
+
+    try:
+        df = pd.read_csv(path, usecols=lambda col: col == "timestamp")
+    except Exception:
+        return ""
+    if df.empty or "timestamp" not in df.columns:
+        return ""
+
+    periods = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+    periods = periods.dropna()
+    if periods.empty:
+        return ""
+    return periods.dt.tz_convert(None).dt.to_period("M").mode().iloc[0].strftime("%Y-%m")
+
+
+def report_period_from_account_csv(path):
+    filename_period = report_period_from_filename(path)
+    if filename_period:
+        return filename_period
+
+    try:
+        df = pd.read_csv(path, usecols=lambda col: col in ("report_month", "snapshot_date"))
+    except Exception:
+        return ""
+    if df.empty:
+        return ""
+    row = df.iloc[-1]
+    if row.get("report_month"):
+        return str(row.get("report_month"))
+    if row.get("snapshot_date"):
+        parsed = pd.to_datetime(row.get("snapshot_date"), errors="coerce")
+        if not pd.isna(parsed):
+            return parsed.to_period("M").strftime("%Y-%m")
+    return ""
+
+
+def client_from_data_path(path):
+    parts = Path(path).parts
+    if "data" in parts:
+        index = parts.index("data")
+        if index + 1 < len(parts):
+            return parts[index + 1]
+    return ""
+
+
+def latest_files_by_period(folder, pattern, period_func):
+    result = {}
+    for path in Path(folder).glob(pattern):
+        period = period_func(path)
+        if not period:
+            continue
+        stamp = extract_run_stamp(path) or datetime.fromtimestamp(path.stat().st_mtime)
+        current = result.get(period)
+        if not current or stamp > current[0]:
+            result[period] = (stamp, path)
+    return {period: item[1] for period, item in result.items()}
+
+
+def read_sheet_records(sheet_name):
+    spreadsheet_id = os.getenv("INTERMEDIATE_SPREADSHEET_ID", "").strip()
+    credentials_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+    if not spreadsheet_id or not credentials_file:
+        return pd.DataFrame()
+
+    try:
+        import gspread
+        from google.oauth2 import service_account
+
+        credentials = service_account.Credentials.from_service_account_file(
+            credentials_file,
+            scopes=SHEETS_SCOPES,
+        )
+        client = gspread.authorize(credentials)
+        worksheet = client.open_by_key(spreadsheet_id).worksheet(sheet_name)
+        records = worksheet.get_all_records()
+    except Exception as exc:
+        print(f"[Slides] Skip reading sheet '{sheet_name}': {exc}", file=sys.stderr)
+        return pd.DataFrame()
+
+    return pd.DataFrame(records)
+
+
+def sheet_long_to_month_rows(df, client_name, platform="instagram"):
+    if df.empty:
+        return []
+
+    df = df.copy()
+    client_col = "client_id" if "client_id" in df.columns else "client"
+    if client_col in df.columns:
+        df = df[df[client_col].astype(str) == str(client_name)]
+    if "platform" in df.columns:
+        df = df[df["platform"].astype(str).str.lower() == platform.lower()]
+    if df.empty or not {"year", "month", "metric", "value"}.issubset(df.columns):
+        return []
+
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").fillna(0).astype(int)
+    df["month"] = pd.to_numeric(df["month"], errors="coerce").fillna(0).astype(int)
+    df["value"] = pd.to_numeric(df["value"], errors="coerce").fillna(0)
+    rows = []
+    for (year, month), group in df.groupby(["year", "month"]):
+        if not year or not month:
+            continue
+        metrics = {
+            str(row["metric"]): number(row["value"])
+            for _, row in group.iterrows()
+        }
+        period = f"{year:04d}-{month:02d}"
+        rows.append({
+            "period": period,
+            "name": datetime(year, month, 1).strftime("%b"),
+            **metrics,
+        })
+    return sorted(rows, key=lambda row: row["period"], reverse=True)
+
+
+def merge_sheet_monthly_rows(kpi, client_name, current_period):
+    followers_rows = sheet_long_to_month_rows(
+        read_sheet_records("foll_growth"),
+        client_name,
+    )
+    engagement_rows = sheet_long_to_month_rows(
+        read_sheet_records("engagement_performance"),
+        client_name,
+    )
+    if not followers_rows and not engagement_rows:
+        return kpi
+
+    by_period = {}
+    for row in engagement_rows:
+        by_period.setdefault(row["period"], {}).update({
+            "period": row["period"],
+            "name": row["name"],
+            "posts": row.get("number_of_post", 0),
+            "impr": row.get("impressions", 0),
+            "reach": row.get("reach", 0),
+            "likes": row.get("likes", 0),
+            "comm": row.get("comments", 0),
+            "share": row.get("shares", 0),
+            "interactions": row.get("total_engagement", 0),
+            "er": row.get("er", 0),
+        })
+    for row in followers_rows:
+        by_period.setdefault(row["period"], {}).update({
+            "period": row["period"],
+            "name": row["name"],
+            "followers": row.get("total_followers", 0),
+            "follows": row.get("follows", 0),
+            "net_growth": row.get("net_growth", 0),
+            "unfollows": row.get("unfollows", 0),
+        })
+
+    periods = sorted(
+        [period for period in by_period if not current_period or period <= current_period],
+        reverse=True,
+    )[:3]
+    monthly_rows = [by_period[period] for period in periods]
+    if monthly_rows:
+        current = monthly_rows[0]
+        kpi["monthly_rows"] = monthly_rows
+        kpi["total_posts"] = current.get("posts", kpi.get("total_posts", 0))
+        kpi["total_reach"] = current.get("reach", kpi.get("total_reach", 0))
+        kpi["total_views"] = current.get("impr", kpi.get("total_views", 0))
+        kpi["total_interactions"] = current.get("interactions", kpi.get("total_interactions", 0))
+        kpi["total_likes"] = current.get("likes", kpi.get("total_likes", 0))
+        kpi["total_comments"] = current.get("comm", kpi.get("total_comments", 0))
+        kpi["total_shares"] = current.get("share", kpi.get("total_shares", 0))
+        kpi["avg_engagement_rate"] = current.get("er", kpi.get("avg_engagement_rate", 0))
+        if current.get("followers"):
+            kpi.setdefault("account", {})["followers_count"] = current.get("followers")
+        if current.get("follows"):
+            kpi.setdefault("account", {})["follows_count"] = current.get("follows")
+    return kpi
 
 
 def number(value):
@@ -127,6 +396,13 @@ def first_available(row, columns, default=""):
         if column in row and not pd.isna(row[column]):
             return row[column]
     return default
+
+
+def truncate_text(value, max_chars=80):
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
 
 
 def parse_json_cell(value):
@@ -312,6 +588,35 @@ def calculate_instagram_kpi(csv_path, account_csv_path=None):
                 "permalink": first_available(row, ["permalink"], ""),
                 "reach": row[metric_columns["reach"]],
                 "views": row[metric_columns["views"]],
+                "likes": row[metric_columns["likes"]],
+                "comments": row[metric_columns["comments"]],
+                "shares": row[metric_columns["shares"]],
+                "saved": row[metric_columns["saved"]],
+                "interactions": row[metric_columns["interactions"]],
+            }
+        )
+
+    if total_posts:
+        low_df = df.sort_values(
+            by=[metric_columns["interactions"], metric_columns["reach"]],
+            ascending=True,
+        ).head(3)
+    else:
+        low_df = df.head(0)
+
+    low_posts = []
+    for _, row in low_df.iterrows():
+        low_posts.append(
+            {
+                "caption": first_available(row, ["caption"], ""),
+                "image": first_available(row, ["thumbnail_url", "media_url"], ""),
+                "permalink": first_available(row, ["permalink"], ""),
+                "reach": row[metric_columns["reach"]],
+                "views": row[metric_columns["views"]],
+                "likes": row[metric_columns["likes"]],
+                "comments": row[metric_columns["comments"]],
+                "shares": row[metric_columns["shares"]],
+                "saved": row[metric_columns["saved"]],
                 "interactions": row[metric_columns["interactions"]],
             }
         )
@@ -333,6 +638,10 @@ def calculate_instagram_kpi(csv_path, account_csv_path=None):
         else pd.DataFrame()
     )
 
+    related_months = monthly_context_from_folder(csv_path, account_csv_path)
+    if related_months:
+        monthly_rows = related_months
+
     return {
         "source_file": str(csv_path),
         "account_source_file": account.get("source_file", ""),
@@ -347,10 +656,98 @@ def calculate_instagram_kpi(csv_path, account_csv_path=None):
         "total_saved": total_saved,
         "avg_engagement_rate": avg_er,
         "top_posts": top_posts,
+        "low_posts": low_posts,
         "monthly_rows": monthly_rows,
         "post_type_counts": post_type_counts,
         "content_type_summary": type_summary.to_dict(orient="index"),
     }
+
+
+def summarize_month_file(media_csv_path, account_csv_path=None):
+    df = pd.read_csv(media_csv_path)
+    if df.empty:
+        return {}
+
+    metric_columns = {
+        "reach": "insight_reach",
+        "views": "insight_views",
+        "interactions": "insight_total_interactions",
+        "likes": "insight_likes",
+        "comments": "insight_comments",
+        "shares": "insight_shares",
+        "saved": "insight_saved",
+    }
+    for column in metric_columns.values():
+        if column not in df.columns:
+            df[column] = 0
+        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
+
+    period = report_period_from_media_csv(media_csv_path)
+    if not period:
+        return {}
+
+    account = load_instagram_account(account_csv_path)
+    interactions = df[metric_columns["interactions"]].sum()
+    reach = df[metric_columns["reach"]].sum()
+    return {
+        "period": period,
+        "name": datetime.strptime(period, "%Y-%m").strftime("%b"),
+        "posts": len(df),
+        "impr": df[metric_columns["views"]].sum(),
+        "reach": reach,
+        "likes": df[metric_columns["likes"]].sum(),
+        "comm": df[metric_columns["comments"]].sum(),
+        "share": df[metric_columns["shares"]].sum(),
+        "saved": df[metric_columns["saved"]].sum(),
+        "interactions": interactions,
+        "er": safe_divide_percent(interactions, reach),
+        "followers": account.get("followers_count", 0),
+        "follows": account.get("follows_count", 0),
+    }
+
+
+def monthly_context_from_folder(csv_path, account_csv_path=None, max_months=3):
+    csv_path = Path(csv_path)
+    folder = csv_path.parent
+    current_period = report_period_from_media_csv(csv_path)
+    if not current_period:
+        return []
+
+    media_by_period = latest_files_by_period(
+        folder,
+        "instagram_media_raw_????-??_*.csv",
+        report_period_from_media_csv,
+    )
+    account_by_period = latest_files_by_period(
+        folder,
+        "instagram_account_raw_????-??_*.csv",
+        report_period_from_account_csv,
+    )
+    media_by_period[current_period] = csv_path
+    if account_csv_path:
+        account_period = report_period_from_account_csv(account_csv_path)
+        if account_period:
+            account_by_period[account_period] = Path(account_csv_path)
+
+    periods = sorted(
+        [period for period in media_by_period if period <= current_period],
+        reverse=True,
+    )[:max_months]
+    rows = []
+    for period in periods:
+        row = summarize_month_file(
+            media_by_period[period],
+            account_by_period.get(period),
+        )
+        if not row:
+            continue
+        rows.append(row)
+    for index, row in enumerate(rows):
+        followers = number(row.get("followers", 0))
+        previous = number(rows[index + 1].get("followers", 0)) if index + 1 < len(rows) else 0
+        row["net_growth"] = followers - previous if followers and previous else 0
+        row["unfollows"] = "-"
+    return rows
 
 
 def blank_template_defaults():
@@ -456,7 +853,92 @@ def blank_template_defaults():
         "ADS_AVG_CPM",
         "ADS_AVG_CPC",
         "ADS_AVG_CTR",
+        "FB_RECOMMENDATION_1",
+        "FB_RECOMMENDATION_2",
+        "FB_RECOMMENDATION_3",
+        "FB_SUMMARY_POINT_1",
+        "FB_SUMMARY_POINT_2",
+        "FB_SUMMARY_POINT_3",
+        "FB_SUMMARY_POINT_4",
+        "VID_RECOMMENDATION_1",
+        "VID_RECOMMENDATION_2",
+        "VID_RECOMMENDATION_3",
+        "VID_SUMMARY_POINT_1",
+        "VID_SUMMARY_POINT_2",
+        "VID_SUMMARY_POINT_3",
+        "VID_SUMMARY_POINT_4",
+        "LOW_CONTENT_FAILURE_DRIVER",
+        "INSIGT_FOLLOWERS_GROWTH_TEXT",
+        "IG_SUMMARY_POINT_1",
+        "IG_SUMMARY_POINT_2",
+        "IG_SUMMARY_POINT_3",
+        "IG_SUMMARY_POINT_4",
+        "IG_RECOMMENDATION_1",
+        "IG_RECOMMENDATION_2",
+        "IG_RECOMMENDATION_3",
+        "M1_IG_TOTAL_FOLLOWERS",
+        "M1_IG_FOLLOWS",
+        "M1_IG_UNFOLLOWS",
+        "M1_NET_GROWTH",
+        "M2_IG_TOTAL_FOLLOWERS",
+        "M2_IG_FOLLOWS",
+        "M2_IG_UNFOLLOWS",
+        "M2_NET_GROWTH",
+        "M3_IG_TOTAL_FOLLOWERS",
+        "M3_IG_FOLLOWS",
+        "M3_IG_UNFOLLOWS",
+        "M3_NET_GROWTH",
     ]
+    for position in range(1, 4):
+        placeholders.extend([
+            f"POST_TOP_{position}_TITLE",
+            f"POST_TOP_{position}_IMAGE",
+            f"POST_TOP_{position}_VIEW",
+            f"POST_TOP_{position}_LIKES",
+            f"POST_TOP_{position}_COMMENT",
+            f"POST_TOP_{position}_SHARE",
+            f"POST_TOP_{position}_SAVE",
+            f"POST_TOP_{position}_REPOST",
+            f"POST_TOP_{position}_MEN",
+            f"POST_TOP_{position}_WOMEN",
+            f"POST_TOP_{position}_1824",
+            f"POST_TOP_{position}_2534",
+            f"POST_TOP_{position}_3544",
+            f"POST_TOP_{position}_4554",
+            f"POST_TOP_{position}_5564",
+            f"POST_TOP_{position}_COUNTRY",
+            f"POST_LOW_{position}_TITLE",
+            f"POST_LOW_{position}_IMAGE",
+            f"POST_LOW_{position}_VIEW",
+            f"POST_LOW_{position}_LIKES",
+            f"POST_LOW_{position}_COMMENT",
+            f"POST_LOW_{position}_SHARE",
+            f"POST_LOW_{position}_SAVE",
+            f"POST_LOW_{position}_REPOST",
+            f"POST_LOW_{position}_MEN",
+            f"POST_LOW_{position}_WOMEN",
+            f"POST_LOW_{position}_1824",
+            f"POST_LOW_{position}_2534",
+            f"POST_LOW_{position}_3544",
+            f"POST_LOW_{position}_4554",
+            f"POST_LOW_{position}_5564",
+            f"POST_LOW_{position}_COUNTRY",
+            f"POST_{position}_VIEW",
+            f"POST_{position}_IMAGE",
+            f"POST_{position}_LIKES",
+            f"POST_{position}_COMMENT",
+            f"POST_{position}_SHARE",
+            f"POST_{position}_SAVE",
+            f"POST_{position}_REPOST",
+            f"POST_{position}_MEN",
+            f"POST_{position}_WOMEN",
+            f"POST_{position}_1824",
+            f"POST_{position}_2534",
+            f"POST_{position}_3544",
+            f"POST_{position}_4554",
+            f"POST_{position}_5564",
+            f"POST_{position}_COUNTRY",
+        ])
     return {f"{{{{{name}}}}}": "-" for name in placeholders}
 
 
@@ -572,6 +1054,7 @@ def apply_ai_insights(mapping, ai_insights):
 def build_placeholder_mapping(kpi, client_name, report_period, agency_name):
     """Ubah hasil KPI menjadi mapping placeholder Google Slides."""
     top_posts = kpi["top_posts"] + [{} for _ in range(3)]
+    low_posts = kpi.get("low_posts", []) + [{} for _ in range(3)]
     content_summary = kpi.get("content_type_summary", {})
     feed = content_summary.get("FEED", {})
     reels = content_summary.get("REELS", {})
@@ -597,6 +1080,11 @@ def build_placeholder_mapping(kpi, client_name, report_period, agency_name):
     follower_target_year = os.getenv("IG_FOL_TARGET_YEAR", "")
 
     mapping = blank_template_defaults()
+    current_month = monthly_rows[0] if monthly_rows else {}
+    previous_month = monthly_rows[1] if len(monthly_rows) > 1 else {}
+    reach_growth = number(current_month.get("reach", 0)) - number(previous_month.get("reach", 0))
+    interaction_growth = number(current_month.get("interactions", 0)) - number(previous_month.get("interactions", 0))
+    follower_growth = number(current_month.get("followers", 0)) - number(previous_month.get("followers", 0))
     mapping.update({
         "{{CLIENT_NAME}}": client_name,
         "{{AGENCY_NAME}}": agency_name,
@@ -642,6 +1130,13 @@ def build_placeholder_mapping(kpi, client_name, report_period, agency_name):
         "{{IG_REELS_COUNT}}": fmt_number(reels_count),
         "{{IG_CAROUSEL_COUNT}}": fmt_number(carousel_count),
         "{{IG_STATIC_COUNT}}": fmt_number(static_count),
+        "{{IG_SUMMARY_POINT_1}}": f"Total Instagram reach: {fmt_number(kpi['total_reach'])}.",
+        "{{IG_SUMMARY_POINT_2}}": f"Total Instagram interactions: {fmt_number(kpi['total_interactions'])}.",
+        "{{IG_SUMMARY_POINT_3}}": f"Average Instagram ER: {fmt_percent(kpi['avg_engagement_rate'])}.",
+        "{{IG_SUMMARY_POINT_4}}": f"Best content type: {best_content_type}.",
+        "{{IG_RECOMMENDATION_1}}": "Perbanyak format konten dengan interaction tertinggi.",
+        "{{IG_RECOMMENDATION_2}}": "Gunakan top content sebagai referensi visual dan caption.",
+        "{{IG_RECOMMENDATION_3}}": "Tambahkan target dan benchmark agar achievement bisa dihitung lebih akurat.",
         "{{FB_TOTAL_POSTS}}": "-",
         "{{FB_TOTAL_REACH}}": "-",
         "{{FB_TOTAL_VIEWS}}": "-",
@@ -689,14 +1184,37 @@ def build_placeholder_mapping(kpi, client_name, report_period, agency_name):
         "{{AI_RECOMMENDATION_2}}": "Gunakan caption dan visual dari top content sebagai benchmark.",
         "{{AI_RECOMMENDATION_3}}": "Tambahkan perbandingan weekly/monthly agar insight lebih tajam.",
         "{{ENGAGEMENT_TREND_TEXT}}": (
-            f"Data prototype menunjukkan total {fmt_number(kpi['total_posts'])} post dengan "
-            f"{fmt_number(kpi['total_reach'])} reach dan {fmt_number(kpi['total_views'])} impressions/views."
+            (
+                f"{current_month.get('name')} menghasilkan {fmt_number(current_month.get('reach', 0))} reach "
+                f"dan {fmt_number(current_month.get('interactions', 0))} interactions. "
+                f"Dibanding {previous_month.get('name')}, reach berubah {fmt_number(reach_growth)} "
+                f"dan interactions berubah {fmt_number(interaction_growth)}."
+            )
+            if previous_month
+            else (
+                f"Data prototype menunjukkan total {fmt_number(kpi['total_posts'])} post dengan "
+                f"{fmt_number(kpi['total_reach'])} reach dan {fmt_number(kpi['total_views'])} impressions/views."
+            )
+        ),
+        "{{INSIGT_FOLLOWERS_GROWTH_TEXT}}": (
+            (
+                f"{current_month.get('name')} memiliki {fmt_number(current_month.get('followers', 0))} followers. "
+                f"Dibanding {previous_month.get('name')}, perubahan followers {fmt_number(follower_growth)}."
+            )
+            if previous_month and current_month.get("followers")
+            else f"Total followers saat ini {fmt_number(followers_count)}."
+            if followers_count
+            else "Data followers growth belum tersedia pada export ini."
         ),
         "{{BENCHMARK_NOTE}}": (
             "Benchmark masih placeholder. Tambahkan benchmark industri setelah sumber data tersedia."
         ),
         "{{TOP_CONTENT_SUCCESS_DRIVER}}": (
             f"Top content dipilih berdasarkan interactions tertinggi. Format terbaik saat ini: {best_content_type}."
+        ),
+        "{{LOW_CONTENT_FAILURE_DRIVER}}": (
+            "Low performing content dipilih dari interaction dan reach terendah. "
+            "Evaluasi hook visual, timing, format, dan kejelasan pesan pada konten tersebut."
         ),
         "{{COMPETITOR_STRATEGY_INSIGHT}}": (
             "Data kompetitor belum dimasukkan pada prototype ini."
@@ -718,6 +1236,14 @@ def build_placeholder_mapping(kpi, client_name, report_period, agency_name):
         mapping[f"{{{{M{position}_POSTS}}}}"] = fmt_number(month.get("posts", 0))
         mapping[f"{{{{M{position}_IMPR}}}}"] = fmt_number(month.get("impr", 0))
         mapping[f"{{{{M{position}_REACH}}}}"] = fmt_number(month.get("reach", 0))
+        mapping[f"{{{{M{position}_IG_TOTAL_FOLLOWERS}}}}"] = (
+            fmt_number(month.get("followers", 0)) if month.get("followers") else "-"
+        )
+        mapping[f"{{{{M{position}_IG_FOLLOWS}}}}"] = (
+            fmt_number(month.get("follows", 0)) if month.get("follows") else "-"
+        )
+        mapping[f"{{{{M{position}_IG_UNFOLLOWS}}}}"] = str(month.get("unfollows", "-"))
+        mapping[f"{{{{M{position}_NET_GROWTH}}}}"] = fmt_number(month.get("net_growth", 0))
         mapping[f"{{{{M{position}_LIKES}}}}"] = fmt_number(month.get("likes", 0))
         mapping[f"{{{{M{position}_COMM}}}}"] = fmt_number(month.get("comm", 0))
         mapping[f"{{{{M{position}_SHARE}}}}"] = fmt_number(month.get("share", 0))
@@ -730,11 +1256,43 @@ def build_placeholder_mapping(kpi, client_name, report_period, agency_name):
         mapping[f"{{{{TOP_CITY_{position}}}}}"] = city.get("city", "-")
         mapping[f"{{{{TOP_CITY_{position}_PCT}}}}"] = fmt_number(city.get("pct", 0))
 
+    def post_title(post):
+        title = str(post.get("caption", "") or "").strip()
+        if title:
+            return truncate_text(title, 80)
+        permalink = str(post.get("permalink", "") or "").strip()
+        if permalink:
+            return permalink.rstrip("/").split("/")[-1]
+        return "-"
+
+    def map_post(prefix, position, post):
+        post_er = safe_divide_percent(post.get("interactions", 0), post.get("reach", 0))
+        title = post_title(post)
+        mapping[f"{{{{{prefix}_{position}_TITLE}}}}"] = title
+        mapping[f"{{{{{prefix}_{position}_REACH}}}}"] = fmt_number(post.get("reach", 0))
+        mapping[f"{{{{{prefix}_{position}_VIEW}}}}"] = fmt_number(post.get("views", 0))
+        mapping[f"{{{{{prefix}_{position}_LIKES}}}}"] = fmt_number(post.get("likes", 0))
+        mapping[f"{{{{{prefix}_{position}_COMMENT}}}}"] = fmt_number(post.get("comments", 0))
+        mapping[f"{{{{{prefix}_{position}_SHARE}}}}"] = fmt_number(post.get("shares", 0))
+        mapping[f"{{{{{prefix}_{position}_SAVE}}}}"] = fmt_number(post.get("saved", 0))
+        mapping[f"{{{{{prefix}_{position}_REPOST}}}}"] = fmt_number(post.get("reposts", 0))
+        mapping[f"{{{{{prefix}_{position}_ER}}}}"] = fmt_percent(post_er)
+        mapping[f"{{{{{prefix}_{position}_MEN}}}}"] = fmt_number(demographics.get("gender_male_pct", 0))
+        mapping[f"{{{{{prefix}_{position}_WOMEN}}}}"] = fmt_number(demographics.get("gender_female_pct", 0))
+        mapping[f"{{{{{prefix}_{position}_1824}}}}"] = fmt_number(demographics.get("age_18_24_pct", 0))
+        mapping[f"{{{{{prefix}_{position}_2534}}}}"] = fmt_number(demographics.get("age_25_34_pct", 0))
+        mapping[f"{{{{{prefix}_{position}_3544}}}}"] = fmt_number(demographics.get("age_35_44_pct", 0))
+        mapping[f"{{{{{prefix}_{position}_4554}}}}"] = fmt_number(demographics.get("age_45_plus_pct", 0))
+        mapping[f"{{{{{prefix}_{position}_5564}}}}"] = "-"
+        mapping[f"{{{{{prefix}_{position}_COUNTRY}}}}"] = (
+            top_cities[0].get("city", "-") if top_cities else "-"
+        )
+
     for index in range(3):
         post = top_posts[index]
         position = index + 1
-        title = str(post.get("caption", "-"))[:80]
-        post_er = safe_divide_percent(post.get("interactions", 0), post.get("reach", 0))
+        map_post("POST_TOP", position, post)
+        mapping[f"{{{{POST_TOP_{position}_IMAGE}}}}"] = post.get("image", "-")
         mapping[f"{{{{TOP_POST_{position}_CAPTION}}}}"] = str(post.get("caption", "-"))[:220]
         mapping[f"{{{{TOP_POST_{position}_IMAGE}}}}"] = post.get("image", "-")
         mapping[f"{{{{TOP_POST_{position}_PERMALINK}}}}"] = post.get("permalink", "-")
@@ -743,25 +1301,142 @@ def build_placeholder_mapping(kpi, client_name, report_period, agency_name):
         mapping[f"{{{{TOP_POST_{position}_INTERACTIONS}}}}"] = fmt_number(
             post.get("interactions", 0)
         )
-        mapping[f"{{{{POST_{position}_TITLE}}}}"] = title
-        mapping[f"{{{{POST_{position}_REACH}}}}"] = fmt_number(post.get("reach", 0))
-        mapping[f"{{{{POST_{position}_ER}}}}"] = fmt_percent(post_er)
+        mapping[f"{{{{POST_{position}_TITLE}}}}"] = mapping[f"{{{{POST_TOP_{position}_TITLE}}}}"]
+        mapping[f"{{{{POST_{position}_REACH}}}}"] = mapping[f"{{{{POST_TOP_{position}_REACH}}}}"]
+        mapping[f"{{{{POST_{position}_IMAGE}}}}"] = mapping[f"{{{{POST_TOP_{position}_IMAGE}}}}"]
+        mapping[f"{{{{POST_{position}_VIEW}}}}"] = mapping[f"{{{{POST_TOP_{position}_VIEW}}}}"]
+        mapping[f"{{{{POST_{position}_LIKES}}}}"] = mapping[f"{{{{POST_TOP_{position}_LIKES}}}}"]
+        mapping[f"{{{{POST_{position}_COMMENT}}}}"] = mapping[f"{{{{POST_TOP_{position}_COMMENT}}}}"]
+        mapping[f"{{{{POST_{position}_SHARE}}}}"] = mapping[f"{{{{POST_TOP_{position}_SHARE}}}}"]
+        mapping[f"{{{{POST_{position}_SAVE}}}}"] = mapping[f"{{{{POST_TOP_{position}_SAVE}}}}"]
+        mapping[f"{{{{POST_{position}_REPOST}}}}"] = mapping[f"{{{{POST_TOP_{position}_REPOST}}}}"]
+        mapping[f"{{{{POST_{position}_ER}}}}"] = mapping[f"{{{{POST_TOP_{position}_ER}}}}"]
+        mapping[f"{{{{POST_{position}_MEN}}}}"] = mapping[f"{{{{POST_TOP_{position}_MEN}}}}"]
+        mapping[f"{{{{POST_{position}_WOMEN}}}}"] = mapping[f"{{{{POST_TOP_{position}_WOMEN}}}}"]
+        mapping[f"{{{{POST_{position}_1824}}}}"] = mapping[f"{{{{POST_TOP_{position}_1824}}}}"]
+        mapping[f"{{{{POST_{position}_2534}}}}"] = mapping[f"{{{{POST_TOP_{position}_2534}}}}"]
+        mapping[f"{{{{POST_{position}_3544}}}}"] = mapping[f"{{{{POST_TOP_{position}_3544}}}}"]
+        mapping[f"{{{{POST_{position}_4554}}}}"] = mapping[f"{{{{POST_TOP_{position}_4554}}}}"]
+        mapping[f"{{{{POST_{position}_5564}}}}"] = mapping[f"{{{{POST_TOP_{position}_5564}}}}"]
+        mapping[f"{{{{POST_{position}_COUNTRY}}}}"] = mapping[f"{{{{POST_TOP_{position}_COUNTRY}}}}"]
+
+    for index in range(3):
+        post = low_posts[index]
+        position = index + 1
+        map_post("POST_LOW", position, post)
+        mapping[f"{{{{POST_LOW_{position}_IMAGE}}}}"] = post.get("image", "-")
 
     return mapping
 
 
 def copy_template(drive_service, template_id, report_name):
+    output_folder_id = os.getenv("GOOGLE_SLIDES_OUTPUT_FOLDER_ID", "").strip()
+    body = {"name": report_name}
+    body["parents"] = [output_folder_id or "root"]
     copied = (
         drive_service.files()
-        .copy(fileId=template_id, body={"name": report_name})
+        .copy(fileId=template_id, body=body)
         .execute()
     )
     return copied["id"]
 
 
+def image_placeholder_mapping(mapping):
+    image_mapping = {}
+    for placeholder, value in mapping.items():
+        placeholder_name = placeholder.strip("{}")
+        image_url = str(value or "").strip()
+        if not placeholder_name.endswith("_IMAGE"):
+            continue
+        if not image_url.startswith(("http://", "https://")):
+            continue
+        image_mapping[placeholder] = image_url
+    return image_mapping
+
+
+def image_object_ids_by_placeholder(slides_service, presentation_id, image_mapping):
+    presentation = (
+        slides_service.presentations()
+        .get(presentationId=presentation_id)
+        .execute()
+    )
+    matched = {placeholder: [] for placeholder in image_mapping}
+    for slide in presentation.get("slides", []):
+        for element in slide.get("pageElements", []):
+            if "image" not in element:
+                continue
+            object_id = element.get("objectId")
+            alt_text = " ".join(
+                str(element.get(field, "") or "")
+                for field in ("title", "description")
+            )
+            for placeholder in image_mapping:
+                if placeholder in alt_text and object_id:
+                    matched[placeholder].append(object_id)
+    return matched
+
+
+def replace_image_placeholders(slides_service, presentation_id, image_mapping):
+    image_object_ids = image_object_ids_by_placeholder(
+        slides_service,
+        presentation_id,
+        image_mapping,
+    )
+
+    requests = []
+    for placeholder, object_ids in image_object_ids.items():
+        for object_id in object_ids:
+            requests.append(
+                {
+                    "replaceImage": {
+                        "imageObjectId": object_id,
+                        "url": image_mapping[placeholder],
+                        "imageReplaceMethod": "CENTER_INSIDE",
+                    }
+                }
+            )
+
+    if requests:
+        try:
+            slides_service.presentations().batchUpdate(
+                presentationId=presentation_id,
+                body={"requests": requests},
+            ).execute()
+        except Exception as exc:
+            print(
+                f"Warning: gagal mengganti image object placeholder: {exc}",
+                file=sys.stderr,
+            )
+
+    for placeholder, image_url in image_mapping.items():
+        request = {
+            "replaceAllShapesWithImage": {
+                "containsText": {
+                    "text": placeholder,
+                    "matchCase": True,
+                },
+                "imageUrl": image_url,
+                    "replaceMethod": "CENTER_INSIDE",
+            }
+        }
+        try:
+            slides_service.presentations().batchUpdate(
+                presentationId=presentation_id,
+                body={"requests": [request]},
+            ).execute()
+        except Exception as exc:
+            print(
+                f"Warning: gagal mengganti image placeholder {placeholder}: {exc}",
+                file=sys.stderr,
+            )
+
+
 def replace_placeholders(slides_service, presentation_id, mapping):
+    image_placeholders = set(image_placeholder_mapping(mapping))
     requests = []
     for placeholder, value in mapping.items():
+        if placeholder in image_placeholders:
+            continue
         requests.append(
             {
                 "replaceAllText": {
@@ -784,6 +1459,16 @@ def replace_placeholders(slides_service, presentation_id, mapping):
 
 
 def get_google_services(credentials_file, token_file, oauth_port):
+    auth_mode = os.getenv("GOOGLE_SLIDES_AUTH", "").strip().lower()
+    if auth_mode in ("adc", "application_default", "application-default"):
+        import google.auth
+        from googleapiclient.discovery import build
+
+        credentials, _project_id = google.auth.default(scopes=SCOPES)
+        slides_service = build("slides", "v1", credentials=credentials)
+        drive_service = build("drive", "v3", credentials=credentials)
+        return slides_service, drive_service
+
     credentials_path = Path(credentials_file)
     try:
         credential_type = json.loads(credentials_path.read_text(encoding="utf-8")).get("type", "")
@@ -820,7 +1505,16 @@ def get_google_services(credentials_file, token_file, oauth_port):
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             credentials = flow.run_local_server(port=oauth_port)
 
-        token_path.write_text(credentials.to_json(), encoding="utf-8")
+        try:
+            token_path.write_text(credentials.to_json(), encoding="utf-8")
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+                raise
+            print(
+                "[google_auth] OAuth token refreshed in memory; "
+                f"{token_path} is read-only, so the refreshed token was not persisted.",
+                flush=True,
+            )
 
     slides_service = build("slides", "v1", credentials=credentials)
     drive_service = build("drive", "v3", credentials=credentials)
@@ -831,19 +1525,31 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Contoh generate Google Slides report dari CSV Instagram."
     )
-    parser.add_argument("--template", default=DEFAULT_TEMPLATE_URL)
+    parser.add_argument("--template", default=default_template())
+    parser.add_argument(
+        "--data-dir",
+        default=str(default_data_dir()),
+        help="Folder data root. Default dari DATA_FOLDER atau data.",
+    )
+    parser.add_argument(
+        "--client-id",
+        help="Client folder di data/<client-id>/instagram. Kalau kosong, ambil CSV Instagram terbaru dari semua data.",
+    )
     parser.add_argument("--csv", help="Path CSV. Kalau kosong, pakai CSV Instagram terbaru.")
     parser.add_argument(
         "--account-csv",
         help="Path CSV account Instagram. Kalau kosong, pakai instagram_account_*.csv terbaru jika ada.",
     )
-    parser.add_argument("--client-name", default=os.getenv("REPORT_CLIENT_NAME", "Demo Client"))
+    parser.add_argument("--client-name", default=None)
     parser.add_argument("--agency-name", default=os.getenv("REPORT_AGENCY_NAME", "MAI"))
     parser.add_argument(
         "--report-period",
         default=os.getenv("REPORT_PERIOD", datetime.now().strftime("%B %Y")),
     )
-    parser.add_argument("--credentials", default=os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json"))
+    parser.add_argument(
+        "--credentials",
+        default=default_slides_credentials(),
+    )
     parser.add_argument("--token", default=os.getenv("GOOGLE_TOKEN_FILE", "token.json"))
     parser.add_argument(
         "--oauth-port",
@@ -865,7 +1571,9 @@ def parse_args():
 
 
 def generate_slides_report(
-    template=DEFAULT_TEMPLATE_URL,
+    template=None,
+    data_dir=None,
+    client_id=None,
     csv=None,
     account_csv=None,
     client_name=None,
@@ -882,19 +1590,38 @@ def generate_slides_report(
 
     Fungsi ini dipakai oleh CLI dan juga bisa dipanggil sebagai tool agentic.
     """
-    template_id = extract_presentation_id(template)
-    csv_path = Path(csv) if csv else latest_instagram_csv(DEFAULT_DATA_DIR)
+    template_id = extract_presentation_id(template or default_template())
+    data_dir = Path(data_dir or default_data_dir())
+    resolved_report_period = report_period or os.getenv(
+        "REPORT_PERIOD", datetime.now().strftime("%B %Y")
+    )
+    report_month = report_period_to_month(resolved_report_period)
+    csv_path = (
+        Path(csv)
+        if csv
+        else latest_instagram_csv(data_dir, client_id, report_month=report_month)
+    )
     account_csv_path = (
         Path(account_csv)
         if account_csv
-        else latest_optional_csv(DEFAULT_DATA_DIR, "instagram_account_*.csv")
+        else latest_account_csv_for_media(csv_path)
     )
 
     kpi = calculate_instagram_kpi(csv_path, account_csv_path)
+    resolved_client_name = (
+        client_name
+        or client_from_data_path(csv_path)
+        or os.getenv("REPORT_CLIENT_NAME", "Demo Client")
+    )
+    kpi = merge_sheet_monthly_rows(
+        kpi,
+        resolved_client_name,
+        report_period_from_media_csv(csv_path),
+    )
     mapping = build_placeholder_mapping(
         kpi,
-        client_name=client_name or os.getenv("REPORT_CLIENT_NAME", "Demo Client"),
-        report_period=report_period or os.getenv("REPORT_PERIOD", datetime.now().strftime("%B %Y")),
+        client_name=resolved_client_name,
+        report_period=resolved_report_period,
         agency_name=agency_name or os.getenv("REPORT_AGENCY_NAME", "MAI"),
     )
     ai_insights = ai_insights or {}
@@ -904,8 +1631,8 @@ def generate_slides_report(
         try:
             ai_insights = generate_ai_insights(
                 kpi,
-                client_name=client_name or os.getenv("REPORT_CLIENT_NAME", "Demo Client"),
-                report_period=report_period or os.getenv("REPORT_PERIOD", datetime.now().strftime("%B %Y")),
+                client_name=resolved_client_name,
+                report_period=resolved_report_period,
             )
             apply_ai_insights(mapping, ai_insights)
         except Exception as exc:
@@ -938,10 +1665,15 @@ def generate_slides_report(
         oauth_port,
     )
     report_name = (
-        f"SNS Report - {client_name or os.getenv('REPORT_CLIENT_NAME', 'Demo Client')} - "
-        f"{report_period or os.getenv('REPORT_PERIOD', datetime.now().strftime('%B %Y'))}"
+        f"SNS Report - {resolved_client_name} - "
+        f"{resolved_report_period}"
     )
     presentation_id = copy_template(drive_service, template_id, report_name)
+    replace_image_placeholders(
+        slides_service,
+        presentation_id,
+        image_placeholder_mapping(mapping),
+    )
     replace_placeholders(slides_service, presentation_id, mapping)
 
     result["presentation_id"] = presentation_id
@@ -955,6 +1687,8 @@ def main():
 
     result = generate_slides_report(
         template=args.template,
+        data_dir=args.data_dir,
+        client_id=args.client_id,
         csv=args.csv,
         account_csv=args.account_csv,
         client_name=args.client_name,

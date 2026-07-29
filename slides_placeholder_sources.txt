@@ -1,0 +1,361 @@
+Social Media KPI Slides Placeholder Sources
+Generated as a working reference for dashboard/slides_report.py.
+
+Legend
+- {P}: platform prefix. Values:
+  - IG = instagram
+  - FB = facebook
+  - TK = tiktok
+  - YT = youtube
+- {N}: ranking number, usually 1-3 for post slots and 1-5 for competitor profile slots.
+- {M}: month trend slot, usually 1-3.
+- Platform report tables:
+  - instagram_reports
+  - facebook_reports
+  - tiktok_reports
+  - youtube_reports
+
+
+Client / Report Period
+
+clients.client_name:
+  {{CLIENT_NAME}}
+
+REPORT_AGENCY_NAME env:
+  {{AGENCY_NAME}}
+
+report_periods.period_label or report_periods.period_start:
+  {{REPORT_PERIOD}}
+
+
+Platform Overview
+
+{platform}_reports.total_followers or youtube_reports.total_subscribers:
+  {{P_TOTAL_FOLLOWERS}}, {{P_TOTAL_SUBSCRIBERS}}, {{P_TOTAL_FOL}}, {{P_TOTAL_SUB}}
+
+{platform}_reports.follower_growth or youtube_reports.subscriber_growth:
+  {{P_FOLLOWERS_GROWTH}}, {{P_SUBSCRIBER_GROWTH}}
+
+If follower/subscriber growth is NULL, generator currently falls back to total followers/subscribers:
+  {{P_FOLLOWERS_GROWTH}}, {{P_SUBSCRIBER_GROWTH}}
+
+{platform}_reports.follower_growth_rate or youtube_reports.subscriber_growth_rate:
+  {{P_FOLLOWERS_GROWTH_RATE}}, {{P_SUBSCRIBER_GROWTH_RATE}}
+
+{platform}_reports.follows or youtube_reports.subscribers_gained:
+  {{P_FOLLOWS}}, {{P_SUBSCRIBERS_GAINED}}
+
+{platform}_reports.unfollows or youtube_reports.subscribers_lost:
+  {{P_UNFOLLOWS}}, {{P_SUBSCRIBERS_LOST}}
+
+{platform}_reports.reach:
+  {{P_TOTAL_REACH}}, {{P_REACH}}
+
+{platform}_reports.total_views or {platform}_reports.impressions:
+  {{P_TOTAL_VIEWS}}
+
+{platform}_reports.total_engagement:
+  {{P_TOTAL_ENGAGEMENT}}, {{P_TOTAL_ENG}}
+
+{platform}_reports.likes:
+  {{P_TOTAL_LIKES}}, {{P_LIKES}}
+
+{platform}_reports.comments:
+  {{P_TOTAL_COMMENTS}}, {{P_COMMENT}}, {{P_COMMENTS}}
+
+{platform}_reports.shares:
+  {{P_TOTAL_SHARES}}, {{P_SHARE}}, {{P_SHARES}}
+
+{platform}_reports.saves:
+  {{P_TOTAL_SAVED}}, {{P_TOTAL_SAVES}}
+
+{platform}_reports.reposts:
+  {{P_TOTAL_REPOSTS}}
+
+{platform}_reports.engagement_rate:
+  {{P_AVG_ENGAGEMENT_RATE}}, {{P_AVG_ER}}, {{P_ER}}
+
+{platform}_reports.total_posts:
+  {{P_TOTAL_POSTS}}
+
+{platform}_reports.reels_posts:
+  {{P_TOTAL_REELS}}
+
+{platform}_reports.carousel_posts:
+  {{P_TOTAL_CAROUSEL}}
+
+{platform}_reports.single_posts:
+  {{P_TOTAL_SINGLE}}
+
+{platform}_reports.story_posts:
+  {{P_TOTAL_STORIES}}
+
+{platform}_reports.video_posts:
+  {{P_TOTAL_VIDEOS}}
+
+{platform}_reports.shorts_posts:
+  {{P_TOTAL_SHORTS}}
+
+{platform}_reports.long_form_posts:
+  {{P_TOTAL_LONG_FORM}}
+
+{platform}_reports.live_posts:
+  {{P_TOTAL_LIVE}}
+
+{platform}_reports.demographics JSON:
+  {{P_AUDIENCE_DEMOGRAPHIC}}
+
+Generated from platform report values:
+  {{P_PERFORMANCE_INSIGHT}}, {{P_FOLLOWERS_GROWTH_TEXT}}, {{P_INSIGHT_FOLLOWERS_GROWTH_TEXT}},
+  {{P_SUBSCRIBER_GROWTH_TEXT}}, {{P_ENGAGEMENT_TREND_TEXT}}
+
+Static/generated text:
+  {{P_BENCHMARK_NOTE}}, {{P_TOP_CONTENT_SUCCESS_DRIVER}}, {{P_LOW_CONTENT_FAILURE_DRIVER}},
+  {{P_COMPETITOR_STRATEGY_INSIGHT}}
+
+
+KPI Targets / Results
+
+kpi_results metric_name='followers', plus kpi_results.actual_month, actual_year, target_month, target_year, achievement_month, achievement_year:
+  {{P_FOL_TARGET_MONTH}}, {{P_FOL_ACTUAL_MONTH}}, {{P_FOL_PCT_MONTH}},
+  {{P_FOL_TARGET_YEAR}}, {{P_FOL_ACTUAL_YEAR}}, {{P_FOL_PCT_YEAR}}
+
+kpi_results metric_name='subscribers':
+  {{P_SUB_TARGET_MONTH}}, {{P_SUB_ACTUAL_MONTH}}, {{P_SUB_PCT_MONTH}},
+  {{P_SUB_TARGET_YEAR}}, {{P_SUB_ACTUAL_YEAR}}, {{P_SUB_PCT_YEAR}}
+
+kpi_results metric_name='reach':
+  {{P_REACH_TARGET_MONTH}}, {{P_REACH_ACTUAL_MONTH}}, {{P_REACH_PCT_MONTH}},
+  {{P_REACH_TARGET_YEAR}}, {{P_REACH_ACTUAL_YEAR}}, {{P_REACH_PCT_YEAR}}
+
+kpi_results metric_name='views':
+  {{P_VIEWS_TARGET_MONTH}}, {{P_VIEWS_ACTUAL_MONTH}}, {{P_VIEWS_PCT_MONTH}},
+  {{P_VIEWS_TARGET_YEAR}}, {{P_VIEWS_ACTUAL_YEAR}}, {{P_VIEWS_PCT_YEAR}}
+
+kpi_results metric_name='engagement':
+  {{P_ENG_TARGET_MONTH}}, {{P_ENG_ACTUAL_MONTH}}, {{P_ENG_PCT_MONTH}},
+  {{P_ENG_TARGET_YEAR}}, {{P_ENG_ACTUAL_YEAR}}, {{P_ENG_PCT_YEAR}}
+
+kpi_results metric_name='likes':
+  {{P_LIKES_TARGET_MONTH}}, {{P_LIKES_ACTUAL_MONTH}}, {{P_LIKES_PCT_MONTH}},
+  {{P_LIKES_TARGET_YEAR}}, {{P_LIKES_ACTUAL_YEAR}}, {{P_LIKES_PCT_YEAR}}
+
+If kpi_results actual values are missing, generator falls back to platform report values where possible:
+  followers/subscribers -> total_followers/total_subscribers
+  reach -> reach
+  views -> total_views
+  engagement -> total_engagement
+  likes -> likes
+
+
+Monthly Trends
+
+report_periods.period_label or report_periods.period_start from latest 3 platform report rows:
+  {{M{M}_NAME}}
+
+{platform}_reports.total_posts from monthly trend rows:
+  {{M{M}_POSTS}}, {{M{M}_{P}_POSTS}}, {{P_M{M}_POSTS}}
+
+{platform}_reports.total_followers or youtube_reports.total_subscribers:
+  {{M{M}_{P}_TOTAL_FOLLOWERS}}, {{M{M}_{P}_TOTAL_SUBSCRIBERS}},
+  {{P_M{M}_TOTAL_FOLLOWERS}}, {{P_M{M}_TOTAL_SUBSCRIBERS}}
+
+{platform}_reports.follows or youtube_reports.subscriber_growth:
+  {{M{M}_{P}_FOLLOWS}}, {{M{M}_{P}_SUBSCRIBERS_GAINED}},
+  {{P_M{M}_FOLLOWS}}, {{P_M{M}_SUBSCRIBERS_GAINED}},
+  {{P_{M}_FOLLOWS}}, {{P_{M}_SUBSCRIBERS_GAINED}}
+
+{platform}_reports.follower_growth or youtube_reports.subscriber_growth:
+  {{M{M}_{P}_NET_GROWTH}}, {{P_M{M}_NET_GROWTH}}, {{P_{M}_NET_GROWTH}}
+
+{platform}_reports.follower_growth_rate or youtube_reports.subscriber_growth_rate:
+  {{M{M}_{P}_GROWTH_RATE}}, {{P_M{M}_GROWTH_RATE}}, {{P_{M}_GROWTH_RATE}}
+
+{platform}_reports.unfollows or youtube_reports.subscribers_lost:
+  {{M{M}_{P}_UNFOLLOWS}}, {{M{M}_{P}_SUBSCRIBERS_LOST}},
+  {{P_M{M}_UNFOLLOWS}}, {{P_M{M}_SUBSCRIBERS_LOST}},
+  {{P_{M}_UNFOLLOWS}}, {{P_{M}_SUBSCRIBERS_LOST}}
+
+{platform}_reports.reach, total_views, or impressions depending on platform:
+  {{M{M}_{P}_REACH}}, {{M{M}_{P}_VIEWS}}, {{P_M{M}_REACH}}, {{P_M{M}_VIEWS}}
+
+{platform}_reports.impressions or total_views:
+  {{M{M}_{P}_IMPR}}, {{P_M{M}_IMPR}}
+
+{platform}_reports.total_engagement:
+  {{M{M}_{P}_ENGAGEMENT}}, {{M{M}_{P}_ENG}}, {{P_M{M}_ENGAGEMENT}}, {{P_M{M}_ENG}}
+
+{platform}_reports.engagement_rate:
+  {{M{M}_{P}_ER}}, {{P_M{M}_ER}}
+
+{platform}_reports.likes:
+  {{M{M}_{P}_LIKES}}, {{P_M{M}_LIKES}}
+
+{platform}_reports.comments:
+  {{M{M}_{P}_COMM}}, {{M{M}_{P}_COMMENTS}}, {{P_M{M}_COMM}}, {{P_M{M}_COMMENTS}}
+
+{platform}_reports.shares:
+  {{M{M}_{P}_SHARE}}, {{M{M}_{P}_SHARES}}, {{P_M{M}_SHARE}}, {{P_M{M}_SHARES}}
+
+
+Own Top / Low Content
+
+social_content_reports where performance_bucket='top', ordered by content_rank then total_engagement:
+  {{P_POST_TOP_{N}_TITLE}}, {{P_POST_TOP_{N}_IMAGE}}, {{P_POST_TOP_{N}_TYPE}},
+  {{P_POST_TOP_{N}_VIEW}}, {{P_POST_TOP_{N}_VIEWS}}, {{P_POST_TOP_{N}_REACH}},
+  {{P_POST_TOP_{N}_LIKES}}, {{P_POST_TOP_{N}_COMMENT}}, {{P_POST_TOP_{N}_COMMENTS}},
+  {{P_POST_TOP_{N}_SHARE}}, {{P_POST_TOP_{N}_SHARES}}, {{P_POST_TOP_{N}_SAVE}},
+  {{P_POST_TOP_{N}_SAVES}}, {{P_POST_TOP_{N}_REPOST}}, {{P_POST_TOP_{N}_REPOSTS}},
+  {{P_POST_TOP_{N}_ER}}, {{P_POST_TOP_{N}_ENGAGEMENT}}
+
+social_content_reports where performance_bucket='low', ordered by content_rank then total_engagement:
+  {{P_POST_LOW_{N}_TITLE}}, {{P_POST_LOW_{N}_IMAGE}}, {{P_POST_LOW_{N}_TYPE}},
+  {{P_POST_LOW_{N}_VIEW}}, {{P_POST_LOW_{N}_VIEWS}}, {{P_POST_LOW_{N}_REACH}},
+  {{P_POST_LOW_{N}_LIKES}}, {{P_POST_LOW_{N}_COMMENT}}, {{P_POST_LOW_{N}_COMMENTS}},
+  {{P_POST_LOW_{N}_SHARE}}, {{P_POST_LOW_{N}_SHARES}}, {{P_POST_LOW_{N}_SAVE}},
+  {{P_POST_LOW_{N}_SAVES}}, {{P_POST_LOW_{N}_REPOST}}, {{P_POST_LOW_{N}_REPOSTS}},
+  {{P_POST_LOW_{N}_ER}}, {{P_POST_LOW_{N}_ENGAGEMENT}}
+
+Currently generated as fallback '-' because demographics-by-post is not imported:
+  {{P_POST_TOP_{N}_MEN}}, {{P_POST_TOP_{N}_WOMEN}},
+  {{P_POST_TOP_{N}_1824}}, {{P_POST_TOP_{N}_2534}}, {{P_POST_TOP_{N}_3544}},
+  {{P_POST_TOP_{N}_4554}}, {{P_POST_TOP_{N}_5564}}, {{P_POST_TOP_{N}_COUNTRY}},
+  {{P_POST_LOW_{N}_MEN}}, {{P_POST_LOW_{N}_WOMEN}},
+  {{P_POST_LOW_{N}_1824}}, {{P_POST_LOW_{N}_2534}}, {{P_POST_LOW_{N}_3544}},
+  {{P_POST_LOW_{N}_4554}}, {{P_POST_LOW_{N}_5564}}, {{P_POST_LOW_{N}_COUNTRY}}
+
+Instagram legacy aliases from social_content_reports top content:
+  {{POST_TOP_{N}_TITLE}}, {{POST_TOP_{N}_IMAGE}}, {{POST_TOP_{N}_TYPE}},
+  {{POST_TOP_{N}_VIEW}}, {{POST_TOP_{N}_VIEWS}}, {{POST_TOP_{N}_REACH}},
+  {{POST_TOP_{N}_LIKES}}, {{POST_TOP_{N}_COMMENT}}, {{POST_TOP_{N}_COMMENTS}},
+  {{POST_TOP_{N}_SHARE}}, {{POST_TOP_{N}_SHARES}}, {{POST_TOP_{N}_SAVE}},
+  {{POST_TOP_{N}_SAVES}}, {{POST_TOP_{N}_REPOST}}, {{POST_TOP_{N}_REPOSTS}},
+  {{POST_TOP_{N}_ER}}, {{POST_TOP_{N}_ENGAGEMENT}},
+  {{POST_{N}_TITLE}}, {{POST_{N}_IMAGE}}, {{POST_{N}_TYPE}},
+  {{POST_{N}_VIEW}}, {{POST_{N}_VIEWS}}, {{POST_{N}_REACH}},
+  {{POST_{N}_LIKES}}, {{POST_{N}_COMMENT}}, {{POST_{N}_COMMENTS}},
+  {{POST_{N}_SHARE}}, {{POST_{N}_SHARES}}, {{POST_{N}_SAVE}},
+  {{POST_{N}_SAVES}}, {{POST_{N}_REPOST}}, {{POST_{N}_REPOSTS}},
+  {{POST_{N}_ER}}, {{POST_{N}_ENGAGEMENT}}
+
+Instagram legacy aliases from social_content_reports low content:
+  {{POST_LOW_{N}_TITLE}}, {{POST_LOW_{N}_IMAGE}}, {{POST_LOW_{N}_TYPE}},
+  {{POST_LOW_{N}_VIEW}}, {{POST_LOW_{N}_VIEWS}}, {{POST_LOW_{N}_REACH}},
+  {{POST_LOW_{N}_LIKES}}, {{POST_LOW_{N}_COMMENT}}, {{POST_LOW_{N}_COMMENTS}},
+  {{POST_LOW_{N}_SHARE}}, {{POST_LOW_{N}_SHARES}}, {{POST_LOW_{N}_SAVE}},
+  {{POST_LOW_{N}_SAVES}}, {{POST_LOW_{N}_REPOST}}, {{POST_LOW_{N}_REPOSTS}},
+  {{POST_LOW_{N}_ER}}, {{POST_LOW_{N}_ENGAGEMENT}}
+
+
+Competitor Profile Summary
+
+competitor_profile_reports.profile_name:
+  {{P_COMP_{N}_NAME}}
+
+competitor_profile_reports.total_followers:
+  {{P_COMP_{N}_FOL}}, {{P_COMP_{N}_SUB}}
+
+competitor_profile_reports.follower_growth_rate:
+  {{P_COMP_{N}_GROWTH}}
+
+competitor_profile_reports.total_posts:
+  {{P_COMP_{N}_POSTS}}
+
+competitor_profile_reports.engagement_rate:
+  {{P_COMP_{N}_ER}}
+
+competitor_profile_reports.total_engagement:
+  {{P_COMP_{N}_ENGAGEMENT}}
+
+competitor_content_reports.image_url from the ranked best content row for competitor N:
+  {{P_POST_COMP_{N}_IMAGE}}
+
+First competitor row follower_growth_rate:
+  {{P_COMP_SELF_GROWTH}}
+
+Instagram legacy competitor aliases:
+  {{COMP_{N}_NAME}}, {{COMP_{N}_FOL}}, {{COMP_{N}_GROWTH}},
+  {{COMP_{N}_POSTS}}, {{COMP_{N}_ER}}, {{COMP_{N}_ENGAGEMENT}},
+  {{COMP_SELF_GROWTH}}
+
+
+Competitor Content
+
+competitor_content_reports, ordered by performance_bucket/content_rank/total_engagement:
+  {{P_COMP_CT_{N}_TITLE}}, {{P_COMP_CT_{N}_IMAGE}}, {{P_COMP_CT_{N}_TYPE}},
+  {{P_COMP_CT_{N}_PROFILE}}, {{P_COMP_CT_{N}_VIEW}}, {{P_COMP_CT_{N}_VIEWS}},
+  {{P_COMP_CT_{N}_REACH}}, {{P_COMP_CT_{N}_LIKES}}, {{P_COMP_CT_{N}_COMMENT}},
+  {{P_COMP_CT_{N}_COMMENTS}}, {{P_COMP_CT_{N}_SHARE}}, {{P_COMP_CT_{N}_SHARES}},
+  {{P_COMP_CT_{N}_SAVE}}, {{P_COMP_CT_{N}_SAVES}}, {{P_COMP_CT_{N}_REPOST}},
+  {{P_COMP_CT_{N}_REPOSTS}}, {{P_COMP_CT_{N}_ER}}, {{P_COMP_CT_{N}_ENGAGEMENT}}
+
+Instagram legacy aliases from competitor_content_reports:
+  {{COMP_CT_{N}_TITLE}}, {{COMP_CT_{N}_IMAGE}}, {{COMP_CT_{N}_TYPE}},
+  {{COMP_CT_{N}_PROFILE}}, {{COMP_CT_{N}_VIEW}}, {{COMP_CT_{N}_VIEWS}},
+  {{COMP_CT_{N}_REACH}}, {{COMP_CT_{N}_LIKES}}, {{COMP_CT_{N}_COMMENT}},
+  {{COMP_CT_{N}_COMMENTS}}, {{COMP_CT_{N}_SHARE}}, {{COMP_CT_{N}_SHARES}},
+  {{COMP_CT_{N}_SAVE}}, {{COMP_CT_{N}_SAVES}}, {{COMP_CT_{N}_REPOST}},
+  {{COMP_CT_{N}_REPOSTS}}, {{COMP_CT_{N}_ER}}, {{COMP_CT_{N}_ENGAGEMENT}}
+
+
+Overall Totals
+
+Sum of platform report reach values:
+  {{TOTAL_REACH}}
+
+Sum of platform report total_views or impressions values:
+  {{TOTAL_VIEWS}}
+
+Sum of platform report total_engagement values:
+  {{TOTAL_ENGAGEMENT}}
+
+Sum of platform report total_posts values:
+  {{TOTAL_POSTS}}
+
+Average of platform report engagement_rate values:
+  {{AVG_ENGAGEMENT_RATE}}
+
+
+Generic / Narrative Defaults
+
+Generated from current client and report period:
+  {{EXECUTIVE_SUMMARY}}
+
+Static/generated summary:
+  {{SUMMARY_POINT_1}}, {{SUMMARY_POINT_2}}, {{SUMMARY_POINT_3}}, {{SUMMARY_POINT_4}}
+
+Static/generated recommendations:
+  {{RECOMMENDATION_1}}, {{RECOMMENDATION_2}}, {{RECOMMENDATION_3}}
+
+Platform-level insight defaults currently fallback to '-':
+  {{P_SUMMARY_POINT_1}}, {{P_SUMMARY_POINT_2}}, {{P_SUMMARY_POINT_3}}, {{P_SUMMARY_POINT_4}},
+  {{P_RECOMMENDATION_1}}, {{P_RECOMMENDATION_2}}, {{P_RECOMMENDATION_3}},
+  {{P_REACH_INSIGHT_SUMMARY}}
+
+
+Website / SEO / Ads Defaults
+
+These are currently not connected to imported DB data and are generated as fallback '-':
+  {{WEB_PREV_SESSIONS}}, {{WEB_CURR_SESSIONS}}, {{WEB_PREV_ORGANIC}},
+  {{WEB_CURR_ORGANIC}}, {{WEB_PREV_BOUNCE}}, {{WEB_CURR_BOUNCE}},
+  {{WEB_PREV_DUR}}, {{WEB_CURR_DUR}}, {{SSL_EXPIRY_DATE}},
+  {{DOMAIN_REMAINING_DAYS}}, {{WEB_SEO_RECO_TEXT}},
+  {{ADS_REACH_TARGET}}, {{ADS_REACH_ACTUAL}}, {{ADS_REACH_PCT}},
+  {{ADS_REACH_SPENT}}, {{ADS_REACH_REM}},
+  {{ADS_INT_TARGET}}, {{ADS_INT_ACTUAL}}, {{ADS_INT_PCT}},
+  {{ADS_INT_SPENT}}, {{ADS_INT_REM}},
+  {{ADS_YT_TARGET}}, {{ADS_YT_ACTUAL}}, {{ADS_YT_PCT}},
+  {{ADS_YT_SPENT}}, {{ADS_YT_REM}},
+  {{ADS_TK_TARGET}}, {{ADS_TK_ACTUAL}}, {{ADS_TK_PCT}},
+  {{ADS_TK_SPENT}}, {{ADS_TK_REM}},
+  {{ADS_TOTAL_SPENT}}, {{ADS_TOTAL_REM}}, {{ADS_AVG_CPM}},
+  {{ADS_AVG_CPC}}, {{ADS_AVG_CTR}}
+
+
+Global Demographics Defaults
+
+These are currently generated as fallback '-' unless a future demographics importer maps them:
+  {{DEMOGRAPHICS_INSIGHT}}, {{AGE_18_24_PCT}}, {{AGE_25_34_PCT}},
+  {{AGE_35_44_PCT}}, {{AGE_45_PLUS_PCT}}, {{GENDER_MALE_PCT}},
+  {{GENDER_FEMALE_PCT}}, {{TOP_CITY_1}}, {{TOP_CITY_1_PCT}},
+  {{TOP_CITY_2}}, {{TOP_CITY_2_PCT}}, {{TOP_CITY_3}}, {{TOP_CITY_3_PCT}}
