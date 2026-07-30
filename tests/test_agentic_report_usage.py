@@ -10,12 +10,80 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dashboard.services.agentic_report import (
+    generate_agentic_report,
     invoke_agentic_graph_with_usage,
     summarize_gemini_usage,
 )
 
 
 class AgenticReportUsageTests(unittest.TestCase):
+    def test_worker_mode_separates_analysis_from_slides(self):
+        class FlexibleModel:
+            def __init__(self, **values):
+                for key, value in values.items():
+                    setattr(self, key, value)
+
+        graph = Mock()
+        graph_result = {
+            "analysis_cache_hit": False,
+            "analysis_data_version": "version-1",
+        }
+        stages = []
+        slides_module = SimpleNamespace(
+            state_insight_overrides=lambda state: [
+                {"platform": "instagram", "insight_key": "key_summary"}
+            ]
+        )
+
+        with (
+            patch(
+                "dashboard.services.agentic_report.report_context",
+                return_value={
+                    "client_code": "client-code",
+                    "period_start": "2026-07-01",
+                },
+            ),
+            patch(
+                "dashboard.services.agentic_report.load_agentic_graph",
+                return_value=(graph, FlexibleModel, FlexibleModel),
+            ),
+            patch(
+                "dashboard.services.agentic_report.invoke_agentic_graph_with_usage",
+                return_value=(graph_result, {"total_tokens": 100}),
+            ) as invoke_graph,
+            patch(
+                "dashboard.services.slides_report.generate_report_slides",
+                return_value={
+                    "presentation_id": "presentation-1",
+                    "presentation_url": "https://slides/presentation-1",
+                    "report_name": "Report 1",
+                },
+            ) as generate_slides,
+            patch(
+                "dashboard.services.agentic_report.importlib.import_module",
+                return_value=slides_module,
+            ),
+        ):
+            result = generate_agentic_report(
+                "client-1",
+                "period-1",
+                should_cancel=lambda: False,
+                on_stage=stages.append,
+            )
+
+        initial_state = invoke_graph.call_args.args[1]
+        self.assertFalse(initial_state.request.generate_slides)
+        self.assertEqual(stages, ["analysis", "slides"])
+        self.assertEqual(result["presentation_id"], "presentation-1")
+        self.assertEqual(result["source_data_version"], "version-1")
+        generate_slides.assert_called_once()
+        self.assertEqual(
+            generate_slides.call_args.kwargs["insight_overrides"][0][
+                "platform"
+            ],
+            "instagram",
+        )
+
     def test_summarizes_usage_across_models(self):
         usage = summarize_gemini_usage(
             {

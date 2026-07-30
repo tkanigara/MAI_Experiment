@@ -44,6 +44,7 @@ CONTENT_FIELDS = {
     "reactions": ("Reactions", "number"),
     "views": ("Views", "number"),
     "reach": ("Reach", "number"),
+    "profile_visits": ("Profile visits", "number"),
     "total_engagement": ("Total engagement", "number"),
     "engagement_rate": ("Engagement rate", "percent"),
     "performance_bucket": ("Performance bucket", "text"),
@@ -1761,7 +1762,7 @@ class ReportEditorService:
             post_id, published_at, caption, permalink, image_url,
             content_type, content_rank, performance_bucket,
             likes, comments, shares, saves, reposts, reactions,
-            views, reach, total_engagement, engagement_rate,
+            views, reach, profile_visits, total_engagement, engagement_rate,
             audience_demographics, raw_metrics
         """
         params = {"client_id": client_id, "period_id": period_id}
@@ -1785,7 +1786,7 @@ class ReportEditorService:
                     post_id, published_at, caption, permalink, image_url,
                     content_type, ranking, 'top',
                     likes, comments, shares, saves, reposts, reactions,
-                    views, reach, total_engagement, engagement_rate,
+                    views, reach, profile_visits, total_engagement, engagement_rate,
                     audience_demographics, raw_metrics
                 FROM (
                     SELECT source_rows.*,
@@ -1815,7 +1816,7 @@ class ReportEditorService:
                     post_id, published_at, caption, permalink, image_url,
                     content_type, low_ranking, 'low',
                     likes, comments, shares, saves, reposts, reactions,
-                    views, reach, total_engagement, engagement_rate,
+                    views, reach, profile_visits, total_engagement, engagement_rate,
                     audience_demographics, raw_metrics
                 FROM (
                     SELECT source_rows.*,

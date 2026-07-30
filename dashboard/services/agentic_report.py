@@ -4,6 +4,7 @@ import importlib
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 from langchain_core.callbacks import get_usage_metadata_callback
 from sqlalchemy import text
@@ -145,16 +146,43 @@ def generate_agentic_report(
     client_id: str,
     period_id: str,
     dry_run: bool = False,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+    on_stage: Callable[[str], None] | None = None,
+    on_presentation_created: Callable[[dict], None] | None = None,
+    existing_presentation_id: str | None = None,
+    existing_report_name: str | None = None,
 ) -> dict:
+    try:
+        from dashboard.services.report_jobs import (
+            ReportGenerationCancelledError,
+        )
+    except ModuleNotFoundError:
+        from services.report_jobs import ReportGenerationCancelledError
+
+    def cancellation_checkpoint() -> None:
+        if should_cancel and should_cancel():
+            raise ReportGenerationCancelledError(
+                "Report generation was cancelled."
+            )
+
     context = report_context(client_id, period_id)
     agentic_graph, Request, State = load_agentic_graph()
+    cooperative_worker = any(
+        (
+            should_cancel,
+            on_stage,
+            on_presentation_created,
+            existing_presentation_id,
+        )
+    )
 
     initial_state = State(
         request=Request(
             user_intent="Analyze social media performance and generate report",
             client_code=context["client_code"],
             report_date=context["period_start"],
-            generate_slides=True,
+            generate_slides=not cooperative_worker,
             slides_dry_run=dry_run,
             persist_insights=(
                 not dry_run
@@ -163,19 +191,65 @@ def generate_agentic_report(
             reuse_cached_insights=env_bool("AGENTIC_REUSE_CACHED_INSIGHTS", False),
         )
     )
+    cancellation_checkpoint()
+    if on_stage:
+        on_stage("analysis")
     result, gemini_usage = invoke_agentic_graph_with_usage(
         agentic_graph,
         initial_state,
     )
-    generation = result["report_generation"]
-    payload = (
-        generation.model_dump()
-        if hasattr(generation, "model_dump")
-        else dict(generation)
-    )
+    cancellation_checkpoint()
+
+    if cooperative_worker:
+        if on_stage:
+            on_stage("slides")
+        cancellation_checkpoint()
+
+        slides_module = importlib.import_module("agents.slides_generation")
+        state_after_analysis = State(**result)
+        insight_overrides = slides_module.state_insight_overrides(
+            state_after_analysis
+        )
+        try:
+            from dashboard.services.slides_report import generate_report_slides
+        except ModuleNotFoundError:
+            from services.slides_report import generate_report_slides
+
+        slides_result = generate_report_slides(
+            client_id=client_id,
+            period_id=period_id,
+            dry_run=dry_run,
+            insight_overrides=insight_overrides,
+            existing_presentation_id=existing_presentation_id,
+            existing_report_name=existing_report_name,
+            on_presentation_created=on_presentation_created,
+        )
+        payload = {
+            "status": "dry_run_completed" if dry_run else "completed",
+            "presentation_id": slides_result.get("presentation_id"),
+            "presentation_url": slides_result.get("presentation_url"),
+            "report_name": slides_result.get("report_name"),
+            "error": None,
+        }
+        for key in (
+            "fast_mode",
+            "filter_to_template",
+            "total_duration_seconds",
+        ):
+            if key in slides_result:
+                payload[key] = slides_result[key]
+    else:
+        generation = result["report_generation"]
+        payload = (
+            generation.model_dump()
+            if hasattr(generation, "model_dump")
+            else dict(generation)
+        )
+
     if payload.get("status") == "failed":
         raise RuntimeError(payload.get("error") or "Agentic report generation failed.")
 
     payload["analysis_cache_hit"] = bool(result.get("analysis_cache_hit"))
+    payload["source_data_version"] = result.get("analysis_data_version")
     payload["gemini_usage"] = gemini_usage
     return payload

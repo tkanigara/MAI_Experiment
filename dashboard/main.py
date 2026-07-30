@@ -18,11 +18,28 @@ try:
         json_safe,
         parse_bool,
     )
+    from dashboard.repositories.report_job_repository import (
+        ActiveReportJobError,
+        ReportJobNotFoundError,
+        ReportJobRepository,
+        ReportJobTransitionError,
+    )
     from dashboard.schemas import require_fields
     from dashboard.services.csv_import import import_report_csv
     from dashboard.services.kpi_service import upsert_kpi_target
     from dashboard.services.agentic_report import generate_agentic_report
     from dashboard.services.report_editor import ReportEditorService
+    from dashboard.services.report_jobs import (
+        ReportJobAlreadyRunningError,
+        ReportJobWorker,
+        ReportTaskAuthenticationError,
+        ReportJobService,
+        ReportQueueUnavailableError,
+        ReportTaskDispatchError,
+        RetryableReportJobError,
+        build_report_task_dispatcher,
+        verify_cloud_tasks_oidc,
+    )
 except ModuleNotFoundError:
     from config import DASHBOARD_DIR, STATIC_DIR
     from repositories.dashboard_repository import (
@@ -31,15 +48,42 @@ except ModuleNotFoundError:
         json_safe,
         parse_bool,
     )
+    from repositories.report_job_repository import (
+        ActiveReportJobError,
+        ReportJobNotFoundError,
+        ReportJobRepository,
+        ReportJobTransitionError,
+    )
     from schemas import require_fields
     from services.csv_import import import_report_csv
     from services.kpi_service import upsert_kpi_target
     from services.agentic_report import generate_agentic_report
     from services.report_editor import ReportEditorService
+    from services.report_jobs import (
+        ReportJobAlreadyRunningError,
+        ReportJobWorker,
+        ReportTaskAuthenticationError,
+        ReportJobService,
+        ReportQueueUnavailableError,
+        ReportTaskDispatchError,
+        RetryableReportJobError,
+        build_report_task_dispatcher,
+        verify_cloud_tasks_oidc,
+    )
 
 
 repository = DashboardRepository()
 report_editor = ReportEditorService(repository.engine)
+report_job_repository = ReportJobRepository(repository.engine)
+report_jobs = ReportJobService(
+    report_job_repository,
+    build_report_task_dispatcher(),
+)
+report_job_worker = ReportJobWorker(
+    report_job_repository,
+    generate_agentic_report,
+    lease_seconds=int(os.getenv("REPORT_JOB_LEASE_SECONDS", "900")),
+)
 app = FastAPI(title="MAI Social Media Dashboard API")
 
 
@@ -298,6 +342,123 @@ def restore_report_override(
     except ValueError as exc:
         raise bad_request(exc)
     except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/report-jobs")
+def create_report_job(payload: dict):
+    try:
+        client_id = str(payload.get("client_id") or "").strip()
+        period_id = str(payload.get("period_id") or "").strip()
+        require_fields(
+            {"client_id": client_id, "period_id": period_id},
+            ["client_id", "period_id"],
+        )
+        return json_response(
+            report_jobs.create_job(
+                client_id,
+                period_id,
+                dry_run=parse_bool(payload.get("dry_run")),
+            ),
+            status_code=202,
+        )
+    except ActiveReportJobError as exc:
+        return JSONResponse(
+            content={
+                "error": str(exc),
+                "job": json_safe(exc.job),
+            },
+            status_code=409,
+        )
+    except ReportQueueUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ReportTaskDispatchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/report-jobs/{job_id}")
+def get_report_job(job_id: str):
+    try:
+        return json_response(report_jobs.get_job(job_id))
+    except ReportJobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get(
+    "/api/clients/{client_id}/report-periods/{period_id}/report-jobs"
+)
+def get_report_job_history(
+    client_id: str,
+    period_id: str,
+    limit: int = 20,
+):
+    try:
+        return json_response(
+            report_jobs.history(client_id, period_id, limit=limit)
+        )
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.post("/api/report-jobs/{job_id}/retry")
+def retry_report_job(job_id: str):
+    try:
+        return json_response(
+            report_jobs.retry_job(job_id),
+            status_code=202,
+        )
+    except ActiveReportJobError as exc:
+        return JSONResponse(
+            content={
+                "error": str(exc),
+                "job": json_safe(exc.job),
+            },
+            status_code=409,
+        )
+    except ReportJobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ReportJobTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ReportQueueUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ReportTaskDispatchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/report-jobs/{job_id}/cancel")
+def cancel_report_job(job_id: str, payload: Optional[dict] = None):
+    try:
+        body = payload or {}
+        return json_response(
+            report_jobs.cancel_job(
+                job_id,
+                reason=str(body.get("reason") or "").strip() or None,
+            )
+        )
+    except ReportJobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ReportJobTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/internal/report-jobs/{job_id}/execute")
+def execute_internal_report_job(job_id: str, request: Request):
+    try:
+        verify_cloud_tasks_oidc(request.headers.get("Authorization"))
+    except ReportTaskAuthenticationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+
+    try:
+        return json_response(report_job_worker.execute(job_id))
+    except ReportJobNotFoundError:
+        # A task for a deleted job is a permanent no-op. A 2xx response stops
+        # Cloud Tasks from retrying an object that no longer exists.
+        return json_response(
+            {"job_id": job_id, "status": "ignored"},
+        )
+    except (ReportJobAlreadyRunningError, RetryableReportJobError) as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
