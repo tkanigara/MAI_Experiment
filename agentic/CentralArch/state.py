@@ -22,6 +22,8 @@ class MetaData(BaseModel):
     facebook: bool = False
     tiktok: bool = False
     youtube: bool = False
+    linkedin: bool = False
+    threads: bool = False
     loaded: bool = False
     error: str | None = None
 
@@ -68,7 +70,29 @@ class youtube_result_analysis(BaseModel):
     top_content_performance: str | None = None
     low_content_performance: str | None = None
     competitor_analysis: str | None = None
-    
+
+class linkedin_result_analysis(BaseModel):
+    client_code: str | None = None
+    client_name: str | None = None
+    kpi_analysis: str | None = None
+    socmed_overview_analysis: str | None = None
+    followers_growth_analysis: str | None = None
+    growth_performance_analysis: str | None = None
+    top_content_performance: str | None = None
+    low_content_performance: str | None = None
+    competitor_analysis: str | None = None
+
+class threads_result_analysis(BaseModel):
+    client_code: str | None = None
+    client_name: str | None = None
+    kpi_analysis: str | None = None
+    socmed_overview_analysis: str | None = None
+    followers_growth_analysis: str | None = None
+    growth_performance_analysis: str | None = None
+    top_content_performance: str | None = None
+    low_content_performance: str | None = None
+    competitor_analysis: str | None = None
+
 class SummaryInstagram(BaseModel):
     client_code: str | None = None
     key_summary: str | None = None
@@ -85,6 +109,16 @@ class SummaryTiktok(BaseModel):
     action_plan: str | None = None
 
 class SummaryYoutube(BaseModel):
+    client_code: str | None = None
+    key_summary: str | None = None
+    action_plan: str | None = None
+
+class SummaryLinkedin(BaseModel):
+    client_code: str | None = None
+    key_summary: str | None = None
+    action_plan: str | None = None
+
+class SummaryThreads(BaseModel):
     client_code: str | None = None
     key_summary: str | None = None
     action_plan: str | None = None
@@ -115,13 +149,17 @@ class State(BaseModel):
     facebook_result: facebook_result_analysis = Field(default_factory=facebook_result_analysis)
     tiktok_result: tiktok_result_analysis = Field(default_factory=tiktok_result_analysis)
     youtube_result: youtube_result_analysis = Field(default_factory=youtube_result_analysis)
+    linkedin_result: linkedin_result_analysis = Field(default_factory=linkedin_result_analysis)
+    threads_result: threads_result_analysis = Field(default_factory=threads_result_analysis)
 
     # Per-platform summary results
     summary_instagram: SummaryInstagram = Field(default_factory=SummaryInstagram)
     summary_facebook: SummaryFacebook = Field(default_factory=SummaryFacebook)
     summary_tiktok: SummaryTiktok = Field(default_factory=SummaryTiktok)
     summary_youtube: SummaryYoutube = Field(default_factory=SummaryYoutube)
-
+    summary_linkedin: SummaryLinkedin = Field(default_factory=SummaryLinkedin)
+    summary_threads: SummaryThreads = Field(default_factory=SummaryThreads)
+    
     # Summary all platform
     summary_all_socmed: SummaryAllSocmed = Field(default_factory=SummaryAllSocmed)
 

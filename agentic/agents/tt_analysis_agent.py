@@ -163,7 +163,7 @@ def tt_analysis_agent_2nd(state: State) -> State:
         }
 
         messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
+            SystemMessage(content=TIKTOK_ANALYST),
             HumanMessage(
                 content=json.dumps(data, indent=2, default=str)
             )

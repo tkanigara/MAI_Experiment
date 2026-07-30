@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 
+from langchain_core.callbacks import get_usage_metadata_callback
 from sqlalchemy import text
 
 try:
@@ -62,6 +63,84 @@ def load_agentic_graph():
     return agentic_graph, Request, State
 
 
+def _token_count(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def summarize_gemini_usage(usage_by_model: dict | None) -> dict:
+    models = {}
+    input_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
+    cached_input_tokens = 0
+    thinking_tokens = 0
+
+    for model_name, raw_usage in sorted((usage_by_model or {}).items()):
+        usage = dict(raw_usage or {})
+        input_details = dict(usage.get("input_token_details") or {})
+        output_details = dict(usage.get("output_token_details") or {})
+
+        model_input = _token_count(usage.get("input_tokens"))
+        model_output = _token_count(usage.get("output_tokens"))
+        model_total = _token_count(usage.get("total_tokens"))
+        model_cached = _token_count(input_details.get("cache_read"))
+        model_thinking = _token_count(output_details.get("reasoning"))
+
+        input_tokens += model_input
+        output_tokens += model_output
+        total_tokens += model_total
+        cached_input_tokens += model_cached
+        thinking_tokens += model_thinking
+        models[str(model_name)] = {
+            **usage,
+            "input_tokens": model_input,
+            "output_tokens": model_output,
+            "total_tokens": model_total,
+            "input_token_details": input_details,
+            "output_token_details": output_details,
+        }
+
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "thinking_tokens": thinking_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "total_tokens": total_tokens,
+        "models": models,
+    }
+
+
+def log_gemini_usage(usage: dict, status: str) -> None:
+    model_names = ",".join(usage.get("models", {})) or "-"
+    print(
+        "[gemini_usage] "
+        f"status={status} models={model_names} "
+        f"input={usage.get('input_tokens', 0)} "
+        f"output={usage.get('output_tokens', 0)} "
+        f"thinking={usage.get('thinking_tokens', 0)} "
+        f"cached_input={usage.get('cached_input_tokens', 0)} "
+        f"total={usage.get('total_tokens', 0)}",
+        flush=True,
+    )
+
+
+def invoke_agentic_graph_with_usage(agentic_graph, initial_state):
+    with get_usage_metadata_callback() as usage_callback:
+        try:
+            result = agentic_graph.invoke(initial_state)
+        except Exception:
+            usage = summarize_gemini_usage(usage_callback.usage_metadata)
+            log_gemini_usage(usage, "failed")
+            raise
+
+    usage = summarize_gemini_usage(usage_callback.usage_metadata)
+    log_gemini_usage(usage, "completed")
+    return result, usage
+
+
 def generate_agentic_report(
     client_id: str,
     period_id: str,
@@ -84,7 +163,10 @@ def generate_agentic_report(
             reuse_cached_insights=env_bool("AGENTIC_REUSE_CACHED_INSIGHTS", False),
         )
     )
-    result = agentic_graph.invoke(initial_state)
+    result, gemini_usage = invoke_agentic_graph_with_usage(
+        agentic_graph,
+        initial_state,
+    )
     generation = result["report_generation"]
     payload = (
         generation.model_dump()
@@ -95,4 +177,5 @@ def generate_agentic_report(
         raise RuntimeError(payload.get("error") or "Agentic report generation failed.")
 
     payload["analysis_cache_hit"] = bool(result.get("analysis_cache_hit"))
+    payload["gemini_usage"] = gemini_usage
     return payload
