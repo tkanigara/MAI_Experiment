@@ -1,6 +1,0 @@
-# MAI Social Media Reporting — GitLab CI/CD.
-# Includes the shared Python template from devops/cicd.
-# Pipeline: staging-only, triggers on `main`.
-# See devops/cicd/MAI_InternalReport/README.md for setup + required variables.
-include:
-  - remote: 'https://${CI_SERVER_HOST}/devops/cicd/-/raw/main/ai-python-ci.yml'
