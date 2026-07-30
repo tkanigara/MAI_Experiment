@@ -87,6 +87,46 @@ class ReportJobApiTests(unittest.TestCase):
             limit=10,
         )
 
+    def test_global_history_returns_jobs_across_clients(self):
+        service = Mock()
+        service.all_history.return_value = [
+            {"id": "job-2", "client_name_snapshot": "Client B"},
+            {"id": "job-1", "client_name_snapshot": "Client A"},
+        ]
+
+        with patch.object(main, "report_jobs", service):
+            response = self.client.get(
+                "/api/report-jobs",
+                params={"limit": 50},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 2)
+        service.all_history.assert_called_once_with(limit=50)
+
+    def test_client_history_returns_jobs_across_periods(self):
+        service = Mock()
+        service.client_history.return_value = [
+            {"id": "job-2", "period_label_snapshot": "July 2026"},
+            {"id": "job-1", "period_label_snapshot": "June 2026"},
+        ]
+
+        with patch.object(main, "report_jobs", service):
+            response = self.client.get(
+                "/api/clients/client-1/report-jobs",
+                params={"limit": 50},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [job["period_label_snapshot"] for job in response.json()],
+            ["July 2026", "June 2026"],
+        )
+        service.client_history.assert_called_once_with(
+            "client-1",
+            limit=50,
+        )
+
     def test_cancel_returns_updated_job(self):
         service = Mock()
         service.cancel_job.return_value = {

@@ -222,6 +222,40 @@ class ReportJobRepositoryTests(unittest.TestCase):
         _statement, parameters = connection.calls[0]
         self.assertEqual(parameters["limit"], 100)
 
+    def test_client_history_filters_by_client(self):
+        rows = [
+            {
+                "id": "job-2",
+                "client_id": "client-1",
+                "period_label_snapshot": "July 2026",
+            },
+        ]
+        connection = FakeConnection([FakeMappingResult(rows=rows)])
+        repository = ReportJobRepository(FakeEngine(connection))
+
+        result = repository.list_for_client("client-1", limit=25)
+
+        self.assertEqual(result, rows)
+        statement, parameters = connection.calls[0]
+        self.assertIn("WHERE client_id = :client_id", statement)
+        self.assertEqual(parameters["client_id"], "client-1")
+        self.assertEqual(parameters["limit"], 25)
+
+    def test_global_history_limit_is_capped(self):
+        rows = [
+            {"id": "job-2", "client_name_snapshot": "Client B"},
+            {"id": "job-1", "client_name_snapshot": "Client A"},
+        ]
+        connection = FakeConnection([FakeMappingResult(rows=rows)])
+        repository = ReportJobRepository(FakeEngine(connection))
+
+        result = repository.list_all(limit=500)
+
+        self.assertEqual(result, rows)
+        statement, parameters = connection.calls[0]
+        self.assertNotIn("WHERE client_id", statement)
+        self.assertEqual(parameters["limit"], 100)
+
 
 if __name__ == "__main__":
     unittest.main()

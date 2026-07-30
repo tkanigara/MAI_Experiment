@@ -42,8 +42,37 @@ button:disabled {
 }
 
 .brand-title {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
   font-size: 20px;
   font-weight: 800;
+  text-align: left;
+}
+
+.header-navigation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.header-navigation button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.header-navigation button:hover,
+.header-navigation button.active {
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .page-shell {
@@ -1178,6 +1207,31 @@ label, .field-label {
   max-width: 1280px;
 }
 
+.report-jobs-title {
+  margin-bottom: 32px;
+}
+
+.report-queue-section {
+  margin-top: 28px;
+}
+
+.report-queue-section .report-job-list,
+.report-queue-section > .empty,
+.report-history-section .report-job-list,
+.report-history-section > .empty {
+  margin-top: 16px;
+}
+
+.report-current-queue .report-job-row {
+  border-color: #c8d8ef;
+  background: #f7faff;
+}
+
+.report-queue-position {
+  color: #315f8e;
+  font-weight: 850;
+}
+
 .report-active-job {
   display: flex;
   align-items: center;
@@ -1676,6 +1730,17 @@ label, .field-label {
   .app-header, .toolbar, .section-row, .page-title-row, .upload-summary, .toolbar-controls {
     align-items: stretch;
     flex-direction: column;
+  }
+  .app-header {
+    height: auto;
+    gap: 14px;
+    padding: 18px;
+  }
+  .header-navigation {
+    margin-left: 0;
+  }
+  .header-navigation button {
+    flex: 1;
   }
   .page-actions { align-items: stretch; flex-direction: column; }
   .page-shell { padding: 32px 18px 60px; }

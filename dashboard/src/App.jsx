@@ -55,10 +55,14 @@ export default function App() {
     () => clients.find((client) => client.client_code === currentClientSlug || client.id === currentClientSlug),
     [clients, currentClientSlug],
   );
-  const currentMonth = reportMonths.find((month) => month.slug === route[2]);
+  const isGlobalReportJobs = route[0] === "report-jobs";
+  const isClientReportJobs = route[0] === "clients" && route[2] === "report-jobs";
+  const currentMonth = isClientReportJobs
+    ? null
+    : reportMonths.find((month) => month.slug === route[2]);
   const currentPlatform = route[3];
   const isReportEditor = currentPlatform === "edit";
-  const isReportJobs = currentPlatform === "jobs";
+  const isLegacyPeriodReportJobs = currentPlatform === "jobs";
   const reportJob = reportJobs.find((job) => job.id === focusedReportJobId);
   const activeReportPeriodIds = useMemo(
     () => new Set(
@@ -68,10 +72,6 @@ export default function App() {
     ),
     [reportJobs],
   );
-  const reportMonthIdsKey = reportMonths
-    .map((month) => month.id)
-    .filter(Boolean)
-    .join(",");
   const activeReportJobIdsKey = reportJobs
     .filter(isActiveReportJob)
     .map((job) => job.id)
@@ -121,33 +121,38 @@ export default function App() {
     });
   }
 
-  async function loadReportJobHistory(client, months) {
-    if (!client?.id || String(client.id).startsWith("local-")) {
-      setReportJobs([]);
-      return;
-    }
-    const histories = await Promise.all(
-      months
-        .filter((month) => month.id)
-        .map((month) => api(
-          `/api/clients/${client.id}/report-periods/${month.id}/report-jobs?limit=20`,
-        ).catch(() => [])),
-    );
-    const jobs = sortReportJobs(histories.flat());
-    setReportJobs(jobs);
+  function replaceReportJobs(jobs) {
+    const sortedJobs = sortReportJobs(jobs);
+    setReportJobs(sortedJobs);
     setFocusedReportJobId((current) => {
-      if (current && jobs.some((job) => job.id === current)) return current;
-      return jobs.find(isActiveReportJob)?.id || "";
+      if (current && sortedJobs.some((job) => job.id === current)) {
+        return current;
+      }
+      return sortedJobs.find(isActiveReportJob)?.id || "";
     });
+    return sortedJobs;
   }
 
-  async function refreshReportJobsForPeriod(month) {
-    if (!selectedClient?.id || !month?.id) return;
+  async function loadClientReportJobs(client) {
+    if (!client?.id || String(client.id).startsWith("local-")) {
+      setReportJobs([]);
+      return [];
+    }
     const jobs = await api(
-      `/api/clients/${selectedClient.id}/report-periods/${month.id}/report-jobs?limit=20`,
+      `/api/clients/${client.id}/report-jobs?limit=100`,
     );
-    mergeReportJobs(jobs, month.id);
-    return jobs;
+    return replaceReportJobs(jobs);
+  }
+
+  async function loadGlobalReportJobs() {
+    const jobs = await api("/api/report-jobs?limit=100");
+    return replaceReportJobs(jobs);
+  }
+
+  async function refreshVisibleReportJobs() {
+    if (isGlobalReportJobs) return loadGlobalReportJobs();
+    if (selectedClient) return loadClientReportJobs(selectedClient);
+    return [];
   }
 
   function openPresentation(presentationUrl) {
@@ -302,8 +307,13 @@ export default function App() {
       setFocusedReportJobId(job.id);
       setReportElapsed(0);
     } catch (err) {
-      const jobs = await refreshReportJobsForPeriod(month).catch(() => []);
-      const activeJob = jobs?.find(isActiveReportJob);
+      const jobs = await loadClientReportJobs(selectedClient).catch(() => []);
+      const activeJob = jobs.find(
+        (job) => (
+          String(job.report_period_id) === String(month.id)
+          && isActiveReportJob(job)
+        ),
+      );
       if (activeJob) setFocusedReportJobId(activeJob.id);
       showToast(err.message || "Failed to add report to queue.");
     } finally {
@@ -324,14 +334,9 @@ export default function App() {
       mergeReportJobs([updated]);
       setFocusedReportJobId(updated.id);
     } catch (err) {
-      const month = reportMonths.find(
-        (item) => String(item.id) === String(job.report_period_id),
-      );
-      if (month) {
-        const jobs = await refreshReportJobsForPeriod(month).catch(() => []);
-        const latest = jobs?.find((item) => item.id === job.id);
-        if (latest) setFocusedReportJobId(latest.id);
-      }
+      const jobs = await refreshVisibleReportJobs().catch(() => []);
+      const latest = jobs.find((item) => item.id === job.id);
+      if (latest) setFocusedReportJobId(latest.id);
       showToast(err.message || "Failed to cancel report generation.");
     } finally {
       setReportJobActionId("");
@@ -350,14 +355,14 @@ export default function App() {
       setFocusedReportJobId(retried.id);
       setReportElapsed(0);
     } catch (err) {
-      const month = reportMonths.find(
-        (item) => String(item.id) === String(job.report_period_id),
+      const jobs = await refreshVisibleReportJobs().catch(() => []);
+      const activeJob = jobs.find(
+        (item) => (
+          String(item.report_period_id) === String(job.report_period_id)
+          && isActiveReportJob(item)
+        ),
       );
-      if (month) {
-        const jobs = await refreshReportJobsForPeriod(month).catch(() => []);
-        const activeJob = jobs?.find(isActiveReportJob);
-        if (activeJob) setFocusedReportJobId(activeJob.id);
-      }
+      if (activeJob) setFocusedReportJobId(activeJob.id);
       showToast(err.message || "Failed to retry report generation.");
     } finally {
       setReportJobActionId("");
@@ -381,14 +386,50 @@ export default function App() {
   }, [currentClient?.id]);
 
   useEffect(() => {
-    if (!selectedClient || !reportMonthIdsKey) return;
-    loadReportJobHistory(selectedClient, reportMonths)
-      .catch((err) => setError(err.message));
+    if (!isGlobalReportJobs) return undefined;
+    let stopped = false;
+    const refresh = () => {
+      loadGlobalReportJobs().catch((err) => {
+        if (!stopped) setError(err.message);
+      });
+    };
+    setReportJobs([]);
+    setFocusedReportJobId("");
+    refresh();
+    const intervalId = window.setInterval(refresh, 3000);
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClient?.id, reportMonthIdsKey]);
+  }, [isGlobalReportJobs]);
 
   useEffect(() => {
-    if (!selectedClient) return;
+    if (
+      !currentClient
+      || !selectedClient
+      || String(selectedClient.id) !== String(currentClient.id)
+      || isGlobalReportJobs
+    ) {
+      return undefined;
+    }
+    let stopped = false;
+    const refresh = () => {
+      loadClientReportJobs(selectedClient).catch((err) => {
+        if (!stopped) setError(err.message);
+      });
+    };
+    refresh();
+    const intervalId = window.setInterval(refresh, 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentClient?.id, selectedClient?.id, isGlobalReportJobs]);
+
+  useEffect(() => {
+    if (!currentClient || !selectedClient) return;
     loadPlatformData(selectedClient).catch((err) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClient?.id, currentMonth?.slug]);
@@ -451,7 +492,30 @@ export default function App() {
     />
   );
 
-  if (currentClient && selectedClient && !currentMonth) {
+  if (isGlobalReportJobs) {
+    content = (
+      <ReportJobsPage
+        jobs={reportJobs}
+        actionJobId={reportJobActionId}
+        onNavigate={navigate}
+        onCancel={cancelReportJob}
+        onRetry={retryReportJob}
+        onRefresh={() => {
+          loadGlobalReportJobs().catch((err) => {
+            showToast(err.message || "Failed to refresh report queue.");
+          });
+        }}
+        onOpenReport={openPresentation}
+      />
+    );
+  }
+
+  if (
+    currentClient
+    && selectedClient
+    && !currentMonth
+    && !isClientReportJobs
+  ) {
     content = (
       <ClientDetailPage
         client={selectedClient}
@@ -466,6 +530,9 @@ export default function App() {
         onGenerateReport={generateSlidesReport}
         activeReportPeriodIds={activeReportPeriodIds}
         reportJobActionId={reportJobActionId}
+        onOpenReportJobs={() => navigate(
+          `/clients/${clientSlug(selectedClient)}/report-jobs`,
+        )}
       />
     );
   }
@@ -485,30 +552,29 @@ export default function App() {
           activeReportPeriodIds.has(String(currentMonth.id))
           || reportJobActionId === `create:${currentMonth.id}`
         }
-        onOpenReportJobs={() => navigate(
-          `/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/jobs`,
-        )}
         onOpenEditor={() => navigate(`/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/edit`)}
       />
     );
   }
 
-  if (currentClient && selectedClient && currentMonth && isReportJobs) {
-    const periodJobs = reportJobs.filter(
-      (job) => String(job.report_period_id) === String(currentMonth.id),
-    );
+  if (
+    currentClient
+    && selectedClient
+    && (
+      isClientReportJobs
+      || (currentMonth && isLegacyPeriodReportJobs)
+    )
+  ) {
     content = (
       <ReportJobsPage
         client={selectedClient}
-        month={currentMonth}
-        jobs={periodJobs}
+        jobs={reportJobs}
         actionJobId={reportJobActionId}
         onNavigate={navigate}
-        onGenerate={generateSlidesReport}
         onCancel={cancelReportJob}
         onRetry={retryReportJob}
         onRefresh={() => {
-          refreshReportJobsForPeriod(currentMonth).catch((err) => {
+          loadClientReportJobs(selectedClient).catch((err) => {
             showToast(err.message || "Failed to refresh generation history.");
           });
         }}
@@ -538,7 +604,7 @@ export default function App() {
     && currentMonth
     && currentPlatform
     && !isReportEditor
-    && !isReportJobs
+    && !isLegacyPeriodReportJobs
   ) {
     content = (
       <PlatformDetailPage
@@ -556,7 +622,10 @@ export default function App() {
 
   return (
     <>
-      <Header />
+      <Header
+        activeSection={isGlobalReportJobs ? "report-jobs" : "clients"}
+        onNavigate={navigate}
+      />
       <main className="page-shell">
         {error ? <div className="empty">{error}</div> : content}
       </main>
@@ -722,13 +791,15 @@ export default function App() {
               type="button"
               className="report-toast-open"
               onClick={() => {
-                const targetMonth = reportMonths.find(
-                  (month) => String(month.id) === String(reportJob.report_period_id),
+                const targetClient = clients.find(
+                  (client) => String(client.id) === String(reportJob.client_id),
                 );
-                if (targetMonth && selectedClient) {
+                if (targetClient) {
                   navigate(
-                    `/clients/${clientSlug(selectedClient)}/${targetMonth.slug}/jobs`,
+                    `/clients/${clientSlug(targetClient)}/report-jobs`,
                   );
+                } else {
+                  navigate("/report-jobs");
                 }
               }}
             >

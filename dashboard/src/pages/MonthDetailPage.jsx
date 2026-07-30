@@ -37,7 +37,6 @@ export default function MonthDetailPage({
   onOpenAddReport,
   onGenerateReport,
   isGeneratingReport,
-  onOpenReportJobs,
   onOpenEditor,
 }) {
   const platforms = platformFlags(client);
@@ -58,13 +57,6 @@ export default function MonthDetailPage({
           <p>Overview of connected social media performance for this report period.</p>
         </div>
         <div className="page-actions">
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={onOpenReportJobs}
-          >
-            Generation history
-          </button>
           <button className="secondary-button" type="button" onClick={onOpenEditor}>
             Edit report data
           </button>

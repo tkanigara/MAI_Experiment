@@ -222,6 +222,67 @@ class ReportJobRepository:
             ).mappings()
             return [dict(row) for row in rows]
 
+    def list_for_client(
+        self,
+        client_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[dict]:
+        safe_limit = max(1, min(int(limit), 100))
+        with self.engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM report_generation_jobs
+                    WHERE client_id = :client_id
+                    ORDER BY
+                        CASE
+                            WHEN status IN (
+                                'queued',
+                                'running',
+                                'retrying',
+                                'cancel_requested'
+                            ) THEN 0
+                            ELSE 1
+                        END,
+                        created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {
+                    "client_id": client_id,
+                    "limit": safe_limit,
+                },
+            ).mappings()
+            return [dict(row) for row in rows]
+
+    def list_all(self, *, limit: int = 100) -> list[dict]:
+        safe_limit = max(1, min(int(limit), 100))
+        with self.engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM report_generation_jobs
+                    ORDER BY
+                        CASE
+                            WHEN status IN (
+                                'queued',
+                                'running',
+                                'retrying',
+                                'cancel_requested'
+                            ) THEN 0
+                            ELSE 1
+                        END,
+                        created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": safe_limit},
+            ).mappings()
+            return [dict(row) for row in rows]
+
     def set_cloud_task_name(self, job_id: str, task_name: str) -> dict:
         return self._transition(
             job_id,
