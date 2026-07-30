@@ -162,7 +162,7 @@ def yt_analysis_agent_2nd(state: State) -> State:
         }
         
         messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
+            SystemMessage(content=YOUTUBE_ANALYST),
             HumanMessage(
                 content=json.dumps(data, indent=2, default=str)
             )

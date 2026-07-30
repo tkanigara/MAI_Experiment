@@ -15,7 +15,7 @@ initial_state = State(
     # )
         request=Request(
         user_intent="Generate Marketing Report",
-        client_code="demo",
+        client_code="mai001",
         report_date=date(2026, 6,23),
         generate_slides=False,
         slides_dry_run=False,
@@ -26,6 +26,9 @@ initial_state = State(
 
 result = app.invoke(initial_state)
 
+
+retrieval_data = result["Metadata"]
+print(retrieval_data)
 instagram = result["instagram_result"]
 
 print("===============INSTAGRAM ANALYSIS RESULT ==========")

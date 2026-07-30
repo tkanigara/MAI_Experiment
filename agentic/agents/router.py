@@ -9,6 +9,8 @@ AGENT_NAME = {
     "fb_analysis_agent": "Facebook Analysis running",
     "tt_analysis_agent": "TikTok Analysis running",
     "yt_analysis_agent": "YouTube Analysis running",
+    "linkedin_analysis_agent":"Linkedin Analysis running",
+    "threads_analysis-agent":"Threads Analysis running"
 }
 
 def router_node(state: State) -> State:
@@ -28,6 +30,12 @@ def router_node(state: State) -> State:
         if metadata.youtube:
             routes.append("yt_analysis_agent")
 
+        if metadata.linkedin:
+            routes.append("linkedin_analysis_agent")
+        
+        if metadata.threads:
+            routes.append("threads_analysis_agent")
+        
         state.routes = routes
 
         console.print("\n[bold cyan] Agent findings [/bold cyan]\n")
