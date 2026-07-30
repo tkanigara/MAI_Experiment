@@ -501,6 +501,9 @@ def post_json(row: dict, content_type: str, platform: str):
         "reactions": reactions,
         "views": parse_number(row.get("Impressions/views per post") or row.get("Story views")),
         "reach": parse_number(row.get("Reach per post") or row.get("Story reach")),
+        "profile_visits": parse_number(
+            row.get("Profile visits based on the story")
+        ),
         "total_engagement": total_engagement,
         "engagement_rate": engagement_percent(row.get("Engagement") or row.get("Post interaction rate")),
     }
@@ -1136,6 +1139,12 @@ class DashboardRepository:
                     UNION ALL SELECT 'shares', COUNT(*) FILTER (WHERE shares IS NULL), COUNT(*) FROM posts
                     UNION ALL SELECT 'views', COUNT(*) FILTER (WHERE views IS NULL), COUNT(*) FROM posts
                     UNION ALL SELECT 'reach', COUNT(*) FILTER (WHERE reach IS NULL), COUNT(*) FROM posts
+                    UNION ALL SELECT 'profile_visits', COUNT(*) FILTER (
+                        WHERE COALESCE(content_type, '') = 'story'
+                          AND profile_visits IS NULL
+                    ), COUNT(*) FILTER (
+                        WHERE COALESCE(content_type, '') = 'story'
+                    ) FROM posts
                     UNION ALL SELECT 'total_engagement', COUNT(*) FILTER (WHERE total_engagement IS NULL), COUNT(*) FROM posts
                     UNION ALL SELECT 'engagement_rate', COUNT(*) FILTER (WHERE engagement_rate IS NULL), COUNT(*) FROM posts
                 ) checks
@@ -1903,7 +1912,8 @@ class DashboardRepository:
                 SELECT
                     post_id, published_at, caption, permalink, image_url,
                     content_type, likes, comments, shares, saves, reposts,
-                    reactions, views, reach, total_engagement, engagement_rate
+                    reactions, views, reach, profile_visits,
+                    total_engagement, engagement_rate
                 FROM social_content_reports
                 WHERE client_id = :client_id
                   AND report_period_id = :period_id
@@ -2157,7 +2167,7 @@ class DashboardRepository:
                     post_id, published_at, caption, permalink, image_url,
                     content_type, content_rank, performance_bucket,
                     likes, comments, shares, saves, reposts, reactions,
-                    views, reach, total_engagement, engagement_rate,
+                    views, reach, profile_visits, total_engagement, engagement_rate,
                     raw_metrics
                 )
                 VALUES (
@@ -2165,7 +2175,7 @@ class DashboardRepository:
                     :post_id, :published_at, :caption, :permalink, :image_url,
                     :content_type, :content_rank, :performance_bucket,
                     :likes, :comments, :shares, :saves, :reposts, :reactions,
-                    :views, :reach, :total_engagement, :engagement_rate,
+                    :views, :reach, :profile_visits, :total_engagement, :engagement_rate,
                     CAST(:raw_metrics AS JSONB)
                 )
                 ON CONFLICT (
@@ -2189,6 +2199,7 @@ class DashboardRepository:
                     reactions = EXCLUDED.reactions,
                     views = EXCLUDED.views,
                     reach = EXCLUDED.reach,
+                    profile_visits = EXCLUDED.profile_visits,
                     total_engagement = EXCLUDED.total_engagement,
                     engagement_rate = EXCLUDED.engagement_rate,
                     raw_metrics = EXCLUDED.raw_metrics,
@@ -2216,6 +2227,7 @@ class DashboardRepository:
                 "reactions": post.get("reactions"),
                 "views": post.get("views"),
                 "reach": post.get("reach"),
+                "profile_visits": post.get("profile_visits"),
                 "total_engagement": post.get("total_engagement"),
                 "engagement_rate": post.get("engagement_rate"),
                 "raw_metrics": json.dumps(json_safe(post)),
@@ -2750,7 +2762,8 @@ class DashboardRepository:
                         post_id, published_at, caption, permalink, image_url,
                         content_type, content_rank, performance_bucket,
                         likes, comments, shares, saves, reposts, reactions,
-                        views, reach, total_engagement, engagement_rate, raw_metrics
+                        views, reach, profile_visits, total_engagement,
+                        engagement_rate, raw_metrics
                     )
                     VALUES (
                         :client_id, :competitor_id, :competitor_profile_id,
@@ -2758,7 +2771,8 @@ class DashboardRepository:
                         :post_id, :published_at, :caption, :permalink, :image_url,
                         :content_type, :content_rank, :performance_bucket,
                         :likes, :comments, :shares, :saves, :reposts, :reactions,
-                        :views, :reach, :total_engagement, :engagement_rate, CAST(:raw_metrics AS JSONB)
+                        :views, :reach, :profile_visits, :total_engagement,
+                        :engagement_rate, CAST(:raw_metrics AS JSONB)
                     )
                     """
                 ),
@@ -2785,6 +2799,7 @@ class DashboardRepository:
                     "reactions": post.get("reactions"),
                     "views": post.get("views"),
                     "reach": post.get("reach"),
+                    "profile_visits": post.get("profile_visits"),
                     "total_engagement": post.get("total_engagement"),
                     "engagement_rate": post.get("engagement_rate"),
                     "raw_metrics": json.dumps(item["raw_row"]),

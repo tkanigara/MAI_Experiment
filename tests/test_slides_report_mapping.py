@@ -19,6 +19,7 @@ from dashboard.slides_report import (
     competitor_metric_style_mapping,
     image_placeholder_priority,
     is_image_placeholder_key,
+    resolve_report_presentation,
     replace_text_placeholders_chunked,
     upload_chart_images,
 )
@@ -40,6 +41,54 @@ class FakeSlidesService:
 
 
 class SlidesReportMappingTests(unittest.TestCase):
+    @patch("dashboard.slides_report.copy_template")
+    def test_existing_presentation_is_resumed_without_copy(self, copy_template):
+        callback = Mock()
+
+        presentation_id, created = resolve_report_presentation(
+            Mock(),
+            "template-1",
+            "Report 1",
+            existing_presentation_id="presentation-existing",
+            on_presentation_created=callback,
+        )
+
+        self.assertEqual(presentation_id, "presentation-existing")
+        self.assertFalse(created)
+        copy_template.assert_not_called()
+        callback.assert_not_called()
+
+    @patch(
+        "dashboard.slides_report.copy_template",
+        return_value="presentation-new",
+    )
+    def test_new_presentation_is_checkpointed_immediately(
+        self,
+        copy_template,
+    ):
+        callback = Mock()
+
+        presentation_id, created = resolve_report_presentation(
+            Mock(),
+            "template-1",
+            "Report 1",
+            on_presentation_created=callback,
+        )
+
+        self.assertEqual(presentation_id, "presentation-new")
+        self.assertTrue(created)
+        copy_template.assert_called_once()
+        callback.assert_called_once_with(
+            {
+                "presentation_id": "presentation-new",
+                "presentation_url": (
+                    "https://docs.google.com/presentation/d/"
+                    "presentation-new/edit"
+                ),
+                "report_name": "Report 1",
+            }
+        )
+
     def test_chart_upload_retries_broken_pipe_then_succeeds(self):
         upload_request = Mock()
         upload_request.execute.side_effect = [
@@ -113,12 +162,14 @@ class SlidesReportMappingTests(unittest.TestCase):
                 "Story shares": "1",
                 "Story views": "250",
                 "Story reach": "200",
+                "Profile visits based on the story": "17",
             },
             "story",
             "instagram",
         )
 
         self.assertEqual(post["comments"], 3.0)
+        self.assertEqual(post["profile_visits"], 17)
         self.assertEqual(post["total_engagement"], 6.0)
 
     def test_chart_placeholders_are_image_placeholders(self):
@@ -226,6 +277,7 @@ class SlidesReportMappingTests(unittest.TestCase):
                         "reach": 420,
                         "views": 510,
                         "comments": 3,
+                        "profile_visits": 19,
                     },
                 ]
             },
@@ -266,7 +318,7 @@ class SlidesReportMappingTests(unittest.TestCase):
         self.assertEqual(mapping["{{IG_STORY_1_REACH}}"], "420")
         self.assertEqual(mapping["{{IG_STORY_1_VIEWS}}"], "510")
         self.assertEqual(mapping["{{IG_STORY_1_COMMENTS}}"], "3")
-        self.assertEqual(mapping["{{IG_STORY_1_VISITS}}"], "-")
+        self.assertEqual(mapping["{{IG_STORY_1_VISITS}}"], "19")
         self.assertNotEqual(
             mapping["{{IG_EVIDENCE_1_IMAGE}}"],
             mapping["{{IG_STORY_1_IMAGE}}"],

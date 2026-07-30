@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from typing import Callable
 
 import requests as http_requests
 from dotenv import load_dotenv
@@ -1585,7 +1586,8 @@ class SlidesReportRepository:
                     post_id, published_at, caption, permalink, image_url,
                     content_type, content_rank, performance_bucket,
                     likes, comments, shares, saves, reposts, reactions,
-                    views, reach, total_engagement, engagement_rate
+                    views, reach, profile_visits,
+                    total_engagement, engagement_rate
                 FROM social_content_reports
                 WHERE client_id = :client_id
                   AND report_period_id = :period_id
@@ -1631,7 +1633,8 @@ class SlidesReportRepository:
                 SELECT
                     post_id, published_at, caption, permalink, image_url,
                     content_type, likes, comments, shares, saves, reposts,
-                    reactions, views, reach, total_engagement, engagement_rate
+                    reactions, views, reach, profile_visits,
+                    total_engagement, engagement_rate
                 FROM social_content_reports
                 WHERE client_id = :client_id
                   AND report_period_id = :period_id
@@ -2393,6 +2396,22 @@ def split_action_plan(action_plan: str, limit: int = 3) -> list[str]:
 
 
 def share_presentation_as_editor(drive_service, presentation_id: str) -> dict:
+    existing_permissions = (
+        drive_service.permissions()
+        .list(
+            fileId=presentation_id,
+            fields="permissions(id,type,role)",
+        )
+        .execute()
+        .get("permissions", [])
+    )
+    for permission in existing_permissions:
+        if (
+            permission.get("type") == "anyone"
+            and permission.get("role") == "writer"
+        ):
+            return permission
+
     permission = (
         drive_service.permissions()
         .create(
@@ -2408,6 +2427,33 @@ def share_presentation_as_editor(drive_service, presentation_id: str) -> dict:
         .execute()
     )
     return permission
+
+
+def resolve_report_presentation(
+    drive_service,
+    template_id: str,
+    report_name: str,
+    *,
+    existing_presentation_id: str | None = None,
+    on_presentation_created: Callable[[dict], None] | None = None,
+) -> tuple[str, bool]:
+    presentation_id = str(existing_presentation_id or "").strip()
+    if presentation_id:
+        return presentation_id, False
+
+    presentation_id = copy_template(drive_service, template_id, report_name)
+    if on_presentation_created:
+        on_presentation_created(
+            {
+                "presentation_id": presentation_id,
+                "presentation_url": (
+                    "https://docs.google.com/presentation/d/"
+                    f"{presentation_id}/edit"
+                ),
+                "report_name": report_name,
+            }
+        )
+    return presentation_id, True
 
 
 def replace_text_placeholders_chunked(
@@ -2511,6 +2557,9 @@ def generate_dashboard_slides_report(
     period_id: str,
     dry_run: bool = False,
     insight_overrides: list[dict] | None = None,
+    existing_presentation_id: str | None = None,
+    existing_report_name: str | None = None,
+    on_presentation_created: Callable[[dict], None] | None = None,
 ) -> dict:
     profiler = StepProfiler()
     load_dotenv(BASE_DIR / ".env")
@@ -2626,11 +2675,30 @@ def generate_dashboard_slides_report(
 
     client_name = payload["client"]["client_name"]
     period_label = payload["period"].get("period_label") or payload["period"]["period_start"].strftime("%B %Y")
-    report_name = f"SNS Report - {client_name} - {period_label} - {datetime.now():%Y%m%d-%H%M}"
+    report_name = (
+        str(existing_report_name or "").strip()
+        or (
+            f"SNS Report - {client_name} - {period_label} - "
+            f"{datetime.now():%Y%m%d-%H%M}"
+        )
+    )
 
     start = time.perf_counter()
-    presentation_id = copy_template(drive_service, template_id, report_name)
-    profiler.record("copy_template", start)
+    presentation_id, presentation_created = resolve_report_presentation(
+        drive_service,
+        template_id,
+        report_name,
+        existing_presentation_id=existing_presentation_id,
+        on_presentation_created=on_presentation_created,
+    )
+    if presentation_created:
+        profiler.record("copy_template", start)
+    else:
+        print(
+            "[slides_report] resuming existing presentation "
+            f"presentation_id={presentation_id}",
+            flush=True,
+        )
 
     start = time.perf_counter()
     permission = share_presentation_as_editor(drive_service, presentation_id)
@@ -2798,6 +2866,7 @@ def generate_dashboard_slides_report(
             "presentation_id": presentation_id,
             "presentation_url": f"https://docs.google.com/presentation/d/{presentation_id}/edit",
             "report_name": report_name,
+            "resumed_existing_presentation": bool(existing_presentation_id),
             "permission": permission,
             "images_replaced": bool(image_audit.get("replaced")),
             "image_replacement": image_audit,

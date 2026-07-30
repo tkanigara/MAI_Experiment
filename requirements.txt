@@ -17,6 +17,7 @@ langchain-google-genai
 google-generativeai
 google-cloud-secret-manager
 google-cloud-storage
+google-cloud-tasks
 gspread
 gspread_dataframe
 SQLAlchemy
