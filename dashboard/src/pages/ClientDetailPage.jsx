@@ -14,7 +14,8 @@ export default function ClientDetailPage({
   onDeleteClient,
   onDeleteReportMonth,
   onGenerateReport,
-  generatingReportId,
+  activeReportPeriodIds,
+  reportJobActionId,
 }) {
   const platforms = platformFlags(client);
   const profileCount = Math.max(profiles.length, platforms.length, client.connected_profiles || 0);
@@ -72,7 +73,8 @@ export default function ClientDetailPage({
               onOpen={(slug) => onOpenMonth(`${clientSlug(client)}/${slug}`)}
               onGenerateReport={onGenerateReport}
               onDelete={onDeleteReportMonth}
-              isGenerating={generatingReportId === month.id}
+              isGenerating={activeReportPeriodIds.has(String(month.id))}
+              isCreating={reportJobActionId === `create:${month.id}`}
             />
           ))}
         </div>

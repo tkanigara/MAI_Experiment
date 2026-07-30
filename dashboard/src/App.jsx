@@ -12,6 +12,11 @@ import ClientsPage from "./pages/ClientsPage";
 import MonthDetailPage from "./pages/MonthDetailPage";
 import PlatformDetailPage from "./pages/PlatformDetailPage";
 import ReportDataEditorPage from "./pages/ReportDataEditorPage";
+import ReportJobsPage, {
+  isActiveReportJob,
+  reportJobStageLabel,
+  reportJobStatusLabel,
+} from "./pages/ReportJobsPage";
 
 function routeParts() {
   return window.location.pathname.split("/").filter(Boolean);
@@ -34,8 +39,9 @@ export default function App() {
   const [isDeletingClient, setIsDeletingClient] = useState(false);
   const [deleteReportMonthTarget, setDeleteReportMonthTarget] = useState(null);
   const [isDeletingReportMonth, setIsDeletingReportMonth] = useState(false);
-  const [generatingReportId, setGeneratingReportId] = useState("");
-  const [reportJob, setReportJob] = useState(null);
+  const [reportJobs, setReportJobs] = useState([]);
+  const [focusedReportJobId, setFocusedReportJobId] = useState("");
+  const [reportJobActionId, setReportJobActionId] = useState("");
   const [reportElapsed, setReportElapsed] = useState(0);
   const [error, setError] = useState("");
 
@@ -52,6 +58,25 @@ export default function App() {
   const currentMonth = reportMonths.find((month) => month.slug === route[2]);
   const currentPlatform = route[3];
   const isReportEditor = currentPlatform === "edit";
+  const isReportJobs = currentPlatform === "jobs";
+  const reportJob = reportJobs.find((job) => job.id === focusedReportJobId);
+  const activeReportPeriodIds = useMemo(
+    () => new Set(
+      reportJobs
+        .filter(isActiveReportJob)
+        .map((job) => String(job.report_period_id)),
+    ),
+    [reportJobs],
+  );
+  const reportMonthIdsKey = reportMonths
+    .map((month) => month.id)
+    .filter(Boolean)
+    .join(",");
+  const activeReportJobIdsKey = reportJobs
+    .filter(isActiveReportJob)
+    .map((job) => job.id)
+    .sort()
+    .join(",");
 
   function navigate(path, replace = false) {
     if (window.location.pathname !== path) {
@@ -71,6 +96,64 @@ export default function App() {
     const remainder = safeSeconds % 60;
     if (!minutes) return `${remainder}s`;
     return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+  }
+
+  function sortReportJobs(rows) {
+    return [...rows].sort((left, right) => {
+      const leftTime = new Date(left.created_at || left.queued_at || 0).getTime();
+      const rightTime = new Date(right.created_at || right.queued_at || 0).getTime();
+      return rightTime - leftTime;
+    });
+  }
+
+  function mergeReportJobs(rows, replacePeriodId = "") {
+    setReportJobs((current) => {
+      const merged = new Map(
+        current
+          .filter((job) => (
+            !replacePeriodId
+            || String(job.report_period_id) !== String(replacePeriodId)
+          ))
+          .map((job) => [job.id, job]),
+      );
+      rows.filter(Boolean).forEach((job) => merged.set(job.id, job));
+      return sortReportJobs([...merged.values()]);
+    });
+  }
+
+  async function loadReportJobHistory(client, months) {
+    if (!client?.id || String(client.id).startsWith("local-")) {
+      setReportJobs([]);
+      return;
+    }
+    const histories = await Promise.all(
+      months
+        .filter((month) => month.id)
+        .map((month) => api(
+          `/api/clients/${client.id}/report-periods/${month.id}/report-jobs?limit=20`,
+        ).catch(() => [])),
+    );
+    const jobs = sortReportJobs(histories.flat());
+    setReportJobs(jobs);
+    setFocusedReportJobId((current) => {
+      if (current && jobs.some((job) => job.id === current)) return current;
+      return jobs.find(isActiveReportJob)?.id || "";
+    });
+  }
+
+  async function refreshReportJobsForPeriod(month) {
+    if (!selectedClient?.id || !month?.id) return;
+    const jobs = await api(
+      `/api/clients/${selectedClient.id}/report-periods/${month.id}/report-jobs?limit=20`,
+    );
+    mergeReportJobs(jobs, month.id);
+    return jobs;
+  }
+
+  function openPresentation(presentationUrl) {
+    if (presentationUrl) {
+      window.open(presentationUrl, "_blank", "noopener,noreferrer");
+    }
   }
 
   async function loadClients() {
@@ -195,47 +278,89 @@ export default function App() {
 
   async function generateSlidesReport(month) {
     if (!selectedClient || !month?.id) return;
-    if (reportJob?.status === "running") return;
-    const startedAt = Date.now();
-    const reportLabel = `${selectedClient.client_name} - ${month.period_label || month.label || "Report"}`;
-    setReportElapsed(0);
-    setReportJob({
-      status: "running",
-      periodId: month.id,
-      label: reportLabel,
-      startedAt,
-      presentationUrl: "",
-      error: "",
-    });
-    setGeneratingReportId(month.id);
+    const activeJob = reportJobs.find(
+      (job) => (
+        String(job.report_period_id) === String(month.id)
+        && isActiveReportJob(job)
+      ),
+    );
+    if (activeJob) {
+      setFocusedReportJobId(activeJob.id);
+      return;
+    }
+
+    setReportJobActionId(`create:${month.id}`);
     try {
-      const result = await api("/api/reports/slides", {
+      const job = await api("/api/report-jobs", {
         method: "POST",
         body: JSON.stringify({
           client_id: selectedClient.id,
           period_id: month.id,
         }),
       });
-      setReportJob({
-        status: "complete",
-        periodId: month.id,
-        label: reportLabel,
-        startedAt,
-        presentationUrl: result.presentation_url || "",
-        error: "",
-      });
+      mergeReportJobs([job]);
+      setFocusedReportJobId(job.id);
+      setReportElapsed(0);
     } catch (err) {
-      setError(err.message);
-      setReportJob({
-        status: "failed",
-        periodId: month.id,
-        label: reportLabel,
-        startedAt,
-        presentationUrl: "",
-        error: err.message || "Failed to generate report.",
-      });
+      const jobs = await refreshReportJobsForPeriod(month).catch(() => []);
+      const activeJob = jobs?.find(isActiveReportJob);
+      if (activeJob) setFocusedReportJobId(activeJob.id);
+      showToast(err.message || "Failed to add report to queue.");
     } finally {
-      setGeneratingReportId("");
+      setReportJobActionId("");
+    }
+  }
+
+  async function cancelReportJob(job) {
+    if (!job?.id || !isActiveReportJob(job)) return;
+    setReportJobActionId(job.id);
+    try {
+      const updated = await api(`/api/report-jobs/${job.id}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: "Cancelled from dashboard",
+        }),
+      });
+      mergeReportJobs([updated]);
+      setFocusedReportJobId(updated.id);
+    } catch (err) {
+      const month = reportMonths.find(
+        (item) => String(item.id) === String(job.report_period_id),
+      );
+      if (month) {
+        const jobs = await refreshReportJobsForPeriod(month).catch(() => []);
+        const latest = jobs?.find((item) => item.id === job.id);
+        if (latest) setFocusedReportJobId(latest.id);
+      }
+      showToast(err.message || "Failed to cancel report generation.");
+    } finally {
+      setReportJobActionId("");
+    }
+  }
+
+  async function retryReportJob(job) {
+    if (!job?.id || !["failed", "cancelled"].includes(job.status)) return;
+    setReportJobActionId(job.id);
+    try {
+      const retried = await api(`/api/report-jobs/${job.id}/retry`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      mergeReportJobs([retried]);
+      setFocusedReportJobId(retried.id);
+      setReportElapsed(0);
+    } catch (err) {
+      const month = reportMonths.find(
+        (item) => String(item.id) === String(job.report_period_id),
+      );
+      if (month) {
+        const jobs = await refreshReportJobsForPeriod(month).catch(() => []);
+        const activeJob = jobs?.find(isActiveReportJob);
+        if (activeJob) setFocusedReportJobId(activeJob.id);
+      }
+      showToast(err.message || "Failed to retry report generation.");
+    } finally {
+      setReportJobActionId("");
     }
   }
 
@@ -249,9 +374,18 @@ export default function App() {
 
   useEffect(() => {
     if (!currentClient) return;
+    setReportJobs([]);
+    setFocusedReportJobId("");
     loadClient(currentClient).catch((err) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentClient?.id]);
+
+  useEffect(() => {
+    if (!selectedClient || !reportMonthIdsKey) return;
+    loadReportJobHistory(selectedClient, reportMonths)
+      .catch((err) => setError(err.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClient?.id, reportMonthIdsKey]);
 
   useEffect(() => {
     if (!selectedClient) return;
@@ -260,14 +394,44 @@ export default function App() {
   }, [selectedClient?.id, currentMonth?.slug]);
 
   useEffect(() => {
-    if (reportJob?.status !== "running") return undefined;
+    if (!activeReportJobIdsKey) return undefined;
+    const jobIds = activeReportJobIdsKey.split(",");
+    let stopped = false;
+    const poll = async () => {
+      const rows = await Promise.all(
+        jobIds.map((jobId) => api(`/api/report-jobs/${jobId}`).catch(() => null)),
+      );
+      if (!stopped) mergeReportJobs(rows);
+    };
+    const intervalId = window.setInterval(poll, 3000);
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeReportJobIdsKey]);
+
+  useEffect(() => {
+    if (!isActiveReportJob(reportJob)) return undefined;
+    const startedAt = new Date(
+      reportJob.started_at
+      || reportJob.queued_at
+      || reportJob.created_at
+      || Date.now(),
+    ).getTime();
     const updateElapsed = () => {
-      setReportElapsed(Math.floor((Date.now() - reportJob.startedAt) / 1000));
+      setReportElapsed(Math.floor((Date.now() - startedAt) / 1000));
     };
     updateElapsed();
     const intervalId = window.setInterval(updateElapsed, 1000);
     return () => window.clearInterval(intervalId);
-  }, [reportJob?.status, reportJob?.startedAt]);
+  }, [
+    reportJob?.id,
+    reportJob?.status,
+    reportJob?.started_at,
+    reportJob?.queued_at,
+    reportJob?.created_at,
+  ]);
 
   let content = (
     <ClientsPage
@@ -300,7 +464,8 @@ export default function App() {
         onDeleteClient={setDeleteTarget}
         onDeleteReportMonth={setDeleteReportMonthTarget}
         onGenerateReport={generateSlidesReport}
-        generatingReportId={generatingReportId}
+        activeReportPeriodIds={activeReportPeriodIds}
+        reportJobActionId={reportJobActionId}
       />
     );
   }
@@ -316,8 +481,38 @@ export default function App() {
         onOpenPlatform={(path) => navigate(`/clients/${path}`)}
         onOpenAddReport={() => setModal("add-report-csv")}
         onGenerateReport={generateSlidesReport}
-        isGeneratingReport={generatingReportId === currentMonth.id}
+        isGeneratingReport={
+          activeReportPeriodIds.has(String(currentMonth.id))
+          || reportJobActionId === `create:${currentMonth.id}`
+        }
+        onOpenReportJobs={() => navigate(
+          `/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/jobs`,
+        )}
         onOpenEditor={() => navigate(`/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/edit`)}
+      />
+    );
+  }
+
+  if (currentClient && selectedClient && currentMonth && isReportJobs) {
+    const periodJobs = reportJobs.filter(
+      (job) => String(job.report_period_id) === String(currentMonth.id),
+    );
+    content = (
+      <ReportJobsPage
+        client={selectedClient}
+        month={currentMonth}
+        jobs={periodJobs}
+        actionJobId={reportJobActionId}
+        onNavigate={navigate}
+        onGenerate={generateSlidesReport}
+        onCancel={cancelReportJob}
+        onRetry={retryReportJob}
+        onRefresh={() => {
+          refreshReportJobsForPeriod(currentMonth).catch((err) => {
+            showToast(err.message || "Failed to refresh generation history.");
+          });
+        }}
+        onOpenReport={openPresentation}
       />
     );
   }
@@ -337,7 +532,14 @@ export default function App() {
     );
   }
 
-  if (currentClient && selectedClient && currentMonth && currentPlatform && !isReportEditor) {
+  if (
+    currentClient
+    && selectedClient
+    && currentMonth
+    && currentPlatform
+    && !isReportEditor
+    && !isReportJobs
+  ) {
     content = (
       <PlatformDetailPage
         client={selectedClient}
@@ -452,46 +654,87 @@ export default function App() {
           <div className="report-toast-main">
             <div>
               <p className="report-toast-title">
-                {reportJob.status === "running"
-                  ? "Generating report"
-                  : reportJob.status === "complete"
-                    ? "Report generated"
-                    : "Report failed"}
+                {reportJobStatusLabel(reportJob.status)}
               </p>
-              <p className="report-toast-detail">{reportJob.label}</p>
+              <p className="report-toast-detail">
+                {reportJob.client_name_snapshot} - {reportJob.period_label_snapshot}
+              </p>
             </div>
-            {reportJob.status === "failed" && (
+            {!isActiveReportJob(reportJob) && (
               <button
                 type="button"
                 className="report-toast-close"
                 aria-label="Close report notification"
-                onClick={() => setReportJob(null)}
+                onClick={() => {
+                  const nextActive = reportJobs.find(
+                    (job) => job.id !== reportJob.id && isActiveReportJob(job),
+                  );
+                  setFocusedReportJobId(nextActive?.id || "");
+                }}
               >
                 x
               </button>
             )}
           </div>
-          {reportJob.status === "running" && (
-            <p className="report-toast-meta">{formatElapsed(reportElapsed)}</p>
+          {isActiveReportJob(reportJob) && (
+            <p className="report-toast-meta">
+              {reportJobStageLabel(reportJob.current_stage)}
+              {" - "}
+              {formatElapsed(reportElapsed)}
+            </p>
           )}
-          {reportJob.status === "complete" && (
+          {reportJob.error_message && (
+            <p className="report-toast-error">{reportJob.error_message}</p>
+          )}
+          <div className="report-toast-actions">
+            {reportJob.presentation_url && (
+              <button
+                type="button"
+                className="report-toast-open secondary"
+                onClick={() => openPresentation(reportJob.presentation_url)}
+              >
+                Open Slides
+              </button>
+            )}
+            {["failed", "cancelled"].includes(reportJob.status) && (
+              <button
+                type="button"
+                className="report-toast-open"
+                disabled={reportJobActionId === reportJob.id}
+                onClick={() => retryReportJob(reportJob)}
+              >
+                {reportJobActionId === reportJob.id ? "Retrying..." : "Retry"}
+              </button>
+            )}
+            {["queued", "running", "retrying"].includes(reportJob.status) && (
+              <button
+                type="button"
+                className="report-toast-cancel"
+                disabled={reportJobActionId === reportJob.id}
+                onClick={() => cancelReportJob(reportJob)}
+              >
+                {reportJobActionId === reportJob.id
+                  ? "Cancelling..."
+                  : "Cancel"}
+              </button>
+            )}
             <button
               type="button"
               className="report-toast-open"
-              disabled={!reportJob.presentationUrl}
               onClick={() => {
-                if (reportJob.presentationUrl) {
-                  window.open(reportJob.presentationUrl, "_blank", "noopener,noreferrer");
+                const targetMonth = reportMonths.find(
+                  (month) => String(month.id) === String(reportJob.report_period_id),
+                );
+                if (targetMonth && selectedClient) {
+                  navigate(
+                    `/clients/${clientSlug(selectedClient)}/${targetMonth.slug}/jobs`,
+                  );
                 }
-                setReportJob(null);
               }}
             >
-              Buka
+              View history
             </button>
-          )}
-          {reportJob.status === "failed" && (
-            <p className="report-toast-error">{reportJob.error}</p>
-          )}
+          </div>
         </div>
       )}
       {toast && <div className="toast active">{toast}</div>}

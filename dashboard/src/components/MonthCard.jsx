@@ -2,7 +2,15 @@ import { PlatformBadges, StatusBadge } from "./Badges";
 import { formatDateTime } from "../lib/format";
 import OpenIconButton from "./OpenIconButton";
 
-export default function MonthCard({ month, platforms, onOpen, onGenerateReport, onDelete, isGenerating }) {
+export default function MonthCard({
+  month,
+  platforms,
+  onOpen,
+  onGenerateReport,
+  onDelete,
+  isGenerating,
+  isCreating,
+}) {
   return (
     <article className="month-card">
       <div className="card-main">
@@ -25,7 +33,7 @@ export default function MonthCard({ month, platforms, onOpen, onGenerateReport, 
         <button
           className="danger-link"
           type="button"
-          disabled={isGenerating}
+          disabled={isGenerating || isCreating}
           onClick={() => onDelete?.(month)}
         >
           Delete
@@ -33,10 +41,14 @@ export default function MonthCard({ month, platforms, onOpen, onGenerateReport, 
         <button
           className="text-link"
           type="button"
-          disabled={isGenerating}
+          disabled={isCreating}
           onClick={() => onGenerateReport?.(month)}
         >
-          {isGenerating ? "Generating..." : "Generate report"}
+          {isCreating
+            ? "Adding to queue..."
+            : isGenerating
+              ? "View generation status"
+              : "Generate report"}
         </button>
       </div>
     </article>
