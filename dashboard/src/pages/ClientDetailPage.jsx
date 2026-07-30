@@ -14,7 +14,9 @@ export default function ClientDetailPage({
   onDeleteClient,
   onDeleteReportMonth,
   onGenerateReport,
-  generatingReportId,
+  activeReportPeriodIds,
+  reportJobActionId,
+  onOpenReportJobs,
 }) {
   const platforms = platformFlags(client);
   const profileCount = Math.max(profiles.length, platforms.length, client.connected_profiles || 0);
@@ -30,9 +32,18 @@ export default function ClientDetailPage({
           <h1>{client.client_name}</h1>
           <p>Manage monthly report data and connected social media platforms.</p>
         </div>
-        <button className="danger-button" type="button" onClick={() => onDeleteClient(client)}>
-          Delete Client
-        </button>
+        <div className="page-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={onOpenReportJobs}
+          >
+            Report history
+          </button>
+          <button className="danger-button" type="button" onClick={() => onDeleteClient(client)}>
+            Delete Client
+          </button>
+        </div>
       </div>
       <section className="summary-strip">
         <div className="summary-item">
@@ -72,7 +83,8 @@ export default function ClientDetailPage({
               onOpen={(slug) => onOpenMonth(`${clientSlug(client)}/${slug}`)}
               onGenerateReport={onGenerateReport}
               onDelete={onDeleteReportMonth}
-              isGenerating={generatingReportId === month.id}
+              isGenerating={activeReportPeriodIds.has(String(month.id))}
+              isCreating={reportJobActionId === `create:${month.id}`}
             />
           ))}
         </div>

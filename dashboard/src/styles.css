@@ -42,8 +42,37 @@ button:disabled {
 }
 
 .brand-title {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
   font-size: 20px;
   font-weight: 800;
+  text-align: left;
+}
+
+.header-navigation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.header-navigation button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.header-navigation button:hover,
+.header-navigation button.active {
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .page-shell {
@@ -1061,15 +1090,19 @@ label, .field-label {
   z-index: 80;
 }
 
-.report-toast.running {
+.report-toast.queued,
+.report-toast.running,
+.report-toast.retrying,
+.report-toast.cancel_requested {
   border-color: #c8d8ef;
 }
 
-.report-toast.complete {
+.report-toast.completed {
   border-color: #bddbcf;
 }
 
-.report-toast.failed {
+.report-toast.failed,
+.report-toast.cancelled {
   border-color: #e1b9b9;
 }
 
@@ -1106,7 +1139,6 @@ label, .field-label {
 }
 
 .report-toast-open {
-  margin-top: 14px;
   padding: 8px 14px;
   border: 0;
   border-radius: 8px;
@@ -1115,6 +1147,37 @@ label, .field-label {
   font-size: 13px;
   font-weight: 850;
   cursor: pointer;
+}
+
+.report-toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.report-toast-open.secondary {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.report-toast-cancel,
+.report-job-cancel {
+  padding: 8px 14px;
+  border: 1px solid #d8a2a2;
+  border-radius: 8px;
+  background: #fff8f8;
+  color: #9b3838;
+  font-size: 13px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.report-toast-cancel:disabled,
+.report-job-cancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .report-toast-open:disabled {
@@ -1138,6 +1201,159 @@ label, .field-label {
 .report-toast-close:hover {
   background: #f3f4f6;
   color: var(--ink);
+}
+
+.report-jobs-page {
+  max-width: 1280px;
+}
+
+.report-jobs-title {
+  margin-bottom: 32px;
+}
+
+.report-queue-section {
+  margin-top: 28px;
+}
+
+.report-queue-section .report-job-list,
+.report-queue-section > .empty,
+.report-history-section .report-job-list,
+.report-history-section > .empty {
+  margin-top: 16px;
+}
+
+.report-current-queue .report-job-row {
+  border-color: #c8d8ef;
+  background: #f7faff;
+}
+
+.report-queue-position {
+  color: #315f8e;
+  font-weight: 850;
+}
+
+.report-active-job {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 22px 0 28px;
+  padding: 22px 24px;
+  border: 1px solid #c8d8ef;
+  border-radius: 12px;
+  background: #f7faff;
+}
+
+.report-active-job h2 {
+  margin: 5px 0 10px;
+  font-size: 20px;
+}
+
+.report-section-eyebrow {
+  margin: 0;
+  color: #54708f;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.report-history-section {
+  margin-top: 28px;
+}
+
+.report-history-count {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.report-job-list {
+  display: grid;
+  gap: 12px;
+}
+
+.report-job-row {
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.report-job-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.report-job-row h3 {
+  margin: 0 0 10px;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.report-job-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.report-job-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #eef2f6;
+  color: #526170;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.report-job-status.queued,
+.report-job-status.running,
+.report-job-status.retrying,
+.report-job-status.cancel_requested {
+  background: #eaf2fc;
+  color: #315f8e;
+}
+
+.report-job-status.completed {
+  background: #e7f5ee;
+  color: #287054;
+}
+
+.report-job-status.failed,
+.report-job-status.cancelled {
+  background: #faeaea;
+  color: #993f3f;
+}
+
+.report-job-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.report-job-actions .secondary-button,
+.report-job-actions .report-job-cancel {
+  min-height: 38px;
+  padding: 8px 13px;
+}
+
+.report-job-error {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #f0d7d7;
+  color: #9b3838;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .empty {
@@ -1515,6 +1731,17 @@ label, .field-label {
     align-items: stretch;
     flex-direction: column;
   }
+  .app-header {
+    height: auto;
+    gap: 14px;
+    padding: 18px;
+  }
+  .header-navigation {
+    margin-left: 0;
+  }
+  .header-navigation button {
+    flex: 1;
+  }
   .page-actions { align-items: stretch; flex-direction: column; }
   .page-shell { padding: 32px 18px 60px; }
   .metric-grid { grid-template-columns: 1fr; }
@@ -1526,6 +1753,14 @@ label, .field-label {
   .report-toast {
     top: 16px;
     right: 16px;
+  }
+  .report-active-job,
+  .report-job-row-main {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .report-job-actions {
+    justify-content: flex-start;
   }
   .editor-identity,
   .editor-toolbar,

@@ -305,6 +305,20 @@ class ReportJobService:
             limit=limit,
         )
 
+    def client_history(
+        self,
+        client_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[dict]:
+        return self.repository.list_for_client(
+            client_id,
+            limit=limit,
+        )
+
+    def all_history(self, *, limit: int = 100) -> list[dict]:
+        return self.repository.list_all(limit=limit)
+
     def retry_job(
         self,
         job_id: str,

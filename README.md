@@ -71,7 +71,7 @@ Prasyarat: Docker Desktop dan Docker Compose.
    Copy-Item .env.example .env
    ```
 2. Isi minimal `GEMINI_API_KEY`, `SLIDES_TEMPLATE_ID`,
-   `GOOGLE_CREDENTIALS_FILE`, dan `GOOGLE_TOKEN_FILE`. 
+   `GOOGLE_CREDENTIALS_FILE`, dan `GOOGLE_TOKEN_FILE`.
 3. Jalankan seluruh service:
 
    ```powershell
@@ -100,27 +100,27 @@ npm run build
 
 ## Environment Variables Utama
 
-| Variable                    | Wajib | Keterangan                       |
-| --------------------------- | ----: | -------------------------------- |
-| `DATABASE_URL`            |    ya | SQLAlchemy URL ke PostgreSQL     |
-| `GEMINI_API_KEY`          |    ya | credential Gemini                |
-| `GEMINI_MODEL`            | tidak | default`gemini-3.1-flash-lite` |
-| `SLIDES_TEMPLATE_ID`      |    ya | ID template Google Slides        |
-| `GOOGLE_CREDENTIALS_FILE` |    ya | path OAuth client JSON           |
-| `GOOGLE_TOKEN_FILE`       |    ya | path OAuth user token JSON       |
-| `DB_POOL_SIZE`            | tidak | default`3`                     |
-| `DB_MAX_OVERFLOW`         | tidak | default`2`                     |
-| `DB_POOL_TIMEOUT`         | tidak | default`30` detik              |
-| `DB_POOL_RECYCLE`         | tidak | default`1800` detik            |
-| `DB_CONNECT_TIMEOUT`      | tidak | default`10` detik              |
-| `GCS_REPORT_ASSET_BUCKET` | tidak | bucket untuk upload asset editor |
-| `REPORT_QUEUE_BACKEND`    | tidak | isi `cloud_tasks` untuk queue    |
-| `CLOUD_TASKS_PROJECT`     | queue | project ID Cloud Tasks           |
-| `CLOUD_TASKS_LOCATION`    | queue | region queue                      |
-| `CLOUD_TASKS_QUEUE`       | queue | nama queue                        |
-| `REPORT_WORKER_BASE_URL`  | queue | origin URL Cloud Run              |
-| `REPORT_TASK_CALLER_SERVICE_ACCOUNT` | queue | identity OIDC worker |
-| `REPORT_TASK_OIDC_AUDIENCE` | queue | audience OIDC, biasanya worker URL |
+| Variable                               | Wajib | Keterangan                         |
+| -------------------------------------- | ----: | ---------------------------------- |
+| `DATABASE_URL`                       |    ya | SQLAlchemy URL ke PostgreSQL       |
+| `GEMINI_API_KEY`                     |    ya | credential Gemini                  |
+| `GEMINI_MODEL`                       | tidak | default`gemini-3.1-flash-lite`   |
+| `SLIDES_TEMPLATE_ID`                 |    ya | ID template Google Slides          |
+| `GOOGLE_CREDENTIALS_FILE`            |    ya | path OAuth client JSON             |
+| `GOOGLE_TOKEN_FILE`                  |    ya | path OAuth user token JSON         |
+| `DB_POOL_SIZE`                       | tidak | default`3`                       |
+| `DB_MAX_OVERFLOW`                    | tidak | default`2`                       |
+| `DB_POOL_TIMEOUT`                    | tidak | default`30` detik                |
+| `DB_POOL_RECYCLE`                    | tidak | default`1800` detik              |
+| `DB_CONNECT_TIMEOUT`                 | tidak | default`10` detik                |
+| `GCS_REPORT_ASSET_BUCKET`            | tidak | bucket untuk upload asset editor   |
+| `REPORT_QUEUE_BACKEND`               | tidak | isi`cloud_tasks` untuk queue     |
+| `CLOUD_TASKS_PROJECT`                | queue | project ID Cloud Tasks             |
+| `CLOUD_TASKS_LOCATION`               | queue | region queue                       |
+| `CLOUD_TASKS_QUEUE`                  | queue | nama queue                         |
+| `REPORT_WORKER_BASE_URL`             | queue | origin URL Cloud Run               |
+| `REPORT_TASK_CALLER_SERVICE_ACCOUNT` | queue | identity OIDC worker               |
+| `REPORT_TASK_OIDC_AUDIENCE`          | queue | audience OIDC, biasanya worker URL |
 
 Daftar konfigurasi development yang lebih lengkap tersedia di `.env.example`.
 
@@ -128,31 +128,31 @@ Daftar konfigurasi development yang lebih lengkap tersedia di `.env.example`.
 
 ### Resource staging yang sudah pernah digunakan
 
-Nama berikut adalah referensi environment staging saat ini. Tim dev dapat
-mempertahankannya atau membuat resource baru di project milik organisasi.
+Nama berikut adalah referensi environment staging saat ini. Dapat
+dipertahankan atau membuat resource baru di project milik organisasi.
 
-| Resource                | Nilai staging                                                             |
-| ----------------------- | ------------------------------------------------------------------------- |
-| Project ID              | `mai-reporting-staging`                                                 |
-| Cloud Run service       | `mai-reporting-staging`                                                 |
-| Cloud SQL instance      | `mai-postgres-staging`                                                  |
-| Cloud SQL connection    | `mai-reporting-staging:asia-southeast2:mai-postgres-staging`            |
-| Database / user         | `mai-socmed-report` / `mai-user`                                      |
-| Artifact Registry       | `mai-reporting`                                                         |
-| Runtime service account | `mai-cloud-run-staging@mai-reporting-staging.iam.gserviceaccount.com`   |
-| Build service account   | `mai-cloud-build-staging@mai-reporting-staging.iam.gserviceaccount.com` |
+| Resource                | Nilai staging                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------- |
+| Project ID              | `mai-reporting-staging`                                                        |
+| Cloud Run service       | `mai-reporting-staging`                                                        |
+| Cloud SQL instance      | `mai-postgres-staging`                                                         |
+| Cloud SQL connection    | `mai-reporting-staging:asia-southeast2:mai-postgres-staging`                   |
+| Database / user         | `mai-socmed-report` / `mai-user`                                             |
+| Artifact Registry       | `mai-reporting`                                                                |
+| Runtime service account | `mai-cloud-run-staging@mai-reporting-staging.iam.gserviceaccount.com`          |
+| Build service account   | `mai-cloud-build-staging@mai-reporting-staging.iam.gserviceaccount.com`        |
 | Task caller SA          | `mai-report-task-caller-staging@mai-reporting-staging.iam.gserviceaccount.com` |
-| Cloud Tasks queue       | `mai-report-generation-staging`                                       |
-| Database export bucket  | `mai-reporting-staging-db-exports-676930675074`                       |
-| Cloud Build trigger     | `deploy-mai-staging`                                                    |
-| Trigger source          | branch`main`, config `cloudbuild.yaml`                                |
+| Cloud Tasks queue       | `mai-report-generation-staging`                                                |
+| Database export bucket  | `mai-reporting-staging-db-exports-676930675074`                                |
+| Cloud Build trigger     | `deploy-mai-staging`                                                           |
+| Trigger source          | branch`main`, config `cloudbuild.yaml`                                       |
 
 Cloud Run staging menggunakan 2 vCPU, RAM 2 GiB, timeout 900 detik,
 concurrency 10, minimum 0 instance, dan maksimum 2 instance.
 
 Cloud SQL staging yang dibuat saat eksperimen menggunakan Enterprise Plus,
 `db-perf-optimized-N-8`, zonal, dan disk 100 GB. Ukuran ini relatif besar untuk
-staging; tim DevOps sebaiknya meninjau ulang kebutuhan dan biayanya.
+staging; bisa dininjau ulang kebutuhan dan biayanya.
 
 ### 1. Project dan API
 
@@ -225,11 +225,11 @@ Pisahkan identity runtime dari identity build.
 | Cloud Run runtime SA | `roles/cloudsql.client`                                          |
 | Cloud Run runtime SA | `roles/secretmanager.secretAccessor` pada secret yang diperlukan |
 | Cloud Run runtime SA | akses bucket asset bila fitur GCS digunakan                        |
-| Cloud Run runtime SA | `roles/cloudtasks.enqueuer` pada report queue                       |
-| Cloud Run runtime SA | `roles/cloudtasks.taskDeleter` pada report queue                    |
-| Cloud Run runtime SA | `roles/iam.serviceAccountUser` pada task caller SA                  |
-| Task caller SA       | `roles/run.invoker` pada Cloud Run service                         |
-| Cloud Tasks agent    | `roles/cloudtasks.serviceAgent` pada project                       |
+| Cloud Run runtime SA | `roles/cloudtasks.enqueuer` pada report queue                    |
+| Cloud Run runtime SA | `roles/cloudtasks.taskDeleter` pada report queue                 |
+| Cloud Run runtime SA | `roles/iam.serviceAccountUser` pada task caller SA               |
+| Task caller SA       | `roles/run.invoker` pada Cloud Run service                       |
+| Cloud Tasks agent    | `roles/cloudtasks.serviceAgent` pada project                     |
 | Cloud Build SA       | `roles/artifactregistry.writer`                                  |
 | Cloud Build SA       | `roles/run.developer`                                            |
 | Cloud Build SA       | `roles/logging.logWriter`                                        |

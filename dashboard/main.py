@@ -386,6 +386,24 @@ def get_report_job(job_id: str):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@app.get("/api/report-jobs")
+def get_all_report_jobs(limit: int = 100):
+    try:
+        return json_response(report_jobs.all_history(limit=limit))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/clients/{client_id}/report-jobs")
+def get_client_report_jobs(client_id: str, limit: int = 100):
+    try:
+        return json_response(
+            report_jobs.client_history(client_id, limit=limit)
+        )
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
 @app.get(
     "/api/clients/{client_id}/report-periods/{period_id}/report-jobs"
 )
