@@ -3,10 +3,11 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Callable
 
-from langchain_core.callbacks import get_usage_metadata_callback
+from langchain_core.callbacks import BaseCallbackHandler, get_usage_metadata_callback
 from sqlalchemy import text
 
 try:
@@ -128,10 +129,71 @@ def log_gemini_usage(usage: dict, status: str) -> None:
     )
 
 
-def invoke_agentic_graph_with_usage(agentic_graph, initial_state):
+class ReportCancellationCallback(BaseCallbackHandler):
+    raise_error = True
+
+    def __init__(
+        self,
+        should_cancel: Callable[[], bool],
+        on_stage: Callable[[str], None] | None,
+        cancel_exception_type: type[Exception],
+    ):
+        self.should_cancel = should_cancel
+        self.on_stage = on_stage
+        self.cancel_exception_type = cancel_exception_type
+        self._last_stage = ""
+        self._lock = threading.Lock()
+
+    def _checkpoint(self, stage: str | None = None) -> None:
+        if self.should_cancel():
+            raise self.cancel_exception_type(
+                "Report generation was cancelled."
+            )
+        normalized_stage = str(stage or "").strip()
+        if not normalized_stage or self.on_stage is None:
+            return
+        with self._lock:
+            if normalized_stage == self._last_stage:
+                return
+            self._last_stage = normalized_stage
+        self.on_stage(f"analysis_{normalized_stage}")
+        if self.should_cancel():
+            raise self.cancel_exception_type(
+                "Report generation was cancelled."
+            )
+
+    def on_chain_start(self, _serialized, _inputs, **kwargs) -> None:
+        metadata = dict(kwargs.get("metadata") or {})
+        self._checkpoint(metadata.get("langgraph_node"))
+
+    def on_chain_end(self, _outputs, **_kwargs) -> None:
+        self._checkpoint()
+
+    def on_llm_start(self, _serialized, _prompts, **_kwargs) -> None:
+        self._checkpoint("gemini")
+
+    def on_chat_model_start(self, _serialized, _messages, **_kwargs) -> None:
+        self._checkpoint("gemini")
+
+    def on_tool_start(self, _serialized, _input_str, **_kwargs) -> None:
+        self._checkpoint()
+
+
+def invoke_agentic_graph_with_usage(
+    agentic_graph,
+    initial_state,
+    *,
+    callbacks: list[BaseCallbackHandler] | None = None,
+):
     with get_usage_metadata_callback() as usage_callback:
         try:
-            result = agentic_graph.invoke(initial_state)
+            if callbacks:
+                result = agentic_graph.invoke(
+                    initial_state,
+                    config={"callbacks": list(callbacks)},
+                )
+            else:
+                result = agentic_graph.invoke(initial_state)
         except Exception:
             usage = summarize_gemini_usage(usage_callback.usage_metadata)
             log_gemini_usage(usage, "failed")
@@ -194,9 +256,19 @@ def generate_agentic_report(
     cancellation_checkpoint()
     if on_stage:
         on_stage("analysis")
+    callbacks = []
+    if should_cancel:
+        callbacks.append(
+            ReportCancellationCallback(
+                should_cancel,
+                on_stage,
+                ReportGenerationCancelledError,
+            )
+        )
     result, gemini_usage = invoke_agentic_graph_with_usage(
         agentic_graph,
         initial_state,
+        callbacks=callbacks,
     )
     cancellation_checkpoint()
 
@@ -223,6 +295,8 @@ def generate_agentic_report(
             existing_presentation_id=existing_presentation_id,
             existing_report_name=existing_report_name,
             on_presentation_created=on_presentation_created,
+            should_cancel=should_cancel,
+            on_stage=on_stage,
         )
         payload = {
             "status": "dry_run_completed" if dry_run else "completed",

@@ -8,11 +8,20 @@ from sqlalchemy.exc import IntegrityError
 
 try:
     from dashboard.db import create_db_engine
+    from dashboard.repositories.report_data_lock import (
+        ACTIVE_JOB_STATUSES,
+        ReportDataLockedError,
+        lock_report_period,
+    )
 except ModuleNotFoundError:
     from db import create_db_engine
+    from repositories.report_data_lock import (
+        ACTIVE_JOB_STATUSES,
+        ReportDataLockedError,
+        lock_report_period,
+    )
 
 
-ACTIVE_JOB_STATUSES = ("queued", "running", "retrying", "cancel_requested")
 TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled")
 
 
@@ -115,6 +124,7 @@ class ReportJobRepository:
         try:
             with self.engine.begin() as conn:
                 context = self._context(conn, client_id, period_id)
+                lock_report_period(conn, client_id, period_id)
                 row = conn.execute(
                     text(
                         """
@@ -171,6 +181,8 @@ class ReportJobRepository:
                     },
                 ).mappings().one()
                 return dict(row)
+        except ReportDataLockedError as exc:
+            raise ActiveReportJobError(exc.job) from exc
         except IntegrityError as exc:
             active = self.active_job(client_id, period_id)
             if active:
@@ -407,15 +419,22 @@ class ReportJobRepository:
             "running",
             """
             UPDATE report_generation_jobs
-            SET current_stage = 'slides',
+            SET current_stage = CASE
+                    WHEN status = 'cancel_requested'
+                    THEN current_stage
+                    ELSE 'slides'
+                END,
                 presentation_id = :presentation_id,
                 presentation_url = :presentation_url,
                 report_name = :report_name,
-                lease_expires_at =
-                    now() + (:lease_seconds * INTERVAL '1 second'),
+                lease_expires_at = CASE
+                    WHEN status = 'cancel_requested'
+                    THEN lease_expires_at
+                    ELSE now() + (:lease_seconds * INTERVAL '1 second')
+                END,
                 updated_at = now()
             WHERE id = :job_id
-              AND status = 'running'
+              AND status IN ('running', 'cancel_requested')
             RETURNING *
             """,
             {
@@ -564,12 +583,74 @@ class ReportJobRepository:
                 cancelled_at = COALESCE(cancelled_at, now()),
                 finished_at = COALESCE(finished_at, now()),
                 lease_expires_at = NULL,
+                result_metadata = COALESCE(
+                    result_metadata,
+                    '{}'::jsonb
+                ) || jsonb_build_object(
+                    'cancel_latency_seconds',
+                    ROUND(
+                        EXTRACT(
+                            EPOCH FROM (
+                                now() - COALESCE(cancel_requested_at, now())
+                            )
+                        )::numeric,
+                        3
+                    )
+                ),
                 updated_at = now()
             WHERE id = :job_id
               AND status = 'cancel_requested'
             RETURNING *
             """,
             {"job_id": job_id},
+        )
+
+    def record_cancellation_cleanup(
+        self,
+        job_id: str,
+        cleanup: dict,
+        *,
+        clear_presentation: bool = False,
+    ) -> dict:
+        cleanup_payload = dict(cleanup or {})
+        renamed_report_name = (
+            str(cleanup_payload.get("report_name") or "").strip() or None
+        )
+        return self._transition(
+            job_id,
+            "cancelled",
+            """
+            UPDATE report_generation_jobs
+            SET presentation_id = CASE
+                    WHEN :clear_presentation THEN NULL
+                    ELSE presentation_id
+                END,
+                presentation_url = CASE
+                    WHEN :clear_presentation THEN NULL
+                    ELSE presentation_url
+                END,
+                report_name = CASE
+                    WHEN :clear_presentation THEN NULL
+                    ELSE COALESCE(:renamed_report_name, report_name)
+                END,
+                result_metadata = COALESCE(
+                    result_metadata,
+                    '{}'::jsonb
+                ) || jsonb_build_object(
+                    'cancellation_cleanup',
+                    CAST(:cleanup AS JSONB)
+                ),
+                updated_at = now()
+            WHERE id = :job_id
+              AND status = 'cancelled'
+            RETURNING *
+            """,
+            {
+                "job_id": job_id,
+                "cleanup": _json_parameter(cleanup_payload),
+                "clear_presentation": bool(clear_presentation),
+                "renamed_report_name": renamed_report_name,
+            },
         )
 
     def fail_job(

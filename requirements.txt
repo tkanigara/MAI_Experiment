@@ -5,6 +5,7 @@ uvicorn[standard]
 python-multipart
 pandas
 matplotlib
+Pillow
 python-dotenv
 google-api-python-client
 google-auth

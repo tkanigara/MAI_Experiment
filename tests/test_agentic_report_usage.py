@@ -10,13 +10,35 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dashboard.services.agentic_report import (
+    ReportCancellationCallback,
     generate_agentic_report,
     invoke_agentic_graph_with_usage,
     summarize_gemini_usage,
 )
+from dashboard.services.report_jobs import ReportGenerationCancelledError
 
 
 class AgenticReportUsageTests(unittest.TestCase):
+    def test_cancellation_callback_reports_graph_node_and_stops(self):
+        stages = []
+        cancelled = False
+        callback = ReportCancellationCallback(
+            lambda: cancelled,
+            stages.append,
+            ReportGenerationCancelledError,
+        )
+
+        callback.on_chain_start(
+            {},
+            {},
+            metadata={"langgraph_node": "retrieval"},
+        )
+        self.assertEqual(stages, ["analysis_retrieval"])
+
+        cancelled = True
+        with self.assertRaises(ReportGenerationCancelledError):
+            callback.on_chat_model_start({}, [])
+
     def test_worker_mode_separates_analysis_from_slides(self):
         class FlexibleModel:
             def __init__(self, **values):

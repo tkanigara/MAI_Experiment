@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import json
+import multiprocessing
 import os
+import queue as queue_module
+import threading
+import time
+import traceback
 from typing import Callable, Protocol
 
 try:
@@ -42,12 +48,85 @@ class ReportJobAlreadyRunningError(RuntimeError):
     pass
 
 
+class ReportGeneratorProcessError(RuntimeError):
+    def __init__(self, error_code: str, message: str, child_traceback: str = ""):
+        self.error_code = str(error_code or "ReportGeneratorProcessError")
+        self.child_traceback = str(child_traceback or "")
+        super().__init__(message or self.error_code)
+
+
+def _callable_reference(callback: Callable) -> tuple[str, str] | None:
+    module_name = str(getattr(callback, "__module__", "") or "").strip()
+    qualname = str(getattr(callback, "__qualname__", "") or "").strip()
+    if not module_name or not qualname or "<locals>" in qualname:
+        return None
+    return module_name, qualname
+
+
+def _resolve_callable(module_name: str, qualname: str) -> Callable:
+    value = importlib.import_module(module_name)
+    for part in qualname.split("."):
+        value = getattr(value, part)
+    if not callable(value):
+        raise TypeError(f"{module_name}.{qualname} is not callable.")
+    return value
+
+
+def _report_generator_process_entry(
+    module_name: str,
+    qualname: str,
+    client_id: str,
+    period_id: str,
+    options: dict,
+    cancel_event,
+    message_connection,
+) -> None:
+    send_lock = threading.Lock()
+
+    def send(kind: str, payload=None) -> None:
+        with send_lock:
+            message_connection.send((kind, payload))
+
+    try:
+        generator = _resolve_callable(module_name, qualname)
+        result = generator(
+            client_id,
+            period_id,
+            dry_run=bool(options.get("dry_run")),
+            should_cancel=cancel_event.is_set,
+            on_stage=lambda stage: send("stage", str(stage)),
+            on_presentation_created=lambda presentation: send(
+                "presentation",
+                dict(presentation),
+            ),
+            existing_presentation_id=options.get("existing_presentation_id"),
+            existing_report_name=options.get("existing_report_name"),
+        )
+        send("result", result)
+    except ReportGenerationCancelledError as exc:
+        send("cancelled", str(exc))
+    except BaseException as exc:
+        send(
+            "error",
+            {
+                "error_code": type(exc).__name__,
+                "message": str(exc) or type(exc).__name__,
+                "traceback": traceback.format_exc(limit=30),
+            },
+        )
+    finally:
+        message_connection.close()
+
+
 class ReportTaskDispatcher(Protocol):
     @property
     def configured(self) -> bool:
         ...
 
     def enqueue(self, job: dict) -> str:
+        ...
+
+    def activate(self, task_name: str) -> None:
         ...
 
     def cancel(self, task_name: str) -> bool:
@@ -63,6 +142,9 @@ class UnconfiguredReportTaskDispatcher:
         raise ReportQueueUnavailableError(
             "Report queue is not configured in this environment."
         )
+
+    def activate(self, task_name: str) -> None:
+        return None
 
     def cancel(self, task_name: str) -> bool:
         return False
@@ -156,6 +238,10 @@ class CloudTasksReportTaskDispatcher:
         )
         return str(getattr(response, "name", None) or task_name)
 
+    def activate(self, task_name: str) -> None:
+        # Cloud Tasks is active as soon as create_task succeeds.
+        return None
+
     def cancel(self, task_name: str) -> bool:
         self._require_configured()
         try:
@@ -167,8 +253,110 @@ class CloudTasksReportTaskDispatcher:
         return True
 
 
-def build_report_task_dispatcher() -> ReportTaskDispatcher:
+class LocalReportTaskDispatcher:
+    """Single-process queue for local development only."""
+
+    def __init__(
+        self,
+        execute_job: Callable[[str], dict],
+        *,
+        retry_delay_seconds: float = 1.0,
+    ):
+        self.execute_job = execute_job
+        self.retry_delay_seconds = max(0.0, float(retry_delay_seconds))
+        self._tasks: queue_module.Queue[tuple[str, str]] = queue_module.Queue()
+        self._pending: dict[str, str] = {}
+        self._queued: set[str] = set()
+        self._running: set[str] = set()
+        self._cancelled: set[str] = set()
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="local-report-worker",
+            daemon=True,
+        )
+        self._thread.start()
+
+    @property
+    def configured(self) -> bool:
+        return True
+
+    def enqueue(self, job: dict) -> str:
+        job_id = str(job["id"])
+        task_name = f"local/report-jobs/tasks/{job_id}"
+        with self._lock:
+            self._pending[task_name] = job_id
+        return task_name
+
+    def activate(self, task_name: str) -> None:
+        with self._lock:
+            job_id = self._pending.pop(task_name, None)
+            if not job_id or task_name in self._cancelled:
+                self._cancelled.discard(task_name)
+                return
+            self._queued.add(task_name)
+        self._tasks.put((task_name, job_id))
+
+    def cancel(self, task_name: str) -> bool:
+        with self._lock:
+            if task_name in self._pending:
+                self._pending.pop(task_name, None)
+                self._cancelled.add(task_name)
+                return True
+            if task_name in self._queued:
+                self._cancelled.add(task_name)
+                return True
+            # Running jobs use the database cancel_requested flag and stop at
+            # the next cooperative cancellation checkpoint.
+            return False
+
+    def _run(self) -> None:
+        while True:
+            task_name, job_id = self._tasks.get()
+            try:
+                with self._lock:
+                    self._queued.discard(task_name)
+                    if task_name in self._cancelled:
+                        self._cancelled.discard(task_name)
+                        continue
+                    self._running.add(task_name)
+
+                while True:
+                    try:
+                        self.execute_job(job_id)
+                        break
+                    except RetryableReportJobError:
+                        if self.retry_delay_seconds:
+                            time.sleep(self.retry_delay_seconds)
+                    except Exception as exc:
+                        print(
+                            "[local_report_queue] worker failed "
+                            f"job_id={job_id} error={type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                        break
+            finally:
+                with self._lock:
+                    self._running.discard(task_name)
+                    self._cancelled.discard(task_name)
+                self._tasks.task_done()
+
+
+def build_report_task_dispatcher(
+    execute_job: Callable[[str], dict] | None = None,
+) -> ReportTaskDispatcher:
     backend = os.getenv("REPORT_QUEUE_BACKEND", "").strip().lower()
+    if backend in {"local", "in_process", "in-process"}:
+        if execute_job is None:
+            raise ReportQueueUnavailableError(
+                "Local report queue requires a report worker."
+            )
+        return LocalReportTaskDispatcher(
+            execute_job,
+            retry_delay_seconds=float(
+                os.getenv("REPORT_LOCAL_RETRY_DELAY_SECONDS", "1")
+            ),
+        )
     if backend not in {"cloud_tasks", "cloud-tasks"}:
         return UnconfiguredReportTaskDispatcher()
     return CloudTasksReportTaskDispatcher(
@@ -287,7 +475,27 @@ class ReportJobService:
             raise ReportTaskDispatchError(
                 "Failed to enqueue report generation."
             ) from exc
-        return self.repository.set_cloud_task_name(str(job["id"]), task_name)
+        try:
+            queued_job = self.repository.set_cloud_task_name(
+                str(job["id"]),
+                task_name,
+            )
+        except Exception:
+            self.dispatcher.cancel(task_name)
+            raise
+        try:
+            self.dispatcher.activate(task_name)
+        except Exception as exc:
+            self.repository.fail_job(
+                str(job["id"]),
+                "Failed to start report generation.",
+                error_code="QUEUE_ACTIVATION_FAILED",
+            )
+            self.dispatcher.cancel(task_name)
+            raise ReportTaskDispatchError(
+                "Failed to start report generation."
+            ) from exc
+        return queued_job
 
     def get_job(self, job_id: str) -> dict:
         return self.repository.get_job(job_id)
@@ -347,24 +555,33 @@ class ReportJobService:
         if job.get("status") in TERMINAL_JOB_STATUSES:
             raise ReportJobTransitionError(job, "cancel_requested")
 
-        task_name = str(job.get("cloud_task_name") or "").strip()
-        if task_name:
-            try:
-                self.dispatcher.cancel(task_name)
-            except Exception as exc:
-                # Database state is authoritative. The task handler will see
-                # cancelled/cancel_requested and avoid starting new work.
-                print(
-                    "[report_queue] task deletion failed "
-                    f"job_id={job_id} error={type(exc).__name__}",
-                    flush=True,
-                )
-
-        return self.repository.request_cancel(
+        cancelled_job = self.repository.request_cancel(
             job_id,
             cancelled_by=cancelled_by,
             reason=reason,
         )
+        task_name = str(job.get("cloud_task_name") or "").strip()
+        if task_name:
+            def delete_dispatched_task() -> None:
+                try:
+                    self.dispatcher.cancel(task_name)
+                except Exception as exc:
+                    # Database state is authoritative. The task handler will
+                    # observe cancelled/cancel_requested even if task deletion
+                    # is slow or unavailable.
+                    print(
+                        "[report_queue] task deletion failed "
+                        f"job_id={job_id} error={type(exc).__name__}",
+                        flush=True,
+                    )
+
+            threading.Thread(
+                target=delete_dispatched_task,
+                name=f"cancel-report-task-{job_id}",
+                daemon=True,
+            ).start()
+
+        return cancelled_job
 
 
 class ReportJobWorker:
@@ -374,21 +591,242 @@ class ReportJobWorker:
         generator: Callable[..., dict],
         *,
         lease_seconds: int = 900,
+        hard_cancel: bool | None = None,
+        cancel_poll_seconds: float | None = None,
+        cancel_grace_seconds: float | None = None,
+        process_start_method: str | None = None,
+        presentation_cleanup: Callable[[str, str | None], dict] | None = None,
     ):
         self.repository = repository
         self.generator = generator
         self.lease_seconds = max(1, int(lease_seconds))
+        self.generator_reference = _callable_reference(generator)
+        configured_hard_cancel = str(
+            os.getenv("REPORT_JOB_HARD_CANCEL", "true")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.hard_cancel = (
+            configured_hard_cancel if hard_cancel is None else bool(hard_cancel)
+        ) and self.generator_reference is not None
+        self.cancel_poll_seconds = max(
+            0.1,
+            float(
+                cancel_poll_seconds
+                if cancel_poll_seconds is not None
+                else os.getenv("REPORT_CANCEL_POLL_SECONDS", "1")
+            ),
+        )
+        self.cancel_grace_seconds = max(
+            0.0,
+            float(
+                cancel_grace_seconds
+                if cancel_grace_seconds is not None
+                else os.getenv("REPORT_CANCEL_GRACE_SECONDS", "2")
+            ),
+        )
+        self.process_start_method = str(
+            process_start_method
+            or os.getenv("REPORT_JOB_PROCESS_START_METHOD", "spawn")
+        ).strip()
+        self.presentation_cleanup = presentation_cleanup
 
     def _finish_cancellation(self, job: dict) -> dict:
         if job.get("status") == "cancel_requested":
-            return self.repository.mark_cancelled(str(job["id"]))
+            job = self.repository.mark_cancelled(str(job["id"]))
+        presentation_id = str(job.get("presentation_id") or "").strip()
+        if not presentation_id:
+            return job
+
+        cleanup = self._cleanup_presentation(
+            presentation_id,
+            job.get("report_name"),
+        )
+        if hasattr(self.repository, "record_cancellation_cleanup"):
+            return self.repository.record_cancellation_cleanup(
+                str(job["id"]),
+                cleanup,
+                clear_presentation=bool(
+                    cleanup.get("success")
+                    and cleanup.get("action") == "trashed"
+                ),
+            )
         return job
+
+    def _cleanup_presentation(
+        self,
+        presentation_id: str,
+        report_name: str | None,
+    ) -> dict:
+        try:
+            cleanup = self.presentation_cleanup
+            if cleanup is None:
+                try:
+                    from dashboard.services.slides_report import (
+                        cleanup_cancelled_presentation,
+                    )
+                except ModuleNotFoundError:
+                    from services.slides_report import (
+                        cleanup_cancelled_presentation,
+                    )
+                cleanup = cleanup_cancelled_presentation
+            return dict(cleanup(presentation_id, report_name) or {})
+        except Exception as exc:
+            print(
+                "[report_queue] cancelled presentation cleanup failed "
+                f"presentation_id={presentation_id} "
+                f"error={type(exc).__name__}",
+                flush=True,
+            )
+            return {
+                "success": False,
+                "action": "cleanup_failed",
+                "error_code": type(exc).__name__,
+                "error_message": str(exc) or type(exc).__name__,
+            }
 
     def _is_cancel_requested(self, job_id: str) -> bool:
         return self.repository.get_job(job_id).get("status") in {
             "cancel_requested",
             "cancelled",
         }
+
+    def _run_generator_direct(
+        self,
+        job: dict,
+        *,
+        should_cancel: Callable[[], bool],
+        on_stage: Callable[[str], None],
+        on_presentation_created: Callable[[dict], None],
+    ) -> dict:
+        return self.generator(
+            str(job["client_id"]),
+            str(job["report_period_id"]),
+            dry_run=bool(job.get("dry_run")),
+            should_cancel=should_cancel,
+            on_stage=on_stage,
+            on_presentation_created=on_presentation_created,
+            existing_presentation_id=job.get("presentation_id"),
+            existing_report_name=job.get("report_name"),
+        )
+
+    def _run_generator_in_process(
+        self,
+        job: dict,
+        *,
+        should_cancel: Callable[[], bool],
+        on_stage: Callable[[str], None],
+        on_presentation_created: Callable[[dict], None],
+    ) -> dict:
+        if self.generator_reference is None:
+            return self._run_generator_direct(
+                job,
+                should_cancel=should_cancel,
+                on_stage=on_stage,
+                on_presentation_created=on_presentation_created,
+            )
+
+        context = multiprocessing.get_context(self.process_start_method)
+        cancel_event = context.Event()
+        parent_connection, child_connection = context.Pipe(duplex=False)
+        module_name, qualname = self.generator_reference
+        process = context.Process(
+            target=_report_generator_process_entry,
+            args=(
+                module_name,
+                qualname,
+                str(job["client_id"]),
+                str(job["report_period_id"]),
+                {
+                    "dry_run": bool(job.get("dry_run")),
+                    "existing_presentation_id": job.get("presentation_id"),
+                    "existing_report_name": job.get("report_name"),
+                },
+                cancel_event,
+                child_connection,
+            ),
+            name=f"report-generator-{job['id']}",
+        )
+        try:
+            process.start()
+        except Exception as exc:
+            parent_connection.close()
+            child_connection.close()
+            raise ReportGeneratorProcessError(
+                "REPORT_GENERATOR_START_FAILED",
+                str(exc) or "Failed to start report generator process.",
+            ) from exc
+        child_connection.close()
+        cancel_started_at = None
+        try:
+            while True:
+                if parent_connection.poll(self.cancel_poll_seconds):
+                    try:
+                        kind, payload = parent_connection.recv()
+                    except EOFError:
+                        if process.is_alive():
+                            continue
+                        raise ReportGeneratorProcessError(
+                            "REPORT_GENERATOR_PIPE_CLOSED",
+                            (
+                                "Report generator closed its result channel "
+                                f"(exit code {process.exitcode})."
+                            ),
+                        )
+                    if kind == "stage":
+                        on_stage(str(payload))
+                    elif kind == "presentation":
+                        on_presentation_created(dict(payload))
+                    elif kind == "result":
+                        process.join(timeout=2)
+                        return dict(payload)
+                    elif kind == "cancelled":
+                        raise ReportGenerationCancelledError(
+                            str(payload or "Report generation was cancelled.")
+                        )
+                    elif kind == "error":
+                        error = dict(payload or {})
+                        raise ReportGeneratorProcessError(
+                            error.get("error_code"),
+                            error.get("message"),
+                            error.get("traceback"),
+                        )
+
+                if should_cancel():
+                    if cancel_started_at is None:
+                        cancel_started_at = time.monotonic()
+                        cancel_event.set()
+                        print(
+                            "[report_queue] cancellation detected "
+                            f"job_id={job['id']} grace_seconds="
+                            f"{self.cancel_grace_seconds:.1f}",
+                            flush=True,
+                        )
+                    if (
+                        not process.is_alive()
+                        or time.monotonic() - cancel_started_at
+                        >= self.cancel_grace_seconds
+                    ):
+                        raise ReportGenerationCancelledError(
+                            "Report generation was cancelled."
+                        )
+
+                if not process.is_alive():
+                    if parent_connection.poll():
+                        continue
+                    raise ReportGeneratorProcessError(
+                        "REPORT_GENERATOR_EXITED",
+                        (
+                            "Report generator exited without returning a "
+                            f"result (exit code {process.exitcode})."
+                        ),
+                    )
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2)
+            if process.is_alive() and hasattr(process, "kill"):
+                process.kill()
+                process.join(timeout=1)
+            parent_connection.close()
 
     def execute(self, job_id: str) -> dict:
         job = self.repository.get_job(job_id)
@@ -444,16 +882,20 @@ class ReportJobWorker:
             )
 
         try:
-            result = self.generator(
-                str(job["client_id"]),
-                str(job["report_period_id"]),
-                dry_run=bool(job.get("dry_run")),
-                should_cancel=should_cancel,
-                on_stage=on_stage,
-                on_presentation_created=on_presentation_created,
-                existing_presentation_id=job.get("presentation_id"),
-                existing_report_name=job.get("report_name"),
-            )
+            if self.hard_cancel:
+                result = self._run_generator_in_process(
+                    job,
+                    should_cancel=should_cancel,
+                    on_stage=on_stage,
+                    on_presentation_created=on_presentation_created,
+                )
+            else:
+                result = self._run_generator_direct(
+                    job,
+                    should_cancel=should_cancel,
+                    on_stage=on_stage,
+                    on_presentation_created=on_presentation_created,
+                )
             if should_cancel():
                 raise ReportGenerationCancelledError(
                     "Report generation was cancelled."
@@ -491,18 +933,26 @@ class ReportJobWorker:
                 raise
 
             error_message = str(exc) or type(exc).__name__
+            error_code = getattr(exc, "error_code", type(exc).__name__)
+            child_traceback = getattr(exc, "child_traceback", "")
+            if child_traceback:
+                print(
+                    "[report_queue] generator child traceback\n"
+                    f"{child_traceback}",
+                    flush=True,
+                )
             if int(current.get("attempt_count") or 0) < int(
                 current.get("max_attempts") or 1
             ):
                 self.repository.mark_retrying(
                     job_id,
                     error_message,
-                    error_code=type(exc).__name__,
+                    error_code=error_code,
                 )
                 raise RetryableReportJobError(error_message) from exc
 
             return self.repository.fail_job(
                 job_id,
                 error_message,
-                error_code=type(exc).__name__,
+                error_code=error_code,
             )

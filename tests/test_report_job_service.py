@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
+from threading import Event
 from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -11,6 +13,7 @@ from dashboard.repositories.report_job_repository import (
     ReportJobTransitionError,
 )
 from dashboard.services.report_jobs import (
+    LocalReportTaskDispatcher,
     ReportJobService,
     ReportQueueUnavailableError,
     ReportTaskDispatchError,
@@ -23,6 +26,7 @@ class FakeDispatcher:
         self.configured = True
         self.enqueued = []
         self.cancelled = []
+        self.activated = []
         self.enqueue_error = None
 
     def enqueue(self, job: dict) -> str:
@@ -34,6 +38,9 @@ class FakeDispatcher:
     def cancel(self, task_name: str) -> bool:
         self.cancelled.append(task_name)
         return True
+
+    def activate(self, task_name: str) -> None:
+        self.activated.append(task_name)
 
 
 class ReportJobServiceTests(unittest.TestCase):
@@ -61,6 +68,42 @@ class ReportJobServiceTests(unittest.TestCase):
             "job-1",
             "queues/report-jobs/tasks/job-1",
         )
+        self.assertEqual(
+            dispatcher.activated,
+            ["queues/report-jobs/tasks/job-1"],
+        )
+
+    def test_local_dispatcher_runs_only_after_job_is_activated(self):
+        processed = Event()
+        received = []
+
+        def execute(job_id):
+            received.append(job_id)
+            processed.set()
+            return {"status": "completed"}
+
+        dispatcher = LocalReportTaskDispatcher(
+            execute,
+            retry_delay_seconds=0,
+        )
+        task_name = dispatcher.enqueue({"id": "job-local-1"})
+
+        self.assertFalse(processed.wait(0.05))
+        dispatcher.activate(task_name)
+        self.assertTrue(processed.wait(1))
+        self.assertEqual(received, ["job-local-1"])
+
+    def test_local_dispatcher_can_cancel_before_activation(self):
+        processed = Event()
+        dispatcher = LocalReportTaskDispatcher(
+            lambda _job_id: processed.set(),
+            retry_delay_seconds=0,
+        )
+        task_name = dispatcher.enqueue({"id": "job-local-2"})
+
+        self.assertTrue(dispatcher.cancel(task_name))
+        dispatcher.activate(task_name)
+        self.assertFalse(processed.wait(0.05))
 
     def test_unconfigured_dispatcher_rejects_before_database_insert(self):
         repository = Mock()
@@ -111,6 +154,9 @@ class ReportJobServiceTests(unittest.TestCase):
             "job-1",
             reason="Clicked by mistake",
         )
+        deadline = time.monotonic() + 1
+        while not dispatcher.cancelled and time.monotonic() < deadline:
+            time.sleep(0.01)
 
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(
@@ -122,6 +168,37 @@ class ReportJobServiceTests(unittest.TestCase):
             cancelled_by=None,
             reason="Clicked by mistake",
         )
+
+    def test_cancel_does_not_wait_for_slow_task_deletion(self):
+        repository = Mock()
+        repository.get_job.return_value = {
+            "id": "job-1",
+            "status": "running",
+            "cloud_task_name": "queues/report-jobs/tasks/job-1",
+        }
+        repository.request_cancel.return_value = {
+            "id": "job-1",
+            "status": "cancel_requested",
+        }
+        release_delete = Event()
+        dispatcher = FakeDispatcher()
+
+        def slow_cancel(task_name):
+            release_delete.wait(2)
+            dispatcher.cancelled.append(task_name)
+            return True
+
+        dispatcher.cancel = slow_cancel
+        service = ReportJobService(repository, dispatcher)
+
+        started_at = time.monotonic()
+        result = service.cancel_job("job-1")
+        elapsed = time.monotonic() - started_at
+        release_delete.set()
+
+        self.assertEqual(result["status"], "cancel_requested")
+        self.assertLess(elapsed, 0.5)
+        repository.request_cancel.assert_called_once()
 
     def test_completed_job_cannot_be_retried(self):
         repository = Mock()

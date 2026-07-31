@@ -778,6 +778,25 @@ label, .field-label {
   font-size: 18px;
 }
 
+.report-lock-summary {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.report-lock-summary span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.report-lock-summary strong {
+  text-transform: capitalize;
+}
+
 .data-health-card {
   display: grid;
   gap: 6px;
@@ -799,6 +818,38 @@ label, .field-label {
 .data-health-card.is-partial {
   border-color: rgba(154, 103, 0, 0.28);
   background: #fffaf0;
+}
+
+.data-health-card.is-blocked {
+  border-color: rgba(178, 62, 48, 0.28);
+  background: #fff8f6;
+}
+
+.generation-confirm-target {
+  display: grid;
+  gap: 5px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.generation-confirm-target strong {
+  font-size: 18px;
+}
+
+.generation-confirm-target span,
+.generation-confirm-copy {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.generation-confirm-body {
+  gap: 18px;
+}
+
+.generation-confirm-body .data-health-card {
+  padding: 12px 15px;
 }
 
 .missing-data-list {

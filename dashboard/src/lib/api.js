@@ -10,7 +10,15 @@ export async function api(path, options = {}) {
     : { error: await response.text() };
   if (!response.ok) {
     const message = String(data.error || "Request failed");
-    throw new Error(message.startsWith("<!DOCTYPE") ? "API endpoint is not available. Restart the dashboard backend." : message);
+    const error = new Error(
+      message.startsWith("<!DOCTYPE")
+        ? "API endpoint is not available. Restart the dashboard backend."
+        : message,
+    );
+    error.status = response.status;
+    error.code = data.code || "";
+    error.job = data.job || null;
+    throw error;
   }
   return data;
 }

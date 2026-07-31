@@ -7,8 +7,10 @@ import re
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
 from typing import Callable
@@ -16,6 +18,7 @@ from typing import Callable
 import requests as http_requests
 from dotenv import load_dotenv
 from googleapiclient.http import MediaFileUpload
+from PIL import Image, ImageOps
 from sqlalchemy import create_engine, text
 
 
@@ -53,6 +56,10 @@ PLATFORM_LABELS = {
 }
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
+EVIDENCE_PLACEHOLDER_PATTERN = re.compile(
+    r"^\{\{(?P<prefix>IG|FB|TK|YT)_(?P<family>EVIDENCE|STORY)_"
+    r"(?P<index>\d+)(?:_[A-Za-z0-9_]+)?\}\}$"
+)
 TEMPLATE_PLACEHOLDER_CACHE: dict[str, set[str]] = {}
 _SLIDES_WRITE_LOCK = Lock()
 _SLIDES_LAST_WRITE_AT = 0.0
@@ -84,14 +91,57 @@ SLIDES_IMAGE_PREFLIGHT_ENABLED = True
 SLIDES_IMAGE_VALIDATION_WORKERS = 8
 SLIDES_IMAGE_CONNECT_TIMEOUT_SECONDS = 3.0
 SLIDES_IMAGE_READ_TIMEOUT_SECONDS = 8.0
-SLIDES_IMAGE_MAX_API_CALLS = 20
 SLIDES_IMAGE_RETRY_INDIVIDUAL = False
 SLIDES_STRUCTURED_TEXT_OCCURRENCES_PER_BATCH = 200
 SLIDES_IMAGE_REPLACE_METHOD = "CENTER_INSIDE"
+SLIDES_IMAGE_DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024
+SLIDES_IMAGE_MAX_DIMENSION = 4096
 DRIVE_API_MAX_RETRIES = 3
 DRIVE_API_RETRY_BASE_SECONDS = 1.0
 COMPETITOR_HIGH_COLOR = (0.094, 0.475, 0.306)
 COMPETITOR_LOW_COLOR = (0.706, 0.137, 0.094)
+_REPORT_CANCEL_CHECK: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "report_cancel_check",
+    default=None,
+)
+_REPORT_STAGE_CALLBACK: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "report_stage_callback",
+    default=None,
+)
+
+
+def cancellation_checkpoint() -> None:
+    should_cancel = _REPORT_CANCEL_CHECK.get()
+    if should_cancel and should_cancel():
+        try:
+            from dashboard.services.report_jobs import (
+                ReportGenerationCancelledError,
+            )
+        except ModuleNotFoundError:
+            from services.report_jobs import ReportGenerationCancelledError
+        raise ReportGenerationCancelledError(
+            "Report generation was cancelled."
+        )
+
+
+def report_stage(stage: str) -> None:
+    cancellation_checkpoint()
+    callback = _REPORT_STAGE_CALLBACK.get()
+    if callback:
+        callback(stage)
+    cancellation_checkpoint()
+
+
+def interruptible_sleep(seconds: float, *, ignore_cancellation: bool = False):
+    remaining = max(0.0, float(seconds))
+    while remaining > 0:
+        if not ignore_cancellation:
+            cancellation_checkpoint()
+        interval = min(1.0, remaining)
+        time.sleep(interval)
+        remaining -= interval
+    if not ignore_cancellation:
+        cancellation_checkpoint()
 
 
 class StepProfiler:
@@ -143,10 +193,20 @@ def is_retryable_drive_error(exc: Exception) -> bool:
     )
 
 
-def execute_drive_request_with_retry(request, operation: str):
+def execute_drive_request_with_retry(
+    request,
+    operation: str,
+    *,
+    ignore_cancellation: bool = False,
+):
     for attempt in range(DRIVE_API_MAX_RETRIES + 1):
         try:
-            return request.execute(num_retries=0)
+            if not ignore_cancellation:
+                cancellation_checkpoint()
+            result = request.execute(num_retries=0)
+            if not ignore_cancellation:
+                cancellation_checkpoint()
+            return result
         except Exception as exc:
             if (
                 not is_retryable_drive_error(exc)
@@ -163,7 +223,10 @@ def execute_drive_request_with_retry(request, operation: str):
                 f"{DRIVE_API_MAX_RETRIES} delay={delay:.0f}s",
                 flush=True,
             )
-            time.sleep(delay)
+            interruptible_sleep(
+                delay,
+                ignore_cancellation=ignore_cancellation,
+            )
 
     raise RuntimeError("Drive API retry loop ended unexpectedly")
 
@@ -185,12 +248,13 @@ def execute_slides_batch_update(
 
     for attempt in range(max_retries + 1):
         try:
+            cancellation_checkpoint()
             with _SLIDES_WRITE_LOCK:
                 elapsed = time.monotonic() - _SLIDES_LAST_WRITE_AT
                 if _SLIDES_LAST_WRITE_AT and elapsed < min_interval:
-                    time.sleep(min_interval - elapsed)
+                    interruptible_sleep(min_interval - elapsed)
                 try:
-                    return (
+                    response = (
                         slides_service.presentations()
                         .batchUpdate(
                             presentationId=presentation_id,
@@ -198,6 +262,8 @@ def execute_slides_batch_update(
                         )
                         .execute()
                     )
+                    cancellation_checkpoint()
+                    return response
                 finally:
                     _SLIDES_LAST_WRITE_AT = time.monotonic()
         except Exception as exc:
@@ -218,7 +284,7 @@ def execute_slides_batch_update(
                 f"(attempt {attempt + 1}/{max_retries})",
                 flush=True,
             )
-            time.sleep(delay)
+            interruptible_sleep(delay)
 
     raise RuntimeError("Slides batch update retry loop ended unexpectedly")
 
@@ -270,6 +336,107 @@ def validate_image_urls(image_mapping: dict[str, str]) -> dict[str, tuple[bool, 
             except Exception as exc:
                 results[url] = (False, exc.__class__.__name__)
     return results
+
+
+def download_and_normalize_image_files(
+    image_mapping: dict[str, str],
+    output_dir: Path,
+) -> tuple[dict[str, Path], list[dict]]:
+    """Download retrievable images and normalize them for the Slides API."""
+    if not image_mapping:
+        return {}, []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MAI-Slides-Image-Proxy/1.0)",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    }
+
+    def download(
+        placeholder_key: str,
+        image_url: str,
+        position: int,
+    ) -> tuple[str, Path | None, str | None]:
+        output_path = output_dir / f"external-image-{position:04d}.png"
+        try:
+            with http_requests.get(
+                image_url,
+                headers=headers,
+                stream=True,
+                allow_redirects=True,
+                timeout=(
+                    SLIDES_IMAGE_CONNECT_TIMEOUT_SECONDS,
+                    SLIDES_IMAGE_READ_TIMEOUT_SECONDS,
+                ),
+            ) as response:
+                if not 200 <= response.status_code < 300:
+                    return placeholder_key, None, f"HTTP {response.status_code}"
+
+                chunks = []
+                total_bytes = 0
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    if total_bytes > SLIDES_IMAGE_DOWNLOAD_MAX_BYTES:
+                        return (
+                            placeholder_key,
+                            None,
+                            "image exceeds 50 MB download limit",
+                        )
+                    chunks.append(chunk)
+
+            with Image.open(BytesIO(b"".join(chunks))) as source:
+                normalized = ImageOps.exif_transpose(source)
+                normalized.thumbnail(
+                    (
+                        SLIDES_IMAGE_MAX_DIMENSION,
+                        SLIDES_IMAGE_MAX_DIMENSION,
+                    ),
+                    Image.Resampling.LANCZOS,
+                )
+                has_alpha = (
+                    normalized.mode in {"RGBA", "LA"}
+                    or (
+                        normalized.mode == "P"
+                        and "transparency" in normalized.info
+                    )
+                )
+                normalized = normalized.convert("RGBA" if has_alpha else "RGB")
+                normalized.save(output_path, format="PNG", optimize=True)
+            return placeholder_key, output_path, None
+        except (http_requests.RequestException, OSError, ValueError) as exc:
+            return (
+                placeholder_key,
+                None,
+                str(exc).splitlines()[0] or exc.__class__.__name__,
+            )
+
+    downloaded_files = {}
+    failed = []
+    worker_count = min(SLIDES_IMAGE_VALIDATION_WORKERS, len(image_mapping))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(download, key, value, index): key
+            for index, (key, value) in enumerate(
+                image_mapping.items(),
+                start=1,
+            )
+        }
+        for future in as_completed(futures):
+            placeholder_key, output_path, reason = future.result()
+            if output_path is not None:
+                downloaded_files[placeholder_key] = output_path
+            else:
+                failed.append(
+                    {
+                        "placeholder": placeholder_key,
+                        "method": "proxy_download",
+                        "reason": reason or "download failed",
+                    }
+                )
+    cancellation_checkpoint()
+    return downloaded_files, failed
 
 
 def database_url() -> str:
@@ -490,6 +657,7 @@ def upload_chart_images(
         uploaded_file_ids if uploaded_file_ids is not None else []
     )
     for placeholder_key, image_path in chart_files.items():
+        cancellation_checkpoint()
         media = MediaFileUpload(
             str(image_path),
             mimetype="image/png",
@@ -537,6 +705,32 @@ def upload_chart_images(
     return image_mapping, tracked_file_ids
 
 
+def upload_temporary_image_files_safe(
+    drive_service,
+    image_files: dict[str, Path],
+    uploaded_file_ids: list[str],
+) -> tuple[dict[str, str], list[dict]]:
+    uploaded_mapping = {}
+    failed = []
+    for placeholder_key, image_path in image_files.items():
+        try:
+            current_mapping, _ = upload_chart_images(
+                drive_service,
+                {placeholder_key: image_path},
+                uploaded_file_ids=uploaded_file_ids,
+            )
+            uploaded_mapping.update(current_mapping)
+        except Exception as exc:
+            failed.append(
+                {
+                    "placeholder": placeholder_key,
+                    "method": "proxy_upload",
+                    "reason": str(exc).splitlines()[0] or exc.__class__.__name__,
+                }
+            )
+    return uploaded_mapping, failed
+
+
 def delete_temporary_drive_files(drive_service, file_ids: list[str]) -> None:
     for file_id in file_ids:
         try:
@@ -544,6 +738,7 @@ def delete_temporary_drive_files(drive_service, file_ids: list[str]) -> None:
             execute_drive_request_with_retry(
                 delete_request,
                 "delete_temporary_chart",
+                ignore_cancellation=True,
             )
         except Exception as exc:
             print(
@@ -853,6 +1048,7 @@ def apply_competitor_metric_styles(
     batch_size = env_int("SLIDES_TEXT_BATCH_SIZE", 100)
     batch_count = 0
     for index in range(0, len(requests), batch_size):
+        cancellation_checkpoint()
         execute_slides_batch_update(
             slides_service,
             presentation_id,
@@ -943,6 +1139,7 @@ def replace_structured_text_placeholders(
     batch_size = SLIDES_STRUCTURED_TEXT_OCCURRENCES_PER_BATCH
     batch_sizes = []
     for index in range(0, len(operations), batch_size):
+        cancellation_checkpoint()
         operation_batch = operations[index : index + batch_size]
         requests = [request for operation in operation_batch for request in operation]
         batch_sizes.append(len(operation_batch))
@@ -1074,7 +1271,6 @@ def replace_image_placeholders_safe(
     replaced = []
     replaced_object_ids = []
     chunk_size = env_int("SLIDES_IMAGE_BATCH_SIZE", 20)
-    max_image_api_calls = SLIDES_IMAGE_MAX_API_CALLS
 
     object_requests = []
     object_request_meta = []
@@ -1096,10 +1292,6 @@ def replace_image_placeholders_safe(
 
     def execute_image_batch(batch):
         nonlocal image_api_calls
-        if image_api_calls >= max_image_api_calls:
-            raise RuntimeError(
-                f"image API call budget exceeded ({max_image_api_calls})"
-            )
         image_api_calls += 1
         return execute_slides_batch_update(
             slides_service,
@@ -1300,6 +1492,50 @@ def replace_image_placeholders_safe(
         "skipped_non_template": skipped_non_template,
         "object_api_calls": object_api_calls,
         "image_api_calls": image_api_calls,
+    }
+
+
+def merge_image_replacement_audits(
+    primary: dict,
+    proxy: dict,
+    proxy_failures: list[dict] | None = None,
+) -> dict:
+    recovered = set(proxy.get("replaced", []))
+    replaced = set(primary.get("replaced", [])) | recovered
+    failed = [
+        item
+        for item in primary.get("failed", [])
+        if item.get("placeholder") not in recovered
+    ]
+    failed.extend(proxy_failures or [])
+    failed.extend(
+        item
+        for item in proxy.get("failed", [])
+        if item.get("placeholder") not in recovered
+    )
+    unmatched = (
+        set(primary.get("unmatched", []))
+        | set(proxy.get("unmatched", []))
+    ) - recovered
+    return {
+        **primary,
+        "replaced": sorted(replaced),
+        "failed": failed,
+        "unmatched": sorted(unmatched),
+        "skipped_non_template": sorted(
+            set(primary.get("skipped_non_template", []))
+            | set(proxy.get("skipped_non_template", []))
+        ),
+        "object_api_calls": (
+            primary.get("object_api_calls", 0)
+            + proxy.get("object_api_calls", 0)
+        ),
+        "image_api_calls": (
+            primary.get("image_api_calls", 0)
+            + proxy.get("image_api_calls", 0)
+        ),
+        "proxy_replaced": sorted(recovered),
+        "proxy_attempted": proxy.get("attempted", 0),
     }
 
 
@@ -2148,7 +2384,14 @@ def add_evidence_posts(
             ]
         mapping[placeholder(f"{base}_IMAGE")] = clean_text(post.get("image_url"))
         mapping[placeholder(f"{base}_ER")] = fmt_percent(post.get("engagement_rate"))
-        mapping[placeholder(f"{base}_REACH")] = fmt_number(post.get("reach"))
+        reach_value = fmt_number(post.get("reach"))
+        if prefix == "YT" and family == "EVIDENCE":
+            view_value = fmt_number(post.get("views"))
+            mapping[placeholder(f"{base}_REACH")] = view_value
+            mapping[placeholder(f"{base}_VIEW")] = view_value
+            mapping[placeholder(f"YT_{index}_EVIDENCE_VIEW")] = view_value
+        else:
+            mapping[placeholder(f"{base}_REACH")] = reach_value
         mapping[placeholder(f"{base}_LIKES")] = fmt_number(post.get("likes"))
         mapping[placeholder(f"{base}_COMMENTS")] = fmt_number(post.get("comments"))
         mapping[placeholder(f"{base}_ENGAGEMENT")] = fmt_number(
@@ -2160,6 +2403,138 @@ def add_evidence_posts(
         mapping[placeholder(f"{base}_VISITS")] = fmt_number(
             post.get("profile_visits")
         )
+
+
+def evidence_post_counts(payload: dict) -> dict[str, int]:
+    all_content = payload.get("all_content") or {}
+    instagram_posts = [
+        post
+        for post in (all_content.get("instagram") or [])
+        if isinstance(post, dict) and post
+    ]
+    counts = {
+        "IG_EVIDENCE": sum(
+            1 for post in instagram_posts if not is_story_content(post)
+        ),
+        "IG_STORY": sum(
+            1 for post in instagram_posts if is_story_content(post)
+        ),
+    }
+    for platform in ("facebook", "tiktok", "youtube"):
+        prefix = PLATFORM_PREFIXES[platform]
+        counts[f"{prefix}_EVIDENCE"] = sum(
+            1
+            for post in (all_content.get(platform) or [])
+            if isinstance(post, dict) and post
+        )
+    return counts
+
+
+def evidence_slide_pruning_plan(
+    presentation: dict,
+    payload: dict,
+) -> dict:
+    """Identify evidence slides whose numbered content slots are all unused."""
+    post_counts = evidence_post_counts(payload)
+    group_audits = {
+        group: {
+            "post_count": post_count,
+            "template_capacity": 0,
+            "template_slide_count": 0,
+            "kept_slide_count": 0,
+            "deleted_slide_count": 0,
+        }
+        for group, post_count in post_counts.items()
+    }
+    deleted_slide_object_ids = []
+    evidence_slide_count = 0
+
+    for slide in presentation.get("slides", []):
+        placeholders = extract_placeholders_from_presentation({"slides": [slide]})
+        slide_groups: dict[str, set[int]] = {}
+        for placeholder_key in placeholders:
+            match = EVIDENCE_PLACEHOLDER_PATTERN.fullmatch(placeholder_key)
+            if not match:
+                continue
+            group = f"{match.group('prefix')}_{match.group('family')}"
+            if group not in post_counts:
+                continue
+            slide_groups.setdefault(group, set()).add(int(match.group("index")))
+
+        if not slide_groups:
+            continue
+
+        evidence_slide_count += 1
+        for group, slot_indices in slide_groups.items():
+            audit = group_audits[group]
+            audit["template_capacity"] = max(
+                audit["template_capacity"],
+                max(slot_indices),
+            )
+            audit["template_slide_count"] += 1
+
+        should_delete = all(
+            min(slot_indices) > post_counts[group]
+            for group, slot_indices in slide_groups.items()
+        )
+        object_id = slide.get("objectId")
+        if should_delete and object_id:
+            deleted_slide_object_ids.append(object_id)
+            for group in slide_groups:
+                group_audits[group]["deleted_slide_count"] += 1
+        else:
+            for group in slide_groups:
+                group_audits[group]["kept_slide_count"] += 1
+
+    return {
+        "evidence_slide_count": evidence_slide_count,
+        "kept_slide_count": evidence_slide_count - len(deleted_slide_object_ids),
+        "deleted_slide_count": len(deleted_slide_object_ids),
+        "deleted_slide_object_ids": deleted_slide_object_ids,
+        "groups": group_audits,
+    }
+
+
+def delete_unused_evidence_slides(
+    slides_service,
+    presentation_id: str,
+    payload: dict,
+) -> tuple[dict, set[str]]:
+    presentation = (
+        slides_service.presentations()
+        .get(presentationId=presentation_id)
+        .execute()
+    )
+    audit = evidence_slide_pruning_plan(presentation, payload)
+    deleted_ids = set(audit["deleted_slide_object_ids"])
+    active_placeholders = set()
+    for slide in presentation.get("slides", []):
+        if slide.get("objectId") not in deleted_ids:
+            active_placeholders.update(
+                extract_placeholders_from_presentation({"slides": [slide]})
+            )
+
+    requests = [
+        {"deleteObject": {"objectId": object_id}}
+        for object_id in audit["deleted_slide_object_ids"]
+    ]
+    if requests:
+        cancellation_checkpoint()
+        execute_slides_batch_update(
+            slides_service,
+            presentation_id,
+            requests,
+        )
+    audit["request_count"] = len(requests)
+    audit["active_placeholder_count"] = len(active_placeholders)
+    print(
+        "[slides_report] evidencePruning "
+        f"found={audit['evidence_slide_count']} "
+        f"kept={audit['kept_slide_count']} "
+        f"deleted={audit['deleted_slide_count']}",
+        flush=True,
+    )
+    return audit, active_placeholders
 
 
 def add_legacy_instagram_aliases(mapping: dict):
@@ -2456,6 +2831,109 @@ def resolve_report_presentation(
     return presentation_id, True
 
 
+def cleanup_cancelled_presentation(
+    presentation_id: str,
+    report_name: str | None = None,
+) -> dict:
+    presentation_id = str(presentation_id or "").strip()
+    if not presentation_id:
+        return {
+            "success": True,
+            "action": "nothing_to_cleanup",
+        }
+
+    load_dotenv(BASE_DIR / ".env")
+    credentials_path = resolve_project_path(default_credentials())
+    if not credentials_path.exists():
+        return {
+            "success": False,
+            "action": "cleanup_failed",
+            "error_code": "GoogleCredentialsNotFound",
+            "error_message": (
+                f"Google credentials file not found: {credentials_path}"
+            ),
+        }
+    token_path = resolve_project_path(
+        os.getenv("GOOGLE_TOKEN_FILE", "token.json")
+    )
+    oauth_port = int(os.getenv("GOOGLE_OAUTH_PORT", "0"))
+    _slides_service, drive_service = get_google_services(
+        credentials_path,
+        token_path,
+        oauth_port,
+    )
+
+    try:
+        request = drive_service.files().update(
+            fileId=presentation_id,
+            body={"trashed": True},
+            fields="id,name,trashed",
+            supportsAllDrives=True,
+        )
+        response = execute_drive_request_with_retry(
+            request,
+            "trash_cancelled_presentation",
+            ignore_cancellation=True,
+        )
+        return {
+            "success": True,
+            "action": "trashed",
+            "presentation_id": presentation_id,
+            "report_name": response.get("name") or report_name,
+            "trashed": bool(response.get("trashed", True)),
+        }
+    except Exception as trash_error:
+        original_name = str(report_name or "").strip()
+        try:
+            if not original_name:
+                original_name = str(
+                    drive_service.files()
+                    .get(
+                        fileId=presentation_id,
+                        fields="name",
+                        supportsAllDrives=True,
+                    )
+                    .execute()
+                    .get("name")
+                    or "Report presentation"
+                )
+            cancelled_name = (
+                original_name
+                if original_name.startswith("[CANCELED]")
+                else f"[CANCELED] {original_name}"
+            )
+            request = drive_service.files().update(
+                fileId=presentation_id,
+                body={"name": cancelled_name},
+                fields="id,name,trashed",
+                supportsAllDrives=True,
+            )
+            response = execute_drive_request_with_retry(
+                request,
+                "rename_cancelled_presentation",
+                ignore_cancellation=True,
+            )
+            return {
+                "success": True,
+                "action": "renamed",
+                "presentation_id": presentation_id,
+                "report_name": response.get("name") or cancelled_name,
+                "trash_error_code": type(trash_error).__name__,
+            }
+        except Exception as rename_error:
+            return {
+                "success": False,
+                "action": "cleanup_failed",
+                "presentation_id": presentation_id,
+                "error_code": type(rename_error).__name__,
+                "error_message": str(rename_error) or type(rename_error).__name__,
+                "trash_error_code": type(trash_error).__name__,
+                "trash_error_message": (
+                    str(trash_error) or type(trash_error).__name__
+                ),
+            }
+
+
 def replace_text_placeholders_chunked(
     slides_service,
     presentation_id: str,
@@ -2504,6 +2982,7 @@ def replace_text_placeholders_chunked(
 
     batch_sizes = []
     for index in range(0, len(requests), chunk_size):
+        cancellation_checkpoint()
         batch = requests[index : index + chunk_size]
         batch_number = (index // chunk_size) + 1
         batch_sizes.append(len(batch))
@@ -2552,7 +3031,7 @@ def filter_to_template_enabled() -> bool:
     return env_bool("SLIDES_FILTER_TO_TEMPLATE", True)
 
 
-def generate_dashboard_slides_report(
+def _generate_dashboard_slides_report(
     client_id: str,
     period_id: str,
     dry_run: bool = False,
@@ -2562,6 +3041,7 @@ def generate_dashboard_slides_report(
     on_presentation_created: Callable[[dict], None] | None = None,
 ) -> dict:
     profiler = StepProfiler()
+    report_stage("slides_load_data")
     load_dotenv(BASE_DIR / ".env")
     template_value = default_template()
     if not template_value:
@@ -2582,6 +3062,7 @@ def generate_dashboard_slides_report(
         payload["insights"] = list(merged_insights.values())
     profiler.record("load_db_data", start)
 
+    report_stage("slides_build_mapping")
     start = time.perf_counter()
     mapping = build_mapping(payload)
     try:
@@ -2599,6 +3080,7 @@ def generate_dashboard_slides_report(
     )
     profiler.record("build_mapping", start)
 
+    report_stage("slides_auth")
     credentials_path = resolve_project_path(default_credentials())
     if not credentials_path.exists():
         raise FileNotFoundError(f"Google credentials file not found: {credentials_path}")
@@ -2622,9 +3104,14 @@ def generate_dashboard_slides_report(
     template_placeholders = set()
     replacement_placeholders = None
     if dry_run or not fast_mode or filter_to_template:
+        report_stage("slides_template_scan")
         start = time.perf_counter()
         template_placeholders = fetch_presentation_placeholders(slides_service, template_id)
-        replacement_placeholders = template_placeholders if filter_to_template else None
+        replacement_placeholders = (
+            set(template_placeholders)
+            if filter_to_template
+            else None
+        )
         profiler.record(
             "template_scan" if dry_run or not fast_mode else "template_filter_scan",
             start,
@@ -2656,6 +3143,7 @@ def generate_dashboard_slides_report(
             "fallback_values": [],
         }
     if dry_run:
+        report_stage("slides_dry_run_complete")
         result["mapping"] = mapping
         audit = result["audit"]
         result["debug_summary"] = {
@@ -2683,6 +3171,7 @@ def generate_dashboard_slides_report(
         )
     )
 
+    report_stage("slides_copy_template")
     start = time.perf_counter()
     presentation_id, presentation_created = resolve_report_presentation(
         drive_service,
@@ -2700,9 +3189,23 @@ def generate_dashboard_slides_report(
             flush=True,
         )
 
+    report_stage("slides_share")
     start = time.perf_counter()
     permission = share_presentation_as_editor(drive_service, presentation_id)
     profiler.record("share_file", start)
+
+    report_stage("slides_prune_evidence")
+    start = time.perf_counter()
+    evidence_slide_pruning, active_presentation_placeholders = (
+        delete_unused_evidence_slides(
+            slides_service,
+            presentation_id,
+            payload,
+        )
+    )
+    if replacement_placeholders is not None:
+        replacement_placeholders &= active_presentation_placeholders
+    profiler.record("prune_evidence_slides", start)
 
     replace_images = should_replace_images()
     image_mapping = image_placeholder_mapping(mapping) if replace_images else {}
@@ -2713,6 +3216,7 @@ def generate_dashboard_slides_report(
             chart_image_keys &= replacement_placeholders
         image_keys_with_urls.update(chart_image_keys)
 
+    report_stage("slides_format_metrics")
     start = time.perf_counter()
     competitor_style_audit = apply_competitor_metric_styles(
         slides_service,
@@ -2725,6 +3229,7 @@ def generate_dashboard_slides_report(
     # Text is the primary report output. Replace it before image work so an
     # inaccessible CDN image or a Slides image quota issue cannot leave the
     # report full of raw text placeholders.
+    report_stage("slides_replace_text")
     start = time.perf_counter()
     batch_audit = replace_text_placeholders_chunked(
         slides_service,
@@ -2735,6 +3240,7 @@ def generate_dashboard_slides_report(
     )
     profiler.record("replace_text", start)
 
+    report_stage("slides_replace_structured_text")
     start = time.perf_counter()
     structured_text_audit = replace_structured_text_placeholders(
         slides_service,
@@ -2753,7 +3259,8 @@ def generate_dashboard_slides_report(
         "skipped_non_template": [],
     }
     if replace_images:
-        temporary_chart_file_ids = []
+        report_stage("slides_render_images")
+        temporary_image_file_ids = []
         try:
             with tempfile.TemporaryDirectory(
                 prefix="mai-slides-charts-",
@@ -2766,12 +3273,13 @@ def generate_dashboard_slides_report(
                 )
                 profiler.record("render_charts", start)
 
+                report_stage("slides_upload_images")
                 start = time.perf_counter()
-                chart_image_mapping, temporary_chart_file_ids = (
+                chart_image_mapping, temporary_image_file_ids = (
                     upload_chart_images(
                         drive_service,
                         chart_files,
-                        uploaded_file_ids=temporary_chart_file_ids,
+                        uploaded_file_ids=temporary_image_file_ids,
                     )
                 )
                 profiler.record("upload_charts", start)
@@ -2780,16 +3288,84 @@ def generate_dashboard_slides_report(
                 image_keys_with_urls.update(chart_image_mapping)
 
                 if image_mapping:
+                    report_stage("slides_replace_images")
                     image_audit = replace_image_placeholders_safe(
                         slides_service,
                         presentation_id,
                         image_mapping,
                         allowed_placeholders=replacement_placeholders,
                     )
+
+                    retryable_image_keys = {
+                        item.get("placeholder")
+                        for item in image_audit.get("failed", [])
+                        if item.get("method") != "preflight"
+                    }
+                    retryable_image_keys.update(image_audit.get("unmatched", []))
+                    retry_mapping = {
+                        key: image_mapping[key]
+                        for key in retryable_image_keys
+                        if key in image_mapping
+                    }
+                    if retry_mapping:
+                        report_stage("slides_proxy_failed_images")
+                        proxy_start = time.perf_counter()
+                        proxy_files, proxy_download_failures = (
+                            download_and_normalize_image_files(
+                                retry_mapping,
+                                Path(chart_temp_dir) / "external-images",
+                            )
+                        )
+                        profiler.record(
+                            "download_proxy_images",
+                            proxy_start,
+                        )
+
+                        report_stage("slides_upload_proxy_images")
+                        proxy_start = time.perf_counter()
+                        proxy_mapping, proxy_upload_failures = (
+                            upload_temporary_image_files_safe(
+                                drive_service,
+                                proxy_files,
+                                temporary_image_file_ids,
+                            )
+                        )
+                        profiler.record(
+                            "upload_proxy_images",
+                            proxy_start,
+                        )
+
+                        proxy_audit = {
+                            "attempted": 0,
+                            "replaced": [],
+                            "failed": [],
+                            "unmatched": [],
+                            "skipped_non_template": [],
+                            "object_api_calls": 0,
+                            "image_api_calls": 0,
+                        }
+                        if proxy_mapping:
+                            report_stage("slides_replace_proxy_images")
+                            proxy_audit = replace_image_placeholders_safe(
+                                slides_service,
+                                presentation_id,
+                                proxy_mapping,
+                                allowed_placeholders=replacement_placeholders,
+                            )
+                        image_audit = merge_image_replacement_audits(
+                            image_audit,
+                            proxy_audit,
+                            [
+                                *proxy_download_failures,
+                                *proxy_upload_failures,
+                            ],
+                        )
+                        image_audit["proxy_downloaded"] = len(proxy_files)
+                        image_audit["proxy_uploaded"] = len(proxy_mapping)
         finally:
             delete_temporary_drive_files(
                 drive_service,
-                temporary_chart_file_ids,
+                temporary_image_file_ids,
             )
     else:
         print("[slides] image_handling: image replacement disabled", flush=True)
@@ -2819,6 +3395,7 @@ def generate_dashboard_slides_report(
         "total_requests": 0,
     }
     if failed_image_keys:
+        report_stage("slides_image_fallback")
         start = time.perf_counter()
         failed_image_mapping = {key: "-" for key in sorted(failed_image_keys)}
         image_fallback_audit = replace_text_placeholders_chunked(
@@ -2842,6 +3419,7 @@ def generate_dashboard_slides_report(
     if fast_mode:
         print("[slides] post_replace_scan: skipped (fast mode)", flush=True)
     else:
+        report_stage("slides_post_replace_scan")
         start = time.perf_counter()
         remaining_placeholders = fetch_presentation_placeholders(slides_service, presentation_id)
         profiler.record("post_replace_scan", start)
@@ -2859,6 +3437,7 @@ def generate_dashboard_slides_report(
             remaining_placeholders=remaining_placeholders,
         )
         log_audit("post_replace", post_replace_audit)
+    report_stage("slides_finalize")
     total_duration = profiler.total()
 
     result.update(
@@ -2868,6 +3447,7 @@ def generate_dashboard_slides_report(
             "report_name": report_name,
             "resumed_existing_presentation": bool(existing_presentation_id),
             "permission": permission,
+            "evidence_slide_pruning": evidence_slide_pruning,
             "images_replaced": bool(image_audit.get("replaced")),
             "image_replacement": image_audit,
             "competitor_metric_styles": competitor_style_audit,
@@ -2883,3 +3463,32 @@ def generate_dashboard_slides_report(
         }
     )
     return result
+
+
+def generate_dashboard_slides_report(
+    client_id: str,
+    period_id: str,
+    dry_run: bool = False,
+    insight_overrides: list[dict] | None = None,
+    existing_presentation_id: str | None = None,
+    existing_report_name: str | None = None,
+    on_presentation_created: Callable[[dict], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_stage: Callable[[str], None] | None = None,
+) -> dict:
+    cancel_token = _REPORT_CANCEL_CHECK.set(should_cancel)
+    stage_token = _REPORT_STAGE_CALLBACK.set(on_stage)
+    try:
+        cancellation_checkpoint()
+        return _generate_dashboard_slides_report(
+            client_id=client_id,
+            period_id=period_id,
+            dry_run=dry_run,
+            insight_overrides=insight_overrides,
+            existing_presentation_id=existing_presentation_id,
+            existing_report_name=existing_report_name,
+            on_presentation_created=on_presentation_created,
+        )
+    finally:
+        _REPORT_STAGE_CALLBACK.reset(stage_token)
+        _REPORT_CANCEL_CHECK.reset(cancel_token)

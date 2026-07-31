@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dashboard import main
+from dashboard.repositories.report_data_lock import ReportDataLockedError
 from dashboard.services.report_jobs import (
     ReportQueueUnavailableError,
     ReportTaskAuthenticationError,
@@ -44,6 +45,28 @@ class ReportJobApiTests(unittest.TestCase):
             "period-1",
             dry_run=False,
         )
+
+    def test_locked_report_data_returns_structured_conflict(self):
+        job = {
+            "id": "job-1",
+            "client_id": "client-1",
+            "report_period_id": "period-1",
+            "status": "running",
+            "period_label_snapshot": "July 2026",
+        }
+        repository = Mock()
+        repository.delete_report_period.side_effect = (
+            ReportDataLockedError(job)
+        )
+
+        with patch.object(main, "repository", repository):
+            response = self.client.delete(
+                "/api/clients/client-1/report-periods/period-1"
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "REPORT_PERIOD_LOCKED")
+        self.assertEqual(response.json()["job"]["id"], "job-1")
 
     def test_unconfigured_queue_returns_service_unavailable(self):
         service = Mock()
