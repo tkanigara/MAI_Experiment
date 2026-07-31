@@ -75,14 +75,14 @@ except ModuleNotFoundError:
 repository = DashboardRepository()
 report_editor = ReportEditorService(repository.engine)
 report_job_repository = ReportJobRepository(repository.engine)
-report_jobs = ReportJobService(
-    report_job_repository,
-    build_report_task_dispatcher(),
-)
 report_job_worker = ReportJobWorker(
     report_job_repository,
     generate_agentic_report,
     lease_seconds=int(os.getenv("REPORT_JOB_LEASE_SECONDS", "900")),
+)
+report_jobs = ReportJobService(
+    report_job_repository,
+    build_report_task_dispatcher(report_job_worker.execute),
 )
 app = FastAPI(title="MAI Social Media Dashboard API")
 

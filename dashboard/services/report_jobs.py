@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue as queue_module
+import threading
+import time
 from typing import Callable, Protocol
 
 try:
@@ -50,6 +53,9 @@ class ReportTaskDispatcher(Protocol):
     def enqueue(self, job: dict) -> str:
         ...
 
+    def activate(self, task_name: str) -> None:
+        ...
+
     def cancel(self, task_name: str) -> bool:
         ...
 
@@ -63,6 +69,9 @@ class UnconfiguredReportTaskDispatcher:
         raise ReportQueueUnavailableError(
             "Report queue is not configured in this environment."
         )
+
+    def activate(self, task_name: str) -> None:
+        return None
 
     def cancel(self, task_name: str) -> bool:
         return False
@@ -156,6 +165,10 @@ class CloudTasksReportTaskDispatcher:
         )
         return str(getattr(response, "name", None) or task_name)
 
+    def activate(self, task_name: str) -> None:
+        # Cloud Tasks is active as soon as create_task succeeds.
+        return None
+
     def cancel(self, task_name: str) -> bool:
         self._require_configured()
         try:
@@ -167,8 +180,110 @@ class CloudTasksReportTaskDispatcher:
         return True
 
 
-def build_report_task_dispatcher() -> ReportTaskDispatcher:
+class LocalReportTaskDispatcher:
+    """Single-process queue for local development only."""
+
+    def __init__(
+        self,
+        execute_job: Callable[[str], dict],
+        *,
+        retry_delay_seconds: float = 1.0,
+    ):
+        self.execute_job = execute_job
+        self.retry_delay_seconds = max(0.0, float(retry_delay_seconds))
+        self._tasks: queue_module.Queue[tuple[str, str]] = queue_module.Queue()
+        self._pending: dict[str, str] = {}
+        self._queued: set[str] = set()
+        self._running: set[str] = set()
+        self._cancelled: set[str] = set()
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="local-report-worker",
+            daemon=True,
+        )
+        self._thread.start()
+
+    @property
+    def configured(self) -> bool:
+        return True
+
+    def enqueue(self, job: dict) -> str:
+        job_id = str(job["id"])
+        task_name = f"local/report-jobs/tasks/{job_id}"
+        with self._lock:
+            self._pending[task_name] = job_id
+        return task_name
+
+    def activate(self, task_name: str) -> None:
+        with self._lock:
+            job_id = self._pending.pop(task_name, None)
+            if not job_id or task_name in self._cancelled:
+                self._cancelled.discard(task_name)
+                return
+            self._queued.add(task_name)
+        self._tasks.put((task_name, job_id))
+
+    def cancel(self, task_name: str) -> bool:
+        with self._lock:
+            if task_name in self._pending:
+                self._pending.pop(task_name, None)
+                self._cancelled.add(task_name)
+                return True
+            if task_name in self._queued:
+                self._cancelled.add(task_name)
+                return True
+            # Running jobs use the database cancel_requested flag and stop at
+            # the next cooperative cancellation checkpoint.
+            return False
+
+    def _run(self) -> None:
+        while True:
+            task_name, job_id = self._tasks.get()
+            try:
+                with self._lock:
+                    self._queued.discard(task_name)
+                    if task_name in self._cancelled:
+                        self._cancelled.discard(task_name)
+                        continue
+                    self._running.add(task_name)
+
+                while True:
+                    try:
+                        self.execute_job(job_id)
+                        break
+                    except RetryableReportJobError:
+                        if self.retry_delay_seconds:
+                            time.sleep(self.retry_delay_seconds)
+                    except Exception as exc:
+                        print(
+                            "[local_report_queue] worker failed "
+                            f"job_id={job_id} error={type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                        break
+            finally:
+                with self._lock:
+                    self._running.discard(task_name)
+                    self._cancelled.discard(task_name)
+                self._tasks.task_done()
+
+
+def build_report_task_dispatcher(
+    execute_job: Callable[[str], dict] | None = None,
+) -> ReportTaskDispatcher:
     backend = os.getenv("REPORT_QUEUE_BACKEND", "").strip().lower()
+    if backend in {"local", "in_process", "in-process"}:
+        if execute_job is None:
+            raise ReportQueueUnavailableError(
+                "Local report queue requires a report worker."
+            )
+        return LocalReportTaskDispatcher(
+            execute_job,
+            retry_delay_seconds=float(
+                os.getenv("REPORT_LOCAL_RETRY_DELAY_SECONDS", "1")
+            ),
+        )
     if backend not in {"cloud_tasks", "cloud-tasks"}:
         return UnconfiguredReportTaskDispatcher()
     return CloudTasksReportTaskDispatcher(
@@ -287,7 +402,27 @@ class ReportJobService:
             raise ReportTaskDispatchError(
                 "Failed to enqueue report generation."
             ) from exc
-        return self.repository.set_cloud_task_name(str(job["id"]), task_name)
+        try:
+            queued_job = self.repository.set_cloud_task_name(
+                str(job["id"]),
+                task_name,
+            )
+        except Exception:
+            self.dispatcher.cancel(task_name)
+            raise
+        try:
+            self.dispatcher.activate(task_name)
+        except Exception as exc:
+            self.repository.fail_job(
+                str(job["id"]),
+                "Failed to start report generation.",
+                error_code="QUEUE_ACTIVATION_FAILED",
+            )
+            self.dispatcher.cancel(task_name)
+            raise ReportTaskDispatchError(
+                "Failed to start report generation."
+            ) from exc
+        return queued_job
 
     def get_job(self, job_id: str) -> dict:
         return self.repository.get_job(job_id)

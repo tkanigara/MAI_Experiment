@@ -3,7 +3,7 @@ data/
 *.pyc
 __pycache__/
 venv/
-credentials.json
+credentials*.json
 token.json
 token*.json
 *.backup*.json

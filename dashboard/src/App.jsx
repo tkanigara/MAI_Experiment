@@ -4,6 +4,7 @@ import AddReportModal from "./components/AddReportModal";
 import DeleteClientModal from "./components/DeleteClientModal";
 import DeleteReportMonthModal from "./components/DeleteReportMonthModal";
 import EditKpiModal from "./components/EditKpiModal";
+import GenerateReportModal from "./components/GenerateReportModal";
 import Header from "./components/Header";
 import { api } from "./lib/api";
 import { clientSlug, platformFlags } from "./lib/format";
@@ -32,6 +33,7 @@ export default function App() {
   const [reportMonths, setReportMonths] = useState([]);
   const [platformData, setPlatformData] = useState({});
   const [modal, setModal] = useState(null);
+  const [generateReportTarget, setGenerateReportTarget] = useState(null);
   const [toast, setToast] = useState("");
   const [editKpi, setEditKpi] = useState(null);
   const [editClient, setEditClient] = useState(null);
@@ -281,7 +283,7 @@ export default function App() {
     showToast(`${month.label} report data deleted.`);
   }
 
-  async function generateSlidesReport(month) {
+  function requestSlidesReportGeneration(month) {
     if (!selectedClient || !month?.id) return;
     const activeJob = reportJobs.find(
       (job) => (
@@ -293,7 +295,21 @@ export default function App() {
       setFocusedReportJobId(activeJob.id);
       return;
     }
+    setGenerateReportTarget(month);
+  }
 
+  async function generateSlidesReport(month) {
+    if (!selectedClient || !month?.id) return false;
+    const activeJob = reportJobs.find(
+      (job) => (
+        String(job.report_period_id) === String(month.id)
+        && isActiveReportJob(job)
+      ),
+    );
+    if (activeJob) {
+      setFocusedReportJobId(activeJob.id);
+      return true;
+    }
     setReportJobActionId(`create:${month.id}`);
     try {
       const job = await api("/api/report-jobs", {
@@ -306,6 +322,7 @@ export default function App() {
       mergeReportJobs([job]);
       setFocusedReportJobId(job.id);
       setReportElapsed(0);
+      return true;
     } catch (err) {
       const jobs = await loadClientReportJobs(selectedClient).catch(() => []);
       const activeJob = jobs.find(
@@ -314,11 +331,21 @@ export default function App() {
           && isActiveReportJob(job)
         ),
       );
-      if (activeJob) setFocusedReportJobId(activeJob.id);
+      if (activeJob) {
+        setFocusedReportJobId(activeJob.id);
+        return true;
+      }
       showToast(err.message || "Failed to add report to queue.");
+      return false;
     } finally {
       setReportJobActionId("");
     }
+  }
+
+  async function confirmSlidesReportGeneration() {
+    if (!generateReportTarget) return;
+    const wasQueued = await generateSlidesReport(generateReportTarget);
+    if (wasQueued) setGenerateReportTarget(null);
   }
 
   async function cancelReportJob(job) {
@@ -527,7 +554,7 @@ export default function App() {
         onOpenKpiTargets={() => setModal("add-report-kpi")}
         onDeleteClient={setDeleteTarget}
         onDeleteReportMonth={setDeleteReportMonthTarget}
-        onGenerateReport={generateSlidesReport}
+        onGenerateReport={requestSlidesReportGeneration}
         activeReportPeriodIds={activeReportPeriodIds}
         reportJobActionId={reportJobActionId}
         onOpenReportJobs={() => navigate(
@@ -547,7 +574,7 @@ export default function App() {
         onNavigate={navigate}
         onOpenPlatform={(path) => navigate(`/clients/${path}`)}
         onOpenAddReport={() => setModal("add-report-csv")}
-        onGenerateReport={generateSlidesReport}
+        onGenerateReport={requestSlidesReportGeneration}
         isGeneratingReport={
           activeReportPeriodIds.has(String(currentMonth.id))
           || reportJobActionId === `create:${currentMonth.id}`
@@ -714,6 +741,23 @@ export default function App() {
             deleteReportMonth(deleteReportMonthTarget).catch((err) => {
               setIsDeletingReportMonth(false);
               setError(err.message);
+            });
+          }}
+        />
+      )}
+      {generateReportTarget && selectedClient && (
+        <GenerateReportModal
+          client={selectedClient}
+          month={generateReportTarget}
+          platforms={platformFlags(selectedClient)}
+          isSubmitting={
+            reportJobActionId === `create:${generateReportTarget.id}`
+          }
+          onClose={() => setGenerateReportTarget(null)}
+          onConfirm={() => {
+            confirmSlidesReportGeneration().catch((err) => {
+              setReportJobActionId("");
+              showToast(err.message || "Failed to add report to queue.");
             });
           }}
         />
