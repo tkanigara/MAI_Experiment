@@ -3,10 +3,13 @@ from __future__ import annotations
 import unittest
 from datetime import date, datetime
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 import sys
 import tempfile
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -15,10 +18,16 @@ from dashboard.slides_report import (
     COMPETITOR_HIGH_COLOR,
     COMPETITOR_LOW_COLOR,
     SLIDES_IMAGE_REPLACE_METHOD,
+    add_evidence_posts,
     build_mapping,
     competitor_metric_style_mapping,
+    delete_unused_evidence_slides,
+    download_and_normalize_image_files,
+    evidence_slide_pruning_plan,
     image_placeholder_priority,
     is_image_placeholder_key,
+    merge_image_replacement_audits,
+    replace_image_placeholders_safe,
     resolve_report_presentation,
     replace_text_placeholders_chunked,
     upload_chart_images,
@@ -41,6 +50,28 @@ class FakeSlidesService:
 
 
 class SlidesReportMappingTests(unittest.TestCase):
+    @staticmethod
+    def evidence_slide(object_id: str, *placeholder_keys: str) -> dict:
+        return {
+            "objectId": object_id,
+            "pageElements": [
+                {
+                    "objectId": f"{object_id}-shape",
+                    "shape": {
+                        "text": {
+                            "textElements": [
+                                {
+                                    "textRun": {
+                                        "content": "\n".join(placeholder_keys)
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                }
+            ],
+        }
+
     @patch("dashboard.slides_report.copy_template")
     def test_existing_presentation_is_resumed_without_copy(self, copy_template):
         callback = Mock()
@@ -209,6 +240,120 @@ class SlidesReportMappingTests(unittest.TestCase):
         self.assertEqual(audit["skipped_image_placeholders"], [chart_key])
         self.assertEqual(len(slides_service.batches), 1)
 
+    @patch("dashboard.slides_report.execute_slides_batch_update")
+    @patch("dashboard.slides_report.validate_image_urls")
+    def test_all_images_are_processed_beyond_previous_twenty_call_budget(
+        self,
+        validate_urls,
+        batch_update,
+    ):
+        image_mapping = {
+            f"{{{{FB_EVIDENCE_{index}_IMAGE}}}}": (
+                f"https://example.com/{index}.jpg"
+            )
+            for index in range(1, 46)
+        }
+        validate_urls.return_value = {
+            url: (True, "ok")
+            for url in image_mapping.values()
+        }
+        presentation = {
+            "slides": [
+                {
+                    "objectId": "evidence",
+                    "pageElements": [
+                        {
+                            "objectId": f"image-{index}",
+                            "title": placeholder_key,
+                            "image": {},
+                        }
+                        for index, placeholder_key in enumerate(
+                            image_mapping,
+                            start=1,
+                        )
+                    ],
+                }
+            ]
+        }
+        slides_service = Mock()
+        (
+            slides_service.presentations.return_value
+            .get.return_value.execute.return_value
+        ) = presentation
+        batch_update.return_value = {"replies": []}
+
+        audit = replace_image_placeholders_safe(
+            slides_service,
+            "presentation-id",
+            image_mapping,
+        )
+
+        self.assertEqual(len(audit["replaced"]), 45)
+        self.assertEqual(audit["failed"], [])
+        self.assertEqual(audit["image_api_calls"], 3)
+        self.assertEqual(batch_update.call_count, 3)
+
+    @patch("dashboard.slides_report.http_requests.get")
+    def test_proxy_download_normalizes_accessible_image_to_png(self, get):
+        source = BytesIO()
+        Image.new("RGB", (32, 24), (10, 20, 30)).save(
+            source,
+            format="WEBP",
+        )
+        response = MagicMock()
+        response.status_code = 200
+        response.iter_content.return_value = [source.getvalue()]
+        response.__enter__.return_value = response
+        get.return_value = response
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            files, failed = download_and_normalize_image_files(
+                {"{{IG_POST_COMP_1_IMAGE}}": "https://example.com/image.webp"},
+                Path(temp_dir),
+            )
+            output_path = files["{{IG_POST_COMP_1_IMAGE}}"]
+            with Image.open(output_path) as normalized:
+                self.assertEqual(normalized.format, "PNG")
+                self.assertEqual(normalized.size, (32, 24))
+
+        self.assertEqual(failed, [])
+
+    def test_proxy_success_removes_original_image_failure_from_audit(self):
+        merged = merge_image_replacement_audits(
+            {
+                "attempted": 2,
+                "replaced": ["{{IMAGE_OK}}"],
+                "failed": [
+                    {
+                        "placeholder": "{{IMAGE_PROXY}}",
+                        "method": "replaceImage",
+                        "reason": "Google could not retrieve the image",
+                    }
+                ],
+                "unmatched": [],
+                "skipped_non_template": [],
+                "object_api_calls": 1,
+                "image_api_calls": 1,
+            },
+            {
+                "attempted": 1,
+                "replaced": ["{{IMAGE_PROXY}}"],
+                "failed": [],
+                "unmatched": [],
+                "skipped_non_template": [],
+                "object_api_calls": 1,
+                "image_api_calls": 1,
+            },
+        )
+
+        self.assertEqual(
+            merged["replaced"],
+            ["{{IMAGE_OK}}", "{{IMAGE_PROXY}}"],
+        )
+        self.assertEqual(merged["failed"], [])
+        self.assertEqual(merged["proxy_replaced"], ["{{IMAGE_PROXY}}"])
+        self.assertEqual(merged["image_api_calls"], 2)
+
     def test_competitor_metrics_highest_and_lowest_are_colored(self):
         mapping = {
             "{{IG_TOTAL_FOLLOWERS}}": "1,000",
@@ -322,6 +467,136 @@ class SlidesReportMappingTests(unittest.TestCase):
         self.assertNotEqual(
             mapping["{{IG_EVIDENCE_1_IMAGE}}"],
             mapping["{{IG_STORY_1_IMAGE}}"],
+        )
+
+    def test_youtube_evidence_uses_view_value_and_new_placeholder_name(self):
+        mapping = {}
+
+        add_evidence_posts(
+            mapping,
+            "YT",
+            [
+                {
+                    "caption": "YouTube video",
+                    "views": 1250,
+                    "reach": 800,
+                }
+            ],
+            limit=2,
+        )
+
+        self.assertEqual(mapping["{{YT_1_EVIDENCE_VIEW}}"], "1,250")
+        self.assertEqual(mapping["{{YT_EVIDENCE_1_VIEW}}"], "1,250")
+        self.assertEqual(mapping["{{YT_EVIDENCE_1_REACH}}"], "1,250")
+        self.assertEqual(mapping["{{YT_EVIDENCE_2_VIEW}}"], "-")
+        self.assertEqual(mapping["{{YT_2_EVIDENCE_VIEW}}"], "-")
+
+    def test_unused_evidence_slides_are_planned_from_template_placeholders(self):
+        presentation = {
+            "slides": [
+                self.evidence_slide(
+                    "ig-feed-1",
+                    "{{IG_EVIDENCE_1_IMAGE}}",
+                    "{{IG_EVIDENCE_4_TITLE}}",
+                ),
+                self.evidence_slide(
+                    "ig-feed-2",
+                    "{{IG_EVIDENCE_5_IMAGE}}",
+                    "{{IG_EVIDENCE_8_TITLE}}",
+                ),
+                self.evidence_slide(
+                    "ig-feed-3",
+                    "{{IG_EVIDENCE_9_IMAGE}}",
+                    "{{IG_EVIDENCE_12_TITLE}}",
+                ),
+                self.evidence_slide(
+                    "ig-feed-4",
+                    "{{IG_EVIDENCE_13_IMAGE}}",
+                    "{{IG_EVIDENCE_16_TITLE}}",
+                ),
+                self.evidence_slide(
+                    "ig-story-1",
+                    "{{IG_STORY_1_IMAGE}}",
+                    "{{IG_STORY_4_VIEWS}}",
+                ),
+                self.evidence_slide(
+                    "ig-story-2",
+                    "{{IG_STORY_5_IMAGE}}",
+                    "{{IG_STORY_8_VIEWS}}",
+                ),
+                {
+                    "objectId": "summary",
+                    "pageElements": [],
+                },
+            ]
+        }
+        payload = {
+            "all_content": {
+                "instagram": [
+                    {
+                        "content_type": "reel",
+                        "caption": f"Feed {index}",
+                    }
+                    for index in range(10)
+                ]
+            }
+        }
+
+        plan = evidence_slide_pruning_plan(presentation, payload)
+
+        self.assertEqual(plan["evidence_slide_count"], 6)
+        self.assertEqual(plan["kept_slide_count"], 3)
+        self.assertEqual(
+            plan["deleted_slide_object_ids"],
+            ["ig-feed-4", "ig-story-1", "ig-story-2"],
+        )
+        self.assertEqual(plan["groups"]["IG_EVIDENCE"]["post_count"], 10)
+        self.assertEqual(plan["groups"]["IG_EVIDENCE"]["kept_slide_count"], 3)
+        self.assertEqual(plan["groups"]["IG_STORY"]["post_count"], 0)
+        self.assertEqual(plan["groups"]["IG_STORY"]["kept_slide_count"], 0)
+
+    @patch("dashboard.slides_report.execute_slides_batch_update")
+    def test_unused_evidence_slides_are_deleted_in_one_batch(self, batch_update):
+        presentation = {
+            "slides": [
+                self.evidence_slide(
+                    "fb-evidence-1",
+                    "{{FB_EVIDENCE_1_IMAGE}}",
+                    "{{FB_EVIDENCE_4_TITLE}}",
+                ),
+                self.evidence_slide(
+                    "fb-evidence-2",
+                    "{{FB_EVIDENCE_5_IMAGE}}",
+                    "{{FB_EVIDENCE_8_TITLE}}",
+                ),
+            ]
+        }
+        slides_service = Mock()
+        (
+            slides_service.presentations.return_value
+            .get.return_value.execute.return_value
+        ) = presentation
+
+        audit, active_placeholders = delete_unused_evidence_slides(
+            slides_service,
+            "presentation-id",
+            {
+                "all_content": {
+                    "facebook": [
+                        {"caption": f"Post {index}"}
+                        for index in range(4)
+                    ]
+                }
+            },
+        )
+
+        self.assertEqual(audit["deleted_slide_count"], 1)
+        self.assertIn("{{FB_EVIDENCE_1_IMAGE}}", active_placeholders)
+        self.assertNotIn("{{FB_EVIDENCE_5_IMAGE}}", active_placeholders)
+        batch_update.assert_called_once_with(
+            slides_service,
+            "presentation-id",
+            [{"deleteObject": {"objectId": "fb-evidence-2"}}],
         )
 
 
