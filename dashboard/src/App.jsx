@@ -6,6 +6,7 @@ import DeleteReportMonthModal from "./components/DeleteReportMonthModal";
 import EditKpiModal from "./components/EditKpiModal";
 import GenerateReportModal from "./components/GenerateReportModal";
 import Header from "./components/Header";
+import ReportDataLockedModal from "./components/ReportDataLockedModal";
 import { api } from "./lib/api";
 import { clientSlug, platformFlags } from "./lib/format";
 import ClientDetailPage from "./pages/ClientDetailPage";
@@ -45,6 +46,7 @@ export default function App() {
   const [focusedReportJobId, setFocusedReportJobId] = useState("");
   const [reportJobActionId, setReportJobActionId] = useState("");
   const [reportElapsed, setReportElapsed] = useState(0);
+  const [reportDataLock, setReportDataLock] = useState(null);
   const [error, setError] = useState("");
 
   const industries = useMemo(
@@ -79,6 +81,63 @@ export default function App() {
     .map((job) => job.id)
     .sort()
     .join(",");
+
+  function activeJobForPeriod(periodId) {
+    return reportJobs.find(
+      (job) => (
+        String(job.report_period_id) === String(periodId)
+        && isActiveReportJob(job)
+      ),
+    );
+  }
+
+  function showReportDataLock(job, fallback = {}) {
+    if (job?.id) mergeReportJobs([job]);
+    const clientId = job?.client_id || fallback.client?.id || selectedClient?.id;
+    const lockClient = clients.find(
+      (client) => String(client.id) === String(clientId),
+    ) || fallback.client || selectedClient;
+    const lockMonth = fallback.month || reportMonths.find(
+      (month) => String(month.id) === String(job?.report_period_id),
+    );
+    setReportDataLock({
+      job: job || {},
+      clientId,
+      clientName: job?.client_name_snapshot || lockClient?.client_name,
+      periodLabel: job?.period_label_snapshot || lockMonth?.label,
+    });
+  }
+
+  function handleReportDataLock(errorValue, fallback = {}) {
+    if (errorValue?.code !== "REPORT_PERIOD_LOCKED") return false;
+    showReportDataLock(errorValue.job, fallback);
+    return true;
+  }
+
+  function runWhenPeriodUnlocked(month, action) {
+    const activeJob = activeJobForPeriod(month?.id);
+    if (activeJob) {
+      showReportDataLock(activeJob, { client: selectedClient, month });
+      return false;
+    }
+    action?.();
+    return true;
+  }
+
+  function runWhenClientUnlocked(client, action) {
+    const activeJob = reportJobs.find(
+      (job) => (
+        String(job.client_id) === String(client?.id)
+        && isActiveReportJob(job)
+      ),
+    );
+    if (activeJob) {
+      showReportDataLock(activeJob, { client });
+      return false;
+    }
+    action?.();
+    return true;
+  }
 
   function navigate(path, replace = false) {
     if (window.location.pathname !== path) {
@@ -205,22 +264,31 @@ export default function App() {
   async function saveKpi(payload) {
     if (!selectedClient || !currentPlatform) return;
     const periodDate = new Date(`${currentMonth?.period_start || new Date().toISOString()}`);
-    await api("/api/kpi-targets", {
-      method: "POST",
-      body: JSON.stringify({
-        client_id: selectedClient.id,
-        platform: currentPlatform,
-        metric_name: payload.metric_name,
-        period_year: periodDate.getUTCFullYear(),
-        period_month: periodDate.getUTCMonth() + 1,
-        target_month: payload.target_month,
-        target_year: payload.target_year ?? editKpi?.target_year ?? null,
-        unit: payload.unit,
-      }),
-    });
-    setEditKpi(null);
-    await loadPlatformData(selectedClient);
-    showToast("KPI target updated.");
+    try {
+      await api("/api/kpi-targets", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: selectedClient.id,
+          platform: currentPlatform,
+          metric_name: payload.metric_name,
+          period_year: periodDate.getUTCFullYear(),
+          period_month: periodDate.getUTCMonth() + 1,
+          target_month: payload.target_month,
+          target_year: payload.target_year ?? editKpi?.target_year ?? null,
+          unit: payload.unit,
+        }),
+      });
+      setEditKpi(null);
+      await loadPlatformData(selectedClient);
+      showToast("KPI target updated.");
+      return true;
+    } catch (err) {
+      if (handleReportDataLock(err, {
+        client: selectedClient,
+        month: currentMonth,
+      })) return false;
+      throw err;
+    }
   }
 
   async function saveKpiTargets(targets) {
@@ -236,51 +304,81 @@ export default function App() {
       showToast("No KPI target changes to save.");
       return;
     }
-    await Promise.all(
-      validTargets.map((target) => api("/api/kpi-targets", {
-        method: "POST",
-        body: JSON.stringify({
-          client_id: selectedClient.id,
-          platform: target.platform,
-          metric_name: target.metric_name,
-          period_year: target.period_year,
-          period_month: target.period_month,
-          target_month: target.target_month,
-          target_year: target.target_year,
-          unit: target.unit,
-        }),
-      })),
-    );
-    await loadPlatformData(selectedClient);
-    showToast("KPI targets updated.");
+    try {
+      await Promise.all(
+        validTargets.map((target) => api("/api/kpi-targets", {
+          method: "POST",
+          body: JSON.stringify({
+            client_id: selectedClient.id,
+            platform: target.platform,
+            metric_name: target.metric_name,
+            period_year: target.period_year,
+            period_month: target.period_month,
+            target_month: target.target_month,
+            target_year: target.target_year,
+            unit: target.unit,
+          }),
+        })),
+      );
+      await loadPlatformData(selectedClient);
+      showToast("KPI targets updated.");
+      return true;
+    } catch (err) {
+      if (handleReportDataLock(err, {
+        client: selectedClient,
+        month: currentMonth,
+      })) return false;
+      throw err;
+    }
   }
 
   async function deleteClient(client) {
     if (!client?.id) return;
     setIsDeletingClient(true);
-    await api(`/api/clients/${client.id}`, { method: "DELETE" });
-    await loadClients();
-    if (selectedClient?.id === client.id || currentClient?.id === client.id) {
-      setSelectedClient(null);
-      setProfiles([]);
-      setReportMonths([]);
-      setPlatformData({});
-      navigate("/clients");
+    try {
+      await api(`/api/clients/${client.id}`, { method: "DELETE" });
+      await loadClients();
+      if (selectedClient?.id === client.id || currentClient?.id === client.id) {
+        setSelectedClient(null);
+        setProfiles([]);
+        setReportMonths([]);
+        setPlatformData({});
+        navigate("/clients");
+      }
+      setDeleteTarget(null);
+      showToast("Client deleted.");
+    } catch (err) {
+      if (handleReportDataLock(err, { client })) {
+        setDeleteTarget(null);
+        return;
+      }
+      throw err;
+    } finally {
+      setIsDeletingClient(false);
     }
-    setDeleteTarget(null);
-    setIsDeletingClient(false);
-    showToast("Client deleted.");
   }
 
   async function deleteReportMonth(month) {
     if (!selectedClient?.id || !month?.id) return;
     setIsDeletingReportMonth(true);
-    await api(`/api/clients/${selectedClient.id}/report-periods/${month.id}`, { method: "DELETE" });
-    await loadClient(selectedClient);
-    setPlatformData({});
-    setDeleteReportMonthTarget(null);
-    setIsDeletingReportMonth(false);
-    showToast(`${month.label} report data deleted.`);
+    try {
+      await api(`/api/clients/${selectedClient.id}/report-periods/${month.id}`, { method: "DELETE" });
+      await loadClient(selectedClient);
+      setPlatformData({});
+      setDeleteReportMonthTarget(null);
+      showToast(`${month.label} report data deleted.`);
+    } catch (err) {
+      if (handleReportDataLock(err, {
+        client: selectedClient,
+        month,
+      })) {
+        setDeleteReportMonthTarget(null);
+        return;
+      }
+      throw err;
+    } finally {
+      setIsDeletingReportMonth(false);
+    }
   }
 
   function requestSlidesReportGeneration(month) {
@@ -514,8 +612,14 @@ export default function App() {
         navigate(`/clients/${clientSlug(client)}`);
       }}
       onOpenAddClient={() => setModal("add-client")}
-      onEditClient={setEditClient}
-      onDeleteClient={setDeleteTarget}
+      onEditClient={(client) => runWhenClientUnlocked(
+        client,
+        () => setEditClient(client),
+      )}
+      onDeleteClient={(client) => runWhenClientUnlocked(
+        client,
+        () => setDeleteTarget(client),
+      )}
     />
   );
 
@@ -552,8 +656,14 @@ export default function App() {
         onOpenMonth={(path) => navigate(`/clients/${path}`)}
         onOpenAddReport={() => setModal("add-report-csv")}
         onOpenKpiTargets={() => setModal("add-report-kpi")}
-        onDeleteClient={setDeleteTarget}
-        onDeleteReportMonth={setDeleteReportMonthTarget}
+        onDeleteClient={(client) => runWhenClientUnlocked(
+          client,
+          () => setDeleteTarget(client),
+        )}
+        onDeleteReportMonth={(month) => runWhenPeriodUnlocked(
+          month,
+          () => setDeleteReportMonthTarget(month),
+        )}
         onGenerateReport={requestSlidesReportGeneration}
         activeReportPeriodIds={activeReportPeriodIds}
         reportJobActionId={reportJobActionId}
@@ -573,13 +683,19 @@ export default function App() {
         platformData={platformData}
         onNavigate={navigate}
         onOpenPlatform={(path) => navigate(`/clients/${path}`)}
-        onOpenAddReport={() => setModal("add-report-csv")}
+        onOpenAddReport={() => runWhenPeriodUnlocked(
+          currentMonth,
+          () => setModal("add-report-csv"),
+        )}
         onGenerateReport={requestSlidesReportGeneration}
         isGeneratingReport={
           activeReportPeriodIds.has(String(currentMonth.id))
           || reportJobActionId === `create:${currentMonth.id}`
         }
-        onOpenEditor={() => navigate(`/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/edit`)}
+        onOpenEditor={() => runWhenPeriodUnlocked(
+          currentMonth,
+          () => navigate(`/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/edit`),
+        )}
       />
     );
   }
@@ -621,6 +737,10 @@ export default function App() {
           await loadPlatformData(selectedClient);
           showToast("Report data updated.");
         }}
+        onReportLocked={(err) => handleReportDataLock(err, {
+          client: selectedClient,
+          month: currentMonth,
+        })}
       />
     );
   }
@@ -640,9 +760,18 @@ export default function App() {
         platform={currentPlatform}
         data={platformData[currentPlatform]}
         onNavigate={navigate}
-        onOpenReportKpi={() => setModal("add-report-kpi")}
-        onEditKpi={setEditKpi}
-        onOpenEditor={() => navigate(`/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/edit`)}
+        onOpenReportKpi={() => runWhenPeriodUnlocked(
+          currentMonth,
+          () => setModal("add-report-kpi"),
+        )}
+        onEditKpi={(row) => runWhenPeriodUnlocked(
+          currentMonth,
+          () => setEditKpi(row),
+        )}
+        onOpenEditor={() => runWhenPeriodUnlocked(
+          currentMonth,
+          () => navigate(`/clients/${clientSlug(selectedClient)}/${currentMonth.slug}/edit`),
+        )}
       />
     );
   }
@@ -677,6 +806,9 @@ export default function App() {
           client={editClient}
           industries={industries}
           onClose={() => setEditClient(null)}
+          onReportLocked={(err) => handleReportDataLock(err, {
+            client: editClient,
+          })}
           onAddClient={async (client) => {
             const savedClient = await api(`/api/clients/${editClient.id}`, {
               method: "POST",
@@ -703,6 +835,10 @@ export default function App() {
           activePlatform={modal === "add-report-kpi" ? currentPlatform : null}
           initialTab={modal === "add-report-kpi" ? "kpi" : "csv"}
           onSaveKpiTargets={saveKpiTargets}
+          onReportLocked={(err) => handleReportDataLock(err, {
+            client: selectedClient,
+            month: currentMonth,
+          })}
           onImported={async () => {
             await loadClients();
             await loadClient(selectedClient);
@@ -717,6 +853,10 @@ export default function App() {
           row={editKpi}
           onClose={() => setEditKpi(null)}
           onSave={saveKpi}
+          onReportLocked={(err) => handleReportDataLock(err, {
+            client: selectedClient,
+            month: currentMonth,
+          })}
         />
       )}
       {deleteTarget && (
@@ -759,6 +899,32 @@ export default function App() {
               setReportJobActionId("");
               showToast(err.message || "Failed to add report to queue.");
             });
+          }}
+        />
+      )}
+      {reportDataLock && (
+        <ReportDataLockedModal
+          clientName={reportDataLock.clientName}
+          periodLabel={reportDataLock.periodLabel}
+          job={reportDataLock.job}
+          onClose={() => setReportDataLock(null)}
+          onOpenHistory={() => {
+            const lockClient = clients.find(
+              (client) => (
+                String(client.id) === String(reportDataLock.clientId)
+              ),
+            );
+            setReportDataLock(null);
+            setModal(null);
+            setEditClient(null);
+            setEditKpi(null);
+            setDeleteTarget(null);
+            setDeleteReportMonthTarget(null);
+            navigate(
+              lockClient
+                ? `/clients/${clientSlug(lockClient)}/report-jobs`
+                : "/report-jobs",
+            );
           }}
         />
       )}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from threading import Event
@@ -153,6 +154,9 @@ class ReportJobServiceTests(unittest.TestCase):
             "job-1",
             reason="Clicked by mistake",
         )
+        deadline = time.monotonic() + 1
+        while not dispatcher.cancelled and time.monotonic() < deadline:
+            time.sleep(0.01)
 
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(
@@ -164,6 +168,37 @@ class ReportJobServiceTests(unittest.TestCase):
             cancelled_by=None,
             reason="Clicked by mistake",
         )
+
+    def test_cancel_does_not_wait_for_slow_task_deletion(self):
+        repository = Mock()
+        repository.get_job.return_value = {
+            "id": "job-1",
+            "status": "running",
+            "cloud_task_name": "queues/report-jobs/tasks/job-1",
+        }
+        repository.request_cancel.return_value = {
+            "id": "job-1",
+            "status": "cancel_requested",
+        }
+        release_delete = Event()
+        dispatcher = FakeDispatcher()
+
+        def slow_cancel(task_name):
+            release_delete.wait(2)
+            dispatcher.cancelled.append(task_name)
+            return True
+
+        dispatcher.cancel = slow_cancel
+        service = ReportJobService(repository, dispatcher)
+
+        started_at = time.monotonic()
+        result = service.cancel_job("job-1")
+        elapsed = time.monotonic() - started_at
+        release_delete.set()
+
+        self.assertEqual(result["status"], "cancel_requested")
+        self.assertLess(elapsed, 0.5)
+        repository.request_cancel.assert_called_once()
 
     def test_completed_job_cannot_be_retried(self):
         repository = Mock()

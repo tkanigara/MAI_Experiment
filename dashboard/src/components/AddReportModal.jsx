@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { CSV_TYPES, KPI_METRICS, REPORT_MONTHS } from "../lib/constants";
+import { api } from "../lib/api";
 import { formatNumber, platformFlags, prettyMetric } from "../lib/format";
 import { PlatformBadge, StatusBadge } from "./Badges";
 import Modal, { ModalHeader } from "./Modal";
@@ -14,6 +15,7 @@ export default function AddReportModal({
   onSaveKpiTargets,
   activePlatform,
   initialTab = "csv",
+  onReportLocked,
 }) {
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().toLocaleString("en-US", { month: "long" });
@@ -71,16 +73,14 @@ export default function AddReportModal({
       if (files[item.key]) formData.append(item.key, files[item.key]);
     });
     try {
-      const response = await fetch("/api/import/csv", {
+      const data = await api("/api/import/csv", {
         method: "POST",
         body: formData,
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Import failed");
       setImportResult(data);
       await onImported?.(data);
     } catch (err) {
-      setError(err.message);
+      if (!onReportLocked?.(err)) setError(err.message);
     } finally {
       setIsImporting(false);
     }
@@ -116,10 +116,11 @@ export default function AddReportModal({
       });
     });
     try {
-      await onSaveKpiTargets?.(targets);
+      const saved = await onSaveKpiTargets?.(targets);
+      if (saved === false) return;
       onClose();
     } catch (err) {
-      setError(err.message);
+      if (!onReportLocked?.(err)) setError(err.message);
     } finally {
       setIsSavingKpi(false);
     }

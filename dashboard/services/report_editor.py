@@ -20,6 +20,7 @@ from dashboard.repositories.dashboard_repository import (
     PLATFORM_TABLES,
     json_safe,
 )
+from dashboard.repositories.report_data_lock import lock_report_period
 from dashboard.slides_report import SlidesReportRepository, build_mapping
 
 
@@ -1101,9 +1102,18 @@ class ReportEditorService:
             raise ValueError(
                 f"Unknown or non-editable fields: {', '.join(map(str, unknown))}"
             )
+        target_period_ids = {str(period_id)}
+        for change in changes:
+            field = section_fields[change["id"]]
+            if field["kind"] != "placeholder":
+                target_period_ids.add(
+                    str(field.get("source_period_id") or period_id)
+                )
 
         with self.engine.begin() as conn:
             self._context(conn, client_id, period_id)
+            for target_period_id in sorted(target_period_ids):
+                lock_report_period(conn, client_id, target_period_id)
             expected_version = int(payload.get("version") or 0)
             current_version = self._current_section_version(
                 conn,
@@ -1988,6 +1998,35 @@ class ReportEditorService:
         actor = clean_actor(actor_value)
         with self.engine.begin() as conn:
             self._context(conn, client_id, period_id)
+            candidate = conn.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM report_overrides
+                    WHERE id = :override_id
+                      AND client_id = :client_id
+                      AND report_period_id = :period_id
+                      AND is_active = TRUE
+                    """
+                ),
+                {
+                    "override_id": override_id,
+                    "client_id": client_id,
+                    "period_id": period_id,
+                },
+            ).mappings().first()
+            if not candidate:
+                raise ValueError("Active override not found.")
+            target_period_ids = {str(period_id)}
+            if candidate["scope"] in {"field", "derived"}:
+                target_period_ids.add(
+                    str(
+                        candidate.get("source_report_period_id")
+                        or period_id
+                    )
+                )
+            for target_period_id in sorted(target_period_ids):
+                lock_report_period(conn, client_id, target_period_id)
             override = conn.execute(
                 text(
                     """
@@ -2153,6 +2192,9 @@ class ReportEditorService:
         bucket_name = str(os.getenv("GCS_REPORT_ASSET_BUCKET") or "").strip()
         if not bucket_name:
             raise RuntimeError("GCS_REPORT_ASSET_BUCKET is not configured.")
+        with self.engine.begin() as conn:
+            self._context(conn, client_id, period_id)
+            lock_report_period(conn, client_id, period_id)
         safe_name = re.sub(
             r"[^A-Za-z0-9._-]+",
             "-",
@@ -2169,36 +2211,44 @@ class ReportEditorService:
         public_url = (
             f"https://storage.googleapis.com/{bucket_name}/{object_name}"
         )
-        with self.engine.begin() as conn:
-            self._context(conn, client_id, period_id)
-            row = conn.execute(
-                text(
-                    """
-                    INSERT INTO report_assets (
-                        client_id, report_period_id, platform, object_name,
-                        original_name, content_type, size_bytes, public_url,
-                        uploaded_by
-                    )
-                    VALUES (
-                        :client_id, :period_id, :platform, :object_name,
-                        :original_name, :content_type, :size_bytes,
-                        :public_url, :actor
-                    )
-                    RETURNING *
-                    """
-                ),
-                {
-                    "client_id": client_id,
-                    "period_id": period_id,
-                    "platform": platform,
-                    "object_name": object_name,
-                    "original_name": filename,
-                    "content_type": guessed_type,
-                    "size_bytes": len(content),
-                    "public_url": public_url,
-                    "actor": actor,
-                },
-            ).mappings().one()
+        try:
+            with self.engine.begin() as conn:
+                self._context(conn, client_id, period_id)
+                lock_report_period(conn, client_id, period_id)
+                row = conn.execute(
+                    text(
+                        """
+                        INSERT INTO report_assets (
+                            client_id, report_period_id, platform, object_name,
+                            original_name, content_type, size_bytes, public_url,
+                            uploaded_by
+                        )
+                        VALUES (
+                            :client_id, :period_id, :platform, :object_name,
+                            :original_name, :content_type, :size_bytes,
+                            :public_url, :actor
+                        )
+                        RETURNING *
+                        """
+                    ),
+                    {
+                        "client_id": client_id,
+                        "period_id": period_id,
+                        "platform": platform,
+                        "object_name": object_name,
+                        "original_name": filename,
+                        "content_type": guessed_type,
+                        "size_bytes": len(content),
+                        "public_url": public_url,
+                        "actor": actor,
+                    },
+                ).mappings().one()
+        except Exception:
+            try:
+                blob.delete()
+            except Exception:
+                pass
+            raise
         return json_safe(dict(row))
 
 

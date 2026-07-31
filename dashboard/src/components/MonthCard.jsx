@@ -33,7 +33,7 @@ export default function MonthCard({
         <button
           className="danger-link"
           type="button"
-          disabled={isGenerating || isCreating}
+          disabled={isCreating}
           onClick={() => onDelete?.(month)}
         >
           Delete

@@ -266,6 +266,7 @@ export default function ReportDataEditorPage({
   month,
   onNavigate,
   onSaved,
+  onReportLocked,
 }) {
   const [editor, setEditor] = useState(null);
   const [section, setSection] = useState("general");
@@ -341,7 +342,7 @@ export default function ReportDataEditorPage({
       await loadEditor();
       await onSaved?.();
     } catch (err) {
-      setError(err.message);
+      if (!onReportLocked?.(err)) setError(err.message);
       if (err.message.toLowerCase().includes("changed after")) {
         await loadEditor();
       }
@@ -370,7 +371,7 @@ export default function ReportDataEditorPage({
       await loadEditor();
       await onSaved?.();
     } catch (err) {
-      setError(err.message);
+      if (!onReportLocked?.(err)) setError(err.message);
     } finally {
       setRestoring("");
     }
@@ -387,7 +388,7 @@ export default function ReportDataEditorPage({
       const asset = await api(`${basePath}/assets`, { method: "POST", body });
       updateDraft(field.id, asset.public_url);
     } catch (err) {
-      setError(err.message);
+      if (!onReportLocked?.(err)) setError(err.message);
     } finally {
       setUploading("");
     }

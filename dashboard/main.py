@@ -24,6 +24,7 @@ try:
         ReportJobRepository,
         ReportJobTransitionError,
     )
+    from dashboard.repositories.report_data_lock import ReportDataLockedError
     from dashboard.schemas import require_fields
     from dashboard.services.csv_import import import_report_csv
     from dashboard.services.kpi_service import upsert_kpi_target
@@ -54,6 +55,7 @@ except ModuleNotFoundError:
         ReportJobRepository,
         ReportJobTransitionError,
     )
+    from repositories.report_data_lock import ReportDataLockedError
     from schemas import require_fields
     from services.csv_import import import_report_csv
     from services.kpi_service import upsert_kpi_target
@@ -97,6 +99,18 @@ def validation_exception_handler(_request: Request, exc: RequestValidationError)
     return JSONResponse(content={"error": str(exc)}, status_code=422)
 
 
+@app.exception_handler(ReportDataLockedError)
+def report_data_locked_handler(_request: Request, exc: ReportDataLockedError):
+    return JSONResponse(
+        content={
+            "error": str(exc),
+            "code": exc.code,
+            "job": json_safe(exc.job),
+        },
+        status_code=409,
+    )
+
+
 def json_response(payload, status_code: int = 200) -> JSONResponse:
     return JSONResponse(content=json_safe(payload), status_code=status_code)
 
@@ -132,6 +146,8 @@ def create_client(payload: dict):
 def update_client(client_id: str, payload: dict):
     try:
         return json_response(repository.update_client(client_id, payload))
+    except ReportDataLockedError:
+        raise
     except ValueError as exc:
         raise bad_request(exc)
     except Exception as exc:
@@ -147,6 +163,8 @@ def delete_client_missing_id():
 def delete_client(client_id: str):
     try:
         return json_response(repository.delete_client(client_id))
+    except ReportDataLockedError:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
@@ -157,6 +175,8 @@ def delete_client(client_id: str):
 def delete_report_period(client_id: str, period_id: str):
     try:
         return json_response(repository.delete_report_period(client_id, period_id))
+    except ReportDataLockedError:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
@@ -207,6 +227,8 @@ def import_csv(
     try:
         payload = {"client_id": client_id, "month_slug": month_slug}
         return json_response(import_report_csv(repository, payload, files), status_code=201)
+    except ReportDataLockedError:
+        raise
     except ValueError as exc:
         raise bad_request(exc)
     except Exception as exc:
@@ -277,6 +299,8 @@ def update_report_editor_section(
                 payload,
             )
         )
+    except ReportDataLockedError:
+        raise
     except RuntimeError as exc:
         if str(exc).startswith("VERSION_CONFLICT:"):
             raise HTTPException(status_code=409, detail=str(exc).split(":", 1)[1].strip())
@@ -310,6 +334,8 @@ def upload_report_asset(
             ),
             status_code=201,
         )
+    except ReportDataLockedError:
+        raise
     except ValueError as exc:
         raise bad_request(exc)
     except RuntimeError as exc:
@@ -339,6 +365,8 @@ def restore_report_override(
                 payload.get("actor"),
             )
         )
+    except ReportDataLockedError:
+        raise
     except ValueError as exc:
         raise bad_request(exc)
     except Exception as exc:

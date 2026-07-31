@@ -3,7 +3,13 @@ import Modal, { ModalHeader } from "./Modal";
 
 const DEFAULT_INDUSTRIES = ["Automotive", "Retail & E-Commerce", "Technology"];
 
-export default function AddClientModal({ client = null, industries = [], onClose, onAddClient }) {
+export default function AddClientModal({
+  client = null,
+  industries = [],
+  onClose,
+  onAddClient,
+  onReportLocked,
+}) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [industryMode, setIndustryMode] = useState(client?.industry || "");
@@ -19,13 +25,17 @@ export default function AddClientModal({ client = null, industries = [], onClose
     setError("");
     const form = new FormData(event.currentTarget);
     const platforms = form.getAll("platforms");
+    if (platforms.length === 0) {
+      setError("Select at least one connected platform.");
+      setIsSaving(false);
+      return;
+    }
     const industry =
       industryMode === "__custom__"
         ? String(form.get("custom_industry") || "").trim()
         : String(form.get("industry") || "").trim();
     try {
       await onAddClient({
-        client_code: String(form.get("client_code") || "").toLowerCase().replace(/\s+/g, "-"),
         client_name: form.get("client_name"),
         industry,
         has_instagram: platforms.includes("instagram"),
@@ -34,7 +44,7 @@ export default function AddClientModal({ client = null, industries = [], onClose
         has_youtube: platforms.includes("youtube"),
       });
     } catch (err) {
-      setError(err.message);
+      if (!onReportLocked?.(err)) setError(err.message);
       setIsSaving(false);
     }
   }
@@ -48,7 +58,6 @@ export default function AddClientModal({ client = null, industries = [], onClose
       />
       <form className="modal-body" onSubmit={handleSubmit}>
         <label>Client Name <input name="client_name" placeholder="e.g. Dunlop Indonesia" defaultValue={client?.client_name || ""} required /></label>
-        <label>Client Code <input name="client_code" placeholder="e.g. DNLP-ID" defaultValue={client?.client_code || ""} required /></label>
         <label>
           Industry
           <select name="industry" required value={industryMode} onChange={(event) => setIndustryMode(event.target.value)}>

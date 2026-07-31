@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from report_generator_fixture import (
+    blocking_generator,
+    presentation_then_block_generator,
+)
 from dashboard.services.report_jobs import (
     CloudTasksReportTaskDispatcher,
     ReportGenerationCancelledError,
@@ -77,6 +84,22 @@ class FakeJobRepository:
     def mark_cancelled(self, _job_id):
         self.job["status"] = "cancelled"
         self.job["current_stage"] = "cancelled"
+        return dict(self.job)
+
+    def record_cancellation_cleanup(
+        self,
+        _job_id,
+        cleanup,
+        *,
+        clear_presentation,
+    ):
+        self.job["result_metadata"] = {
+            "cancellation_cleanup": dict(cleanup)
+        }
+        if clear_presentation:
+            self.job["presentation_id"] = None
+            self.job["presentation_url"] = None
+            self.job["report_name"] = None
         return dict(self.job)
 
     def mark_retrying(self, _job_id, error_message, *, error_code=None):
@@ -219,6 +242,80 @@ class ReportJobWorkerTests(unittest.TestCase):
         result = ReportJobWorker(repository, generator).execute("job-1")
 
         self.assertEqual(result["status"], "cancelled")
+
+    def test_hard_cancel_stops_blocking_generator_within_budget(self):
+        repository = FakeJobRepository()
+        worker = ReportJobWorker(
+            repository,
+            blocking_generator,
+            hard_cancel=True,
+            cancel_poll_seconds=0.1,
+            cancel_grace_seconds=0.2,
+            process_start_method="spawn",
+        )
+        result_holder = {}
+
+        def execute():
+            result_holder["result"] = worker.execute("job-1")
+
+        started_at = time.monotonic()
+        thread = threading.Thread(target=execute)
+        thread.start()
+        deadline = time.monotonic() + 5
+        while (
+            repository.job["current_stage"] != "analysis_blocking_test"
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        repository.job["status"] = "cancel_requested"
+        thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result_holder["result"]["status"], "cancelled")
+        self.assertLess(time.monotonic() - started_at, 4)
+
+    def test_hard_cancel_trashes_partial_presentation(self):
+        repository = FakeJobRepository()
+        cleanup = Mock(
+            return_value={
+                "success": True,
+                "action": "trashed",
+                "presentation_id": "presentation-partial",
+            }
+        )
+        worker = ReportJobWorker(
+            repository,
+            presentation_then_block_generator,
+            hard_cancel=True,
+            cancel_poll_seconds=0.1,
+            cancel_grace_seconds=0.2,
+            process_start_method="spawn",
+            presentation_cleanup=cleanup,
+        )
+        result_holder = {}
+
+        thread = threading.Thread(
+            target=lambda: result_holder.update(
+                result=worker.execute("job-1")
+            )
+        )
+        thread.start()
+        deadline = time.monotonic() + 5
+        while (
+            not repository.recorded_presentations
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        repository.job["status"] = "cancel_requested"
+        thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        cleanup.assert_called_once_with(
+            "presentation-partial",
+            "Partial report",
+        )
+        self.assertEqual(result_holder["result"]["status"], "cancelled")
+        self.assertIsNone(result_holder["result"]["presentation_id"])
 
     def test_retryable_failure_returns_non_success_signal(self):
         repository = FakeJobRepository()

@@ -326,12 +326,20 @@ REPORT_TASK_CALLER_SERVICE_ACCOUNT=TASK_CALLER_EMAIL
 REPORT_TASK_OIDC_AUDIENCE=https://SERVICE_URL
 REPORT_TASK_DISPATCH_DEADLINE_SECONDS=900
 REPORT_JOB_LEASE_SECONDS=900
+REPORT_JOB_HARD_CANCEL=true
+REPORT_CANCEL_POLL_SECONDS=1
+REPORT_CANCEL_GRACE_SECONDS=2
+REPORT_JOB_PROCESS_START_METHOD=spawn
 ```
 
 Task ID deterministik dan database lease mencegah eksekusi paralel. Jika worker
 gagal setelah deck dibuat, retry melanjutkan `presentation_id` yang sama.
-Cancel bersifat kooperatif: request Google/Gemini yang sedang berjalan tidak
-dapat diputus tepat di tengah.
+Worker menjalankan generator dalam child process terisolasi. Cancel diperiksa
+setiap satu detik, diberi cooperative grace period dua detik, lalu child process
+diterminasi jika masih tertahan pada request Gemini/Google. Presentation parsial
+dipindahkan ke Drive Trash; jika izin Trash tidak tersedia, namanya diubah
+menjadi `[CANCELED] ...`. `cancel_latency_seconds` dan hasil cleanup tersimpan
+di `result_metadata` job.
 
 ### 7. Cloud Build dan GitHub
 

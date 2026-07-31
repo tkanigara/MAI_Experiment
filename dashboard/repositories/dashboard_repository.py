@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import re
+import unicodedata
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -14,8 +15,20 @@ from sqlalchemy import text
 
 try:
     from dashboard.db import create_db_engine
+    from dashboard.repositories.report_data_lock import (
+        lock_client_report_periods,
+        lock_client_report_year,
+        lock_existing_report_period,
+        lock_report_period,
+    )
 except ModuleNotFoundError:
     from db import create_db_engine
+    from repositories.report_data_lock import (
+        lock_client_report_periods,
+        lock_client_report_year,
+        lock_existing_report_period,
+        lock_report_period,
+    )
 
 PLATFORM_TABLES = {
     "instagram": "instagram_reports",
@@ -286,6 +299,23 @@ def parse_number(value):
 
 def normalized_key(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def client_code_base(client_name: str) -> str:
+    normalized_name = unicodedata.normalize("NFKD", client_name)
+    ascii_name = normalized_name.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-") or "client"
+
+
+def available_client_code(base_code: str, existing_codes) -> str:
+    used_codes = {str(code) for code in existing_codes}
+    if base_code not in used_codes:
+        return base_code
+
+    suffix = 2
+    while f"{base_code}-{suffix}" in used_codes:
+        suffix += 1
+    return f"{base_code}-{suffix}"
 
 
 def row_value(row: dict, *keys: str):
@@ -690,12 +720,34 @@ class DashboardRepository:
             return [row_dict(row) for row in rows]
 
     def create_client(self, payload: dict):
-        required = ["client_code", "client_name"]
+        required = ["client_name"]
         missing = [key for key in required if not str(payload.get(key, "")).strip()]
         if missing:
             raise ValueError(f"Missing fields: {', '.join(missing)}")
-        client_code = str(payload["client_code"]).strip().lower().replace(" ", "-")
+        client_name = str(payload["client_name"]).strip()
+        base_code = client_code_base(client_name)
         with self.engine.begin() as conn:
+            # Allocate readable client codes safely even when two requests for
+            # the same client name arrive concurrently.
+            conn.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:base_code))"),
+                {"base_code": base_code},
+            )
+            existing_codes = conn.execute(
+                text(
+                    """
+                    SELECT client_code
+                    FROM clients
+                    WHERE client_code = :base_code
+                       OR client_code LIKE :code_prefix
+                    """
+                ),
+                {
+                    "base_code": base_code,
+                    "code_prefix": f"{base_code}-%",
+                },
+            ).scalars()
+            client_code = available_client_code(base_code, existing_codes)
             row = conn.execute(
                 text(
                     """
@@ -714,7 +766,7 @@ class DashboardRepository:
                 ),
                 {
                     "client_code": client_code,
-                    "client_name": str(payload["client_name"]).strip(),
+                    "client_name": client_name,
                     "industry": payload.get("industry") or None,
                     "has_instagram": bool(payload.get("has_instagram")),
                     "has_facebook": bool(payload.get("has_facebook")),
@@ -725,18 +777,17 @@ class DashboardRepository:
             return row_dict(row)
 
     def update_client(self, client_id: str, payload: dict):
-        required = ["client_code", "client_name"]
+        required = ["client_name"]
         missing = [key for key in required if not str(payload.get(key, "")).strip()]
         if missing:
             raise ValueError(f"Missing fields: {', '.join(missing)}")
-        client_code = str(payload["client_code"]).strip().lower().replace(" ", "-")
         with self.engine.begin() as conn:
+            lock_client_report_periods(conn, client_id)
             row = conn.execute(
                 text(
                     """
                     UPDATE clients
                     SET
-                        client_code = :client_code,
                         client_name = :client_name,
                         industry = :industry,
                         has_instagram = :has_instagram,
@@ -756,7 +807,6 @@ class DashboardRepository:
                 ),
                 {
                     "client_id": client_id,
-                    "client_code": client_code,
                     "client_name": str(payload["client_name"]).strip(),
                     "industry": payload.get("industry") or None,
                     "has_instagram": bool(payload.get("has_instagram")),
@@ -777,6 +827,7 @@ class DashboardRepository:
             ).mappings().first()
             if not client:
                 raise ValueError("Client not found")
+            lock_client_report_periods(conn, client_id)
             conn.execute(
                 text("DELETE FROM raw_api_responses WHERE client_id = :client_id"),
                 {"client_id": client_id},
@@ -793,19 +844,7 @@ class DashboardRepository:
 
     def delete_report_period(self, client_id: str, period_id: str):
         with self.engine.begin() as conn:
-            period = conn.execute(
-                text(
-                    """
-                    SELECT id, period_label, period_start
-                    FROM report_periods
-                    WHERE id = CAST(:period_id AS UUID)
-                      AND client_id = CAST(:client_id AS UUID)
-                    """
-                ),
-                {"client_id": client_id, "period_id": period_id},
-            ).mappings().first()
-            if not period:
-                raise ValueError("Report month not found")
+            period = lock_report_period(conn, client_id, period_id)
 
             conn.execute(
                 text(
@@ -1198,6 +1237,11 @@ class DashboardRepository:
         if period_month < 1 or period_month > 12:
             raise ValueError("period_month must be between 1 and 12")
         with self.engine.begin() as conn:
+            lock_client_report_year(
+                conn,
+                payload["client_id"],
+                int(payload["period_year"]),
+            )
             row = conn.execute(
                 text(
                     """
@@ -1415,6 +1459,12 @@ class DashboardRepository:
             )
 
         with self.engine.begin() as conn:
+            lock_existing_report_period(
+                conn,
+                client_id,
+                period_start,
+                period_end,
+            )
             period_id = self.ensure_report_period(conn, client_id, period_start, period_end, period_label)
             run_id = self.create_import_run(conn, client_id, period_id, parsed_files, missing_files)
             profile_ids = self.upsert_account_profiles(conn, client_id, parsed_files.get("account", {}).get("rows", []))

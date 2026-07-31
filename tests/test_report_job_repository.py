@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dashboard.repositories.report_job_repository import (
+    ActiveReportJobError,
     ReportJobRepository,
     ReportJobTransitionError,
 )
@@ -73,6 +74,14 @@ class ReportJobRepositoryTests(unittest.TestCase):
         connection = FakeConnection(
             [
                 FakeMappingResult(first=context),
+                FakeMappingResult(
+                    first={
+                        "id": "period-1",
+                        "client_id": "client-1",
+                        "period_label": "July 2026",
+                    }
+                ),
+                FakeMappingResult(first=None),
                 FakeMappingResult(one=created),
             ]
         )
@@ -85,15 +94,44 @@ class ReportJobRepositoryTests(unittest.TestCase):
         )
 
         self.assertEqual(result["id"], "job-1")
-        _statement, parameters = connection.calls[1]
+        self.assertIn("FOR UPDATE", connection.calls[1][0])
+        _statement, parameters = connection.calls[3]
         self.assertEqual(parameters["client_name"], "PAR")
         self.assertEqual(parameters["period_label"], "July 2026")
         self.assertEqual(parameters["requested_by"], "developer@mai.co.id")
         self.assertEqual(parameters["max_attempts"], 3)
         self.assertIn(
             "SELECT presentation_id",
-            connection.calls[1][0],
+            connection.calls[3][0],
         )
+
+    def test_create_job_keeps_existing_active_job_conflict_contract(self):
+        context = {
+            "client_id": "client-1",
+            "client_name": "PAR",
+            "report_period_id": "period-1",
+            "period_label": "July 2026",
+        }
+        active_job = {
+            "id": "job-active",
+            "client_id": "client-1",
+            "report_period_id": "period-1",
+            "status": "running",
+        }
+        connection = FakeConnection(
+            [
+                FakeMappingResult(first=context),
+                FakeMappingResult(first={"id": "period-1"}),
+                FakeMappingResult(first=active_job),
+            ]
+        )
+        repository = ReportJobRepository(FakeEngine(connection))
+
+        with self.assertRaises(ActiveReportJobError) as context_manager:
+            repository.create_job("client-1", "period-1")
+
+        self.assertEqual(context_manager.exception.job["id"], "job-active")
+        self.assertEqual(len(connection.calls), 3)
 
     def test_claim_job_sets_a_bounded_lease(self):
         running = {
@@ -203,6 +241,57 @@ class ReportJobRepositoryTests(unittest.TestCase):
 
         self.assertEqual(requested["status"], "cancel_requested")
         self.assertEqual(finished["status"], "cancelled")
+        self.assertIn(
+            "cancel_latency_seconds",
+            finish_connection.calls[0][0],
+        )
+
+    def test_presentation_checkpoint_survives_cancel_race(self):
+        row = {
+            "id": "job-1",
+            "status": "cancel_requested",
+            "presentation_id": "presentation-partial",
+        }
+        connection = FakeConnection([FakeMappingResult(first=row)])
+        repository = ReportJobRepository(FakeEngine(connection))
+
+        result = repository.record_presentation(
+            "job-1",
+            presentation_id="presentation-partial",
+            presentation_url="https://slides/presentation-partial",
+            report_name="Partial report",
+        )
+
+        self.assertEqual(result["presentation_id"], "presentation-partial")
+        statement, _parameters = connection.calls[0]
+        self.assertIn(
+            "status IN ('running', 'cancel_requested')",
+            statement,
+        )
+
+    def test_cancellation_cleanup_can_clear_trashed_presentation(self):
+        row = {
+            "id": "job-1",
+            "status": "cancelled",
+            "presentation_id": None,
+        }
+        connection = FakeConnection([FakeMappingResult(first=row)])
+        repository = ReportJobRepository(FakeEngine(connection))
+
+        result = repository.record_cancellation_cleanup(
+            "job-1",
+            {
+                "success": True,
+                "action": "trashed",
+                "presentation_id": "presentation-partial",
+            },
+            clear_presentation=True,
+        )
+
+        self.assertIsNone(result["presentation_id"])
+        statement, parameters = connection.calls[0]
+        self.assertIn("cancellation_cleanup", statement)
+        self.assertTrue(parameters["clear_presentation"])
 
     def test_history_limit_is_capped(self):
         rows = [

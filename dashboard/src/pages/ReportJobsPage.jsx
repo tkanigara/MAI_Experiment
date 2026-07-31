@@ -35,7 +35,7 @@ export function reportJobStageLabel(stage) {
     queued: "Waiting for worker",
     analysis: "Analyzing data with Gemini",
     slides: "Generating Google Slides",
-    cancel_requested: "Stopping at the next safe checkpoint",
+    cancel_requested: "Stopping report worker",
     completed: "Report ready",
     failed: "Generation stopped",
     cancelled: "Generation cancelled",

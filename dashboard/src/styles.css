@@ -778,6 +778,25 @@ label, .field-label {
   font-size: 18px;
 }
 
+.report-lock-summary {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.report-lock-summary span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.report-lock-summary strong {
+  text-transform: capitalize;
+}
+
 .data-health-card {
   display: grid;
   gap: 6px;
