@@ -430,7 +430,9 @@ def annotate_points(axis, x_values, y_values, color):
 
 
 def create_chart_figure(title: str, subtitle: str):
-    fig, axis = plt.subplots(figsize=(10, 5.625), facecolor="white")
+    fig, axis = plt.subplots(figsize=(10, 5.625), facecolor="none")
+    fig.patch.set_alpha(0)
+    axis.set_facecolor("none")
     fig.suptitle(
         title,
         x=0.07,
@@ -453,7 +455,19 @@ def create_chart_figure(title: str, subtitle: str):
 
 def save_chart(fig, output_path: Path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180, bbox_inches="tight", facecolor="white")
+    fig.patch.set_facecolor("none")
+    fig.patch.set_alpha(0)
+    for axis in fig.get_axes():
+        axis.set_facecolor("none")
+        axis.patch.set_alpha(0)
+    fig.savefig(
+        output_path,
+        dpi=180,
+        bbox_inches="tight",
+        transparent=True,
+        facecolor="none",
+        edgecolor="none",
+    )
     return fig
 
 
