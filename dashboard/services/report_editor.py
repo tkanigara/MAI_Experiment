@@ -29,6 +29,8 @@ PLATFORM_PREFIXES = {
     "facebook": "FB",
     "tiktok": "TK",
     "youtube": "YT",
+    "linkedin": "LI",
+    "threads": "TH",
 }
 
 CONTENT_FIELDS = {
@@ -141,6 +143,19 @@ REPORT_ENGAGEMENT_COMPONENTS = {
         "comments",
         "shares",
     },
+    "linkedin_reports": {
+        "likes",
+        "comments",
+        "shares",
+        "reposts",
+        "reactions",
+    },
+    "threads_reports": {
+        "likes",
+        "comments",
+        "shares",
+        "reposts",
+    },
 }
 
 REPORT_AUDIENCE_FIELDS = {
@@ -148,6 +163,8 @@ REPORT_AUDIENCE_FIELDS = {
     "facebook_reports": "total_followers",
     "tiktok_reports": "total_followers",
     "youtube_reports": "total_subscribers",
+    "linkedin_reports": "total_followers",
+    "threads_reports": "total_followers",
 }
 
 REPORT_GROWTH_FIELDS = {
@@ -178,6 +195,20 @@ REPORT_GROWTH_FIELDS = {
         "gained": None,
         "lost": "subscribers_lost",
         "audience": "total_subscribers",
+    },
+    "linkedin_reports": {
+        "growth": "follower_growth",
+        "rate": "follower_growth_rate",
+        "gained": "follows",
+        "lost": "unfollows",
+        "audience": "total_followers",
+    },
+    "threads_reports": {
+        "growth": "follower_growth",
+        "rate": "follower_growth_rate",
+        "gained": "follows",
+        "lost": "unfollows",
+        "audience": "total_followers",
     },
 }
 
@@ -345,7 +376,7 @@ def trend_database_fields(platform: str) -> dict[str, str]:
         "reach_or_views": "reach",
         "impressions_or_views": (
             "total_views"
-            if platform in {"tiktok", "youtube"}
+            if platform in {"tiktok", "youtube", "threads"}
             else "impressions"
         ),
         "likes": "likes",
@@ -601,6 +632,8 @@ class ReportEditorService:
                 "facebook": [],
                 "tiktok": [],
                 "youtube": [],
+                "linkedin": [],
+                "threads": [],
                 "kpi": [],
                 "competitor": [],
                 "content": [],
@@ -1888,6 +1921,16 @@ class ReportEditorService:
                 "subscribers": ("youtube_reports", "total_subscribers", False),
                 "engagement": ("youtube_reports", "total_engagement", True),
                 "views": ("youtube_reports", "total_views", True),
+            },
+            "linkedin": {
+                "followers": ("linkedin_reports", "total_followers", False),
+                "engagement": ("linkedin_reports", "total_engagement", True),
+                "impressions": ("linkedin_reports", "impressions", True),
+            },
+            "threads": {
+                "followers": ("threads_reports", "total_followers", False),
+                "engagement": ("threads_reports", "total_engagement", True),
+                "views": ("threads_reports", "total_views", True),
             },
         }
         selected_period = conn.execute(

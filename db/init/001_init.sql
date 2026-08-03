@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS clients (
     has_facebook BOOLEAN NOT NULL DEFAULT FALSE,
     has_tiktok BOOLEAN NOT NULL DEFAULT FALSE,
     has_youtube BOOLEAN NOT NULL DEFAULT FALSE,
+    has_linkedin BOOLEAN NOT NULL DEFAULT FALSE,
+    has_threads BOOLEAN NOT NULL DEFAULT FALSE,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS clients (
 CREATE TABLE IF NOT EXISTS client_social_profiles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     source TEXT NOT NULL DEFAULT 'fanpage_karma',
     source_profile_id TEXT NOT NULL,
     profile_name TEXT,
@@ -48,7 +50,7 @@ CREATE TABLE IF NOT EXISTS client_competitors (
 CREATE TABLE IF NOT EXISTS competitor_social_profiles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     competitor_id UUID NOT NULL REFERENCES client_competitors(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     source TEXT NOT NULL DEFAULT 'fanpage_karma',
     source_profile_id TEXT,
     profile_name TEXT NOT NULL,
@@ -77,7 +79,7 @@ CREATE TABLE IF NOT EXISTS etl_runs (
     client_id UUID REFERENCES clients(id) ON DELETE SET NULL,
     report_period_id UUID REFERENCES report_periods(id) ON DELETE SET NULL,
     source TEXT NOT NULL DEFAULT 'fanpage_karma',
-    platform TEXT CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'running',
@@ -91,7 +93,7 @@ CREATE TABLE IF NOT EXISTS raw_api_responses (
     client_id UUID REFERENCES clients(id) ON DELETE SET NULL,
     profile_id UUID REFERENCES client_social_profiles(id) ON DELETE SET NULL,
     source TEXT NOT NULL DEFAULT 'fanpage_karma',
-    platform TEXT CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     endpoint TEXT NOT NULL,
     request_params JSONB NOT NULL DEFAULT '{}'::jsonb,
     response JSONB NOT NULL,
@@ -102,7 +104,7 @@ CREATE TABLE IF NOT EXISTS raw_api_responses (
 CREATE TABLE IF NOT EXISTS kpi_targets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     metric_name TEXT NOT NULL,
     period_year INTEGER NOT NULL,
     period_month INTEGER NOT NULL CHECK (period_month BETWEEN 1 AND 12),
@@ -122,7 +124,7 @@ CREATE TABLE IF NOT EXISTS kpi_results (
     profile_id UUID REFERENCES client_social_profiles(id) ON DELETE SET NULL,
     report_period_id UUID NOT NULL REFERENCES report_periods(id) ON DELETE CASCADE,
     kpi_target_id UUID REFERENCES kpi_targets(id) ON DELETE SET NULL,
-    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     metric_name TEXT NOT NULL,
     metric_category TEXT,
     actual_month NUMERIC,
@@ -146,7 +148,7 @@ CREATE TABLE IF NOT EXISTS competitor_profile_reports (
     competitor_id UUID REFERENCES client_competitors(id) ON DELETE SET NULL,
     competitor_profile_id UUID REFERENCES competitor_social_profiles(id) ON DELETE SET NULL,
     report_period_id UUID NOT NULL REFERENCES report_periods(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     source TEXT NOT NULL DEFAULT 'fanpage_karma',
     profile_name TEXT NOT NULL,
     total_followers NUMERIC,
@@ -176,7 +178,7 @@ CREATE TABLE IF NOT EXISTS competitor_content_reports (
     competitor_id UUID REFERENCES client_competitors(id) ON DELETE SET NULL,
     competitor_profile_id UUID REFERENCES competitor_social_profiles(id) ON DELETE SET NULL,
     report_period_id UUID NOT NULL REFERENCES report_periods(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     source TEXT NOT NULL DEFAULT 'fanpage_karma',
     profile_name TEXT NOT NULL,
     post_id TEXT,
@@ -211,7 +213,7 @@ CREATE TABLE IF NOT EXISTS social_content_reports (
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     profile_id UUID REFERENCES client_social_profiles(id) ON DELETE SET NULL,
     report_period_id UUID NOT NULL REFERENCES report_periods(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     source TEXT NOT NULL DEFAULT 'fanpage_karma',
     post_id TEXT,
     published_at TIMESTAMPTZ,
@@ -243,7 +245,7 @@ CREATE TABLE IF NOT EXISTS report_insights (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     report_period_id UUID REFERENCES report_periods(id) ON DELETE CASCADE,
-    platform TEXT CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube')),
+    platform TEXT CHECK (platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')),
     section_key TEXT NOT NULL,
     insight_key TEXT NOT NULL,
     insight_text TEXT NOT NULL,
@@ -428,6 +430,100 @@ CREATE TABLE IF NOT EXISTS youtube_reports (
     UNIQUE (client_id, profile_id, report_period_id)
 );
 
+CREATE TABLE IF NOT EXISTS linkedin_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    profile_id UUID REFERENCES client_social_profiles(id) ON DELETE SET NULL,
+    report_period_id UUID NOT NULL REFERENCES report_periods(id) ON DELETE CASCADE,
+    source TEXT NOT NULL DEFAULT 'fanpage_karma',
+    total_followers NUMERIC,
+    follower_growth NUMERIC,
+    follower_growth_rate NUMERIC,
+    follows NUMERIC,
+    unfollows NUMERIC,
+    total_views NUMERIC,
+    reach NUMERIC,
+    impressions NUMERIC,
+    total_engagement NUMERIC,
+    engagement_rate NUMERIC,
+    likes NUMERIC,
+    comments NUMERIC,
+    shares NUMERIC,
+    saves NUMERIC,
+    reposts NUMERIC,
+    reactions NUMERIC,
+    total_posts NUMERIC,
+    photo_posts NUMERIC,
+    video_posts NUMERIC,
+    text_posts NUMERIC,
+    posts_per_day NUMERIC,
+    post_interaction_rate NUMERIC,
+    page_performance_index NUMERIC,
+    demographics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    daily_followers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    daily_views JSONB NOT NULL DEFAULT '[]'::jsonb,
+    daily_engagement JSONB NOT NULL DEFAULT '[]'::jsonb,
+    top_posts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    low_posts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    top_hashtags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    top_words JSONB NOT NULL DEFAULT '[]'::jsonb,
+    best_times_to_post JSONB NOT NULL DEFAULT '[]'::jsonb,
+    content_type_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
+    competitor_profiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+    competitor_posts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    raw_sections JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (client_id, profile_id, report_period_id)
+);
+
+CREATE TABLE IF NOT EXISTS threads_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    profile_id UUID REFERENCES client_social_profiles(id) ON DELETE SET NULL,
+    report_period_id UUID NOT NULL REFERENCES report_periods(id) ON DELETE CASCADE,
+    source TEXT NOT NULL DEFAULT 'fanpage_karma',
+    total_followers NUMERIC,
+    follower_growth NUMERIC,
+    follower_growth_rate NUMERIC,
+    follows NUMERIC,
+    unfollows NUMERIC,
+    total_views NUMERIC,
+    reach NUMERIC,
+    impressions NUMERIC,
+    total_engagement NUMERIC,
+    engagement_rate NUMERIC,
+    likes NUMERIC,
+    comments NUMERIC,
+    shares NUMERIC,
+    saves NUMERIC,
+    reposts NUMERIC,
+    reactions NUMERIC,
+    total_posts NUMERIC,
+    photo_posts NUMERIC,
+    video_posts NUMERIC,
+    text_posts NUMERIC,
+    posts_per_day NUMERIC,
+    post_interaction_rate NUMERIC,
+    page_performance_index NUMERIC,
+    demographics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    daily_followers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    daily_views JSONB NOT NULL DEFAULT '[]'::jsonb,
+    daily_engagement JSONB NOT NULL DEFAULT '[]'::jsonb,
+    top_posts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    low_posts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    top_hashtags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    top_words JSONB NOT NULL DEFAULT '[]'::jsonb,
+    best_times_to_post JSONB NOT NULL DEFAULT '[]'::jsonb,
+    content_type_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
+    competitor_profiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+    competitor_posts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    raw_sections JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (client_id, profile_id, report_period_id)
+);
+
 CREATE TABLE IF NOT EXISTS report_overrides (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
@@ -435,7 +531,7 @@ CREATE TABLE IF NOT EXISTS report_overrides (
     source_report_period_id UUID REFERENCES report_periods(id) ON DELETE CASCADE,
     platform TEXT CHECK (
         platform IS NULL
-        OR platform IN ('instagram', 'facebook', 'tiktok', 'youtube')
+        OR platform IN ('instagram', 'facebook', 'tiktok', 'youtube', 'linkedin', 'threads')
     ),
     scope TEXT NOT NULL CHECK (scope IN ('field', 'derived', 'placeholder')),
     section_key TEXT NOT NULL,
@@ -700,6 +796,12 @@ CREATE INDEX IF NOT EXISTS idx_tiktok_reports_period
 CREATE INDEX IF NOT EXISTS idx_youtube_reports_period
     ON youtube_reports (client_id, report_period_id);
 
+CREATE INDEX IF NOT EXISTS idx_linkedin_reports_period
+    ON linkedin_reports (client_id, report_period_id);
+
+CREATE INDEX IF NOT EXISTS idx_threads_reports_period
+    ON threads_reports (client_id, report_period_id);
+
 CREATE INDEX IF NOT EXISTS idx_instagram_reports_raw_sections_gin
     ON instagram_reports USING GIN (raw_sections);
 
@@ -711,6 +813,12 @@ CREATE INDEX IF NOT EXISTS idx_tiktok_reports_raw_sections_gin
 
 CREATE INDEX IF NOT EXISTS idx_youtube_reports_raw_sections_gin
     ON youtube_reports USING GIN (raw_sections);
+
+CREATE INDEX IF NOT EXISTS idx_linkedin_reports_raw_sections_gin
+    ON linkedin_reports USING GIN (raw_sections);
+
+CREATE INDEX IF NOT EXISTS idx_threads_reports_raw_sections_gin
+    ON threads_reports USING GIN (raw_sections);
 
 CREATE INDEX IF NOT EXISTS idx_report_overrides_period_section
     ON report_overrides (report_period_id, section_key, is_active);

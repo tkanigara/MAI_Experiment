@@ -108,7 +108,7 @@ function parseJson(response, label) {
 }
 
 function connectedPlatforms(client, profiles) {
-  const supported = ["instagram", "facebook", "tiktok", "youtube"];
+  const supported = ["instagram", "facebook", "tiktok", "youtube", "linkedin", "threads"];
   const result = new Set();
 
   for (const platform of supported) {

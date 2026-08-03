@@ -1,10 +1,12 @@
-export const PLATFORMS = ["instagram", "facebook", "tiktok", "youtube"];
+export const PLATFORMS = ["instagram", "facebook", "tiktok", "youtube", "linkedin", "threads"];
 
 export const PLATFORM_LABELS = {
   instagram: "Instagram",
   facebook: "Facebook",
   tiktok: "TikTok",
   youtube: "YouTube",
+  linkedin: "LinkedIn",
+  threads: "Threads",
 };
 
 export const KPI_METRICS = {
@@ -12,13 +14,15 @@ export const KPI_METRICS = {
   facebook: ["followers", "engagement", "reach"],
   tiktok: ["followers", "views", "likes"],
   youtube: ["subscribers", "engagement", "views"],
+  linkedin: ["followers", "engagement", "impressions"],
+  threads: ["followers", "engagement", "views"],
 };
 
 export const CSV_TYPES = [
   { key: "account", title: "Account Data", description: "General account/profile data for all platforms." },
   { key: "competitor", title: "Competitor Data", description: "Competitor analysis data per platform in one CSV." },
   { key: "competitor_content", title: "Competitor Content", description: "Post-level competitor content for best-content analysis.", optional: true },
-  { key: "all_content", title: "All Platform Content", description: "Instagram, Facebook, TikTok, and YouTube posts in one CSV." },
+  { key: "all_content", title: "All Platform Content", description: "Post data for all connected platforms in one CSV." },
   { key: "ig_story", title: "Instagram Stories", description: "Instagram story performance data." },
 ];
 

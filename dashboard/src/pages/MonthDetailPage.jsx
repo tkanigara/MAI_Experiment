@@ -19,6 +19,22 @@ function platformStats(platform, report = {}) {
       { label: "Posts", value: report.total_posts },
     ];
   }
+  if (platform === "linkedin") {
+    return [
+      { label: "Followers", value: report.total_followers },
+      { label: "Impressions", value: report.impressions },
+      { label: "Engagement", value: report.total_engagement },
+      { label: "Posts", value: report.total_posts },
+    ];
+  }
+  if (platform === "threads") {
+    return [
+      { label: "Followers", value: report.total_followers },
+      { label: "Views", value: report.total_views },
+      { label: "Engagement", value: report.total_engagement },
+      { label: "Posts", value: report.total_posts },
+    ];
+  }
   return [
     { label: "Followers", value: report.total_followers },
     { label: "Reach", value: report.reach },
