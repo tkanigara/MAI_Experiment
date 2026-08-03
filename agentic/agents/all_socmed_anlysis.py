@@ -1,14 +1,50 @@
 from CentralArch.state import State, SummaryAllSocmed
 from models.gemini import llm
 from langchain_core.messages import HumanMessage, SystemMessage
-from prompts.all_socmed_analysis import SYSTEM_PROMPT
-from utils.llm_json import parse_llm_json
+from prompts.all_socmed_analysis import SYSTEM_PROMPT_2, SYSTEM_PROMPT
 from tools.retrieva_ig_data import retrieve_instagram_performance
 from tools.retrieval_fb_data import retrieve_facebook_performance
 from tools.retrieval_tt_data import retrieve_tiktok_performance
 from tools.retrieval_yt_data import retrieve_youtube_performance
+from langchain.agents import create_agent
 import json
 import re
+from utils.llm_output import get_llm_text
+
+def all_socmed_performance_agent_2nd(state):
+    agent = create_agent(
+        model=llm,
+        tools=[
+            retrieve_instagram_performance,
+            retrieve_facebook_performance,
+            retrieve_tiktok_performance,
+            retrieve_youtube_performance,
+        ],
+        system_prompt=SystemMessage(content=SYSTEM_PROMPT_2),
+    )
+
+    metadata = state.Metadata
+    payload = metadata.model_dump(mode="json")
+    response = agent.invoke(
+        {
+            "messages": [
+                HumanMessage(
+                    content=json.dumps(
+                        payload,
+                        indent=2
+                    )
+                )
+            ]
+        }
+    )
+    final_message = response["messages"][-1]
+    text = get_llm_text(final_message)
+    result = json.loads(text)
+    state.summary_all_socmed = SummaryAllSocmed(
+        client_code=metadata.client_code,
+        summary=result["summary"],
+    )
+    return state
 
 def all_socmed_performance_agent(state: State) -> State:
 
