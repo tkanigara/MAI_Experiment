@@ -39,6 +39,17 @@ PLATFORM_TABLES = {
     "threads": "threads_reports",
 }
 
+
+class ReportPeriodAlreadyExistsError(ValueError):
+    code = "REPORT_PERIOD_ALREADY_EXISTS"
+
+    def __init__(self, period: dict, requested_label: str):
+        self.period = dict(period)
+        self.requested_label = requested_label
+        super().__init__(
+            f"{requested_label} already exists for this client."
+        )
+
 PLATFORM_DATA_FIELDS = {
     "instagram": [
         ("total_followers", "Total followers"),
@@ -1039,6 +1050,87 @@ class DashboardRepository:
                 "period_label": label,
             }
 
+    def update_report_period(self, client_id: str, period_id: str, payload: dict):
+        month_slug = str(payload.get("month_slug") or "").strip().lower()
+        if not month_slug:
+            raise ValueError("month_slug is required")
+        period_start, period_end, period_label = month_range_from_slug(month_slug)
+
+        with self.engine.begin() as conn:
+            lock_report_period(conn, client_id, period_id)
+            return self._update_report_period_in_connection(
+                conn,
+                client_id,
+                period_id,
+                period_start,
+                period_end,
+                period_label,
+            )
+
+    def _update_report_period_in_connection(
+        self,
+        conn,
+        client_id: str,
+        period_id: str,
+        period_start,
+        period_end,
+        period_label: str,
+    ):
+        duplicate = conn.execute(
+            text(
+                """
+                SELECT id, period_label, period_start, period_end
+                FROM report_periods
+                WHERE client_id = CAST(:client_id AS UUID)
+                  AND id <> CAST(:period_id AS UUID)
+                  AND (
+                      period_start = :period_start
+                      OR lower(trim(COALESCE(period_label, ''))) = lower(:period_label)
+                  )
+                LIMIT 1
+                FOR UPDATE
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_id": period_id,
+                "period_start": period_start,
+                "period_label": period_label,
+            },
+        ).mappings().first()
+        if duplicate:
+            raise ReportPeriodAlreadyExistsError(
+                dict(duplicate),
+                period_label,
+            )
+
+        updated = conn.execute(
+            text(
+                """
+                UPDATE report_periods
+                SET period_start = :period_start,
+                    period_end = :period_end,
+                    period_label = :period_label
+                WHERE id = CAST(:period_id AS UUID)
+                  AND client_id = CAST(:client_id AS UUID)
+                RETURNING id, period_label, period_start, period_end
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_id": period_id,
+                "period_start": period_start,
+                "period_end": period_end,
+                "period_label": period_label,
+            },
+        ).mappings().first()
+        if not updated:
+            raise ValueError("Report month not found")
+        result = dict(updated)
+        result["label"] = result["period_label"]
+        result["slug"] = month_slug_from_date(result["period_start"])
+        return result
+
     def platforms(self, client_id: str):
         with self.engine.begin() as conn:
             client = conn.execute(
@@ -1126,6 +1218,78 @@ class DashboardRepository:
                             WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
                         ) THEN 1 ELSE 0 END
                     ) AS platform_reports,
+                    COALESCE((
+                        SELECT jsonb_object_agg(
+                            latest_file.slot,
+                            latest_file.filename
+                        )
+                        FROM (
+                            SELECT DISTINCT ON (file_entry.key)
+                                file_entry.key AS slot,
+                                file_entry.value AS filename
+                            FROM etl_runs file_run
+                            CROSS JOIN LATERAL jsonb_each_text(
+                                COALESCE(
+                                    file_run.metadata -> 'files',
+                                    '{}'::jsonb
+                                )
+                            ) AS file_entry
+                            WHERE file_run.report_period_id = rp.id
+                              AND file_run.client_id = rp.client_id
+                              AND file_run.status = 'success'
+                              AND file_entry.key IN (
+                                  'account',
+                                  'competitor',
+                                  'competitor_content',
+                                  'all_content',
+                                  'ig_story'
+                              )
+                            ORDER BY
+                                file_entry.key,
+                                COALESCE(
+                                    file_run.finished_at,
+                                    file_run.started_at,
+                                    file_run.created_at
+                                ) DESC,
+                                file_run.created_at DESC
+                        ) latest_file
+                    ), '{}'::jsonb) AS uploaded_csv_files,
+                    COALESCE((
+                        SELECT string_agg(
+                            latest_legacy_file.filename,
+                            ', '
+                            ORDER BY latest_legacy_file.slot
+                        )
+                        FROM (
+                            SELECT DISTINCT ON (file_entry.key)
+                                file_entry.key AS slot,
+                                file_entry.value AS filename
+                            FROM etl_runs file_run
+                            CROSS JOIN LATERAL jsonb_each_text(
+                                COALESCE(
+                                    file_run.metadata -> 'files',
+                                    '{}'::jsonb
+                                )
+                            ) AS file_entry
+                            WHERE file_run.report_period_id = rp.id
+                              AND file_run.client_id = rp.client_id
+                              AND file_run.status = 'success'
+                              AND file_entry.key IN (
+                                  'ig_post',
+                                  'fb_post',
+                                  'tt_post',
+                                  'yt_post'
+                              )
+                            ORDER BY
+                                file_entry.key,
+                                COALESCE(
+                                    file_run.finished_at,
+                                    file_run.started_at,
+                                    file_run.created_at
+                                ) DESC,
+                                file_run.created_at DESC
+                        ) latest_legacy_file
+                    ), '') AS legacy_content_filenames,
                     (
                         SELECT MAX(updated_at) FROM (
                             SELECT COALESCE(er.finished_at, er.started_at) AS updated_at
@@ -1180,6 +1344,14 @@ class DashboardRepository:
         for row in rows:
             uploaded_files = int(row["uploaded_files"] or 0)
             platform_reports = int(row["platform_reports"] or 0)
+            uploaded_csv_files = dict(row["uploaded_csv_files"] or {})
+            if (
+                not uploaded_csv_files.get("all_content")
+                and row["legacy_content_filenames"]
+            ):
+                uploaded_csv_files["all_content"] = row[
+                    "legacy_content_filenames"
+                ]
             status = (
                 f"{uploaded_files} of 5 files uploaded"
                 if uploaded_files
@@ -1193,6 +1365,7 @@ class DashboardRepository:
                     "period_start": row["period_start"],
                     "period_end": row["period_end"],
                     "uploaded_files": uploaded_files,
+                    "uploaded_csv_files": uploaded_csv_files,
                     "platform_reports": platform_reports,
                     "last_updated": row["last_updated"],
                     "status": status,
@@ -1587,6 +1760,7 @@ class DashboardRepository:
     def import_csv_report(self, payload: dict, files: dict):
         client_id = payload.get("client_id")
         month_slug = payload.get("month_slug") or "june-2026"
+        requested_period_id = str(payload.get("period_id") or "").strip() or None
         if not client_id:
             raise ValueError("Missing client_id")
         has_combined_content = bool(
@@ -1614,7 +1788,11 @@ class DashboardRepository:
             ):
                 continue
             if file_item is None or not getattr(file_item, "filename", ""):
-                if slot in PRIMARY_CSV_IMPORT_SLOTS and not spec.get("optional"):
+                if (
+                    not requested_period_id
+                    and slot in PRIMARY_CSV_IMPORT_SLOTS
+                    and not spec.get("optional")
+                ):
                     missing_files.append(spec["label"])
                 file_results.append(
                     {
@@ -1622,7 +1800,11 @@ class DashboardRepository:
                         "label": spec["label"],
                         "filename": None,
                         "rows": 0,
-                        "warnings": [] if spec.get("optional") else ["File was not uploaded."],
+                        "warnings": (
+                            []
+                            if spec.get("optional") or requested_period_id
+                            else ["File was not uploaded."]
+                        ),
                     }
                 )
                 continue
@@ -1642,13 +1824,31 @@ class DashboardRepository:
             )
 
         with self.engine.begin() as conn:
-            lock_existing_report_period(
-                conn,
-                client_id,
-                period_start,
-                period_end,
-            )
-            period_id = self.ensure_report_period(conn, client_id, period_start, period_end, period_label)
+            if requested_period_id:
+                lock_report_period(conn, client_id, requested_period_id)
+                updated_period = self._update_report_period_in_connection(
+                    conn,
+                    client_id,
+                    requested_period_id,
+                    period_start,
+                    period_end,
+                    period_label,
+                )
+                period_id = updated_period["id"]
+            else:
+                lock_existing_report_period(
+                    conn,
+                    client_id,
+                    period_start,
+                    period_end,
+                )
+                period_id = self.ensure_report_period(
+                    conn,
+                    client_id,
+                    period_start,
+                    period_end,
+                    period_label,
+                )
             run_id = self.create_import_run(conn, client_id, period_id, parsed_files, missing_files)
             profile_ids = self.upsert_account_profiles(conn, client_id, parsed_files.get("account", {}).get("rows", []))
             profile_platforms = self.content_profile_platforms(conn, client_id)
@@ -1920,7 +2120,13 @@ class DashboardRepository:
 
         warnings = sum(len(item.get("warnings") or []) for item in file_results)
         return {
-            "period": {"id": period_id, "label": period_label, "start": period_start, "end": period_end},
+            "period": {
+                "id": period_id,
+                "label": period_label,
+                "slug": month_slug_from_date(period_start),
+                "start": period_start,
+                "end": period_end,
+            },
             "summary": {
                 "uploaded": len(parsed_files),
                 "expected": len(PRIMARY_CSV_IMPORT_SLOTS),

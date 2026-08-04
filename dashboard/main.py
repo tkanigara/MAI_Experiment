@@ -15,6 +15,7 @@ try:
     from dashboard.repositories.dashboard_repository import (
         CSV_IMPORT_SLOTS,
         DashboardRepository,
+        ReportPeriodAlreadyExistsError,
         json_safe,
         parse_bool,
     )
@@ -46,6 +47,7 @@ except ModuleNotFoundError:
     from repositories.dashboard_repository import (
         CSV_IMPORT_SLOTS,
         DashboardRepository,
+        ReportPeriodAlreadyExistsError,
         json_safe,
         parse_bool,
     )
@@ -106,6 +108,21 @@ def report_data_locked_handler(_request: Request, exc: ReportDataLockedError):
             "error": str(exc),
             "code": exc.code,
             "job": json_safe(exc.job),
+        },
+        status_code=409,
+    )
+
+
+@app.exception_handler(ReportPeriodAlreadyExistsError)
+def report_period_already_exists_handler(
+    _request: Request,
+    exc: ReportPeriodAlreadyExistsError,
+):
+    return JSONResponse(
+        content={
+            "error": str(exc),
+            "code": exc.code,
+            "period": json_safe(exc.period),
         },
         status_code=409,
     )
@@ -183,6 +200,20 @@ def delete_report_period(client_id: str, period_id: str):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.put("/api/clients/{client_id}/report-periods/{period_id}")
+def update_report_period(client_id: str, period_id: str, payload: dict):
+    try:
+        return json_response(
+            repository.update_report_period(client_id, period_id, payload)
+        )
+    except (ReportDataLockedError, ReportPeriodAlreadyExistsError):
+        raise
+    except ValueError as exc:
+        raise bad_request(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.get("/api/clients/{client_id}/platforms")
 def get_platforms(client_id: str):
     try:
@@ -203,6 +234,7 @@ def get_platform_overview(client_id: str, platform: str, period_id: Optional[str
 def import_csv(
     client_id: str = Form(...),
     month_slug: str = Form(...),
+    period_id: Optional[str] = Form(None),
     account: Optional[UploadFile] = File(None),
     competitor: Optional[UploadFile] = File(None),
     competitor_content: Optional[UploadFile] = File(None),
@@ -225,9 +257,13 @@ def import_csv(
         "yt_post": yt_post,
     }
     try:
-        payload = {"client_id": client_id, "month_slug": month_slug}
+        payload = {
+            "client_id": client_id,
+            "month_slug": month_slug,
+            "period_id": period_id,
+        }
         return json_response(import_report_csv(repository, payload, files), status_code=201)
-    except ReportDataLockedError:
+    except (ReportDataLockedError, ReportPeriodAlreadyExistsError):
         raise
     except ValueError as exc:
         raise bad_request(exc)
