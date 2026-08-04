@@ -12,11 +12,13 @@ export default function AddReportModal({
   platformData,
   onClose,
   onImported,
+  onUpdateMonth,
   onSaveKpiTargets,
   activePlatform,
   initialTab = "csv",
   onReportLocked,
 }) {
+  const isUpdateMode = Boolean(month?.id);
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().toLocaleString("en-US", { month: "long" });
   const defaultMonth = month?.slug
@@ -35,19 +37,43 @@ export default function AddReportModal({
   const [error, setError] = useState("");
   const platforms = platformFlags(client);
   const kpiPlatforms = activePlatform ? [activePlatform] : platforms;
-  const uploadedCount = CSV_TYPES.filter((item) => files[item.key]).length;
+  const existingFiles = month?.uploaded_csv_files || {};
+  const selectedFileCount = CSV_TYPES.filter((item) => files[item.key]).length;
+  const uploadedCount = CSV_TYPES.filter(
+    (item) => files[item.key] || existingFiles[item.key],
+  ).length;
   const warningCount = importResult?.summary?.warnings || 0;
   const monthNames = [...new Set(REPORT_MONTHS.map((item) => item.label.split(" ")[0]))];
   const yearOptions = [...new Set(REPORT_MONTHS.map((item) => Number(item.slug.split("-").at(-1))))];
   const selectedMonth = `${selectedMonthName.toLowerCase()}-${selectedYear}`;
   const selectedMonthNumber = new Date(`${selectedMonthName} 1, ${selectedYear}`).getMonth() + 1;
-  const selectedMonthExists = reportMonths.some((monthItem) => monthItem.slug === selectedMonth);
+  const selectedMonthExists = reportMonths.some(
+    (monthItem) => (
+      String(monthItem.id) !== String(month?.id)
+      && monthItem.slug === selectedMonth
+    ),
+  );
+  const isMonthChanged = isUpdateMode && selectedMonth !== month?.slug;
+  const canSaveCsv = !selectedMonthExists && (
+    selectedFileCount > 0
+    || (isUpdateMode && isMonthChanged)
+  );
 
   function selectFile(key, file) {
     if (!file) return;
     setImportResult(null);
     setError("");
     setFiles((current) => ({ ...current, [key]: file }));
+  }
+
+  function removeFile(key) {
+    setImportResult(null);
+    setError("");
+    setFiles((current) => {
+      const nextFiles = { ...current };
+      delete nextFiles[key];
+      return nextFiles;
+    });
   }
 
   function handleDragOver(event, key) {
@@ -64,15 +90,28 @@ export default function AddReportModal({
 
   async function importCsv() {
     if (!client?.id) return;
+    if (selectedMonthExists) {
+      setError(
+        `${selectedMonthName} ${selectedYear} already exists for this client.`,
+      );
+      return;
+    }
     setIsImporting(true);
     setError("");
-    const formData = new FormData();
-    formData.append("client_id", client.id);
-    formData.append("month_slug", selectedMonth);
-    CSV_TYPES.forEach((item) => {
-      if (files[item.key]) formData.append(item.key, files[item.key]);
-    });
     try {
+      if (isUpdateMode && isMonthChanged && selectedFileCount === 0) {
+        const updated = await onUpdateMonth?.(month, selectedMonth);
+        if (updated !== false) onClose();
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("client_id", client.id);
+      formData.append("month_slug", selectedMonth);
+      if (isUpdateMode) formData.append("period_id", month.id);
+      CSV_TYPES.forEach((item) => {
+        if (files[item.key]) formData.append(item.key, files[item.key]);
+      });
       const data = await api("/api/import/csv", {
         method: "POST",
         body: formData,
@@ -129,8 +168,10 @@ export default function AddReportModal({
   return (
     <Modal wide onClose={onClose}>
       <ModalHeader
-        title="Add Report Data"
-        subtitle="Upload monthly CSV files and define KPI targets for each connected platform."
+        title={isUpdateMode ? "Update Report Data" : "Add Report Data"}
+        subtitle={isUpdateMode
+          ? "Change the report month or replace selected CSV data."
+          : "Upload monthly CSV files and define KPI targets for each connected platform."}
         onClose={onClose}
       />
       <div className="modal-context">
@@ -151,7 +192,11 @@ export default function AddReportModal({
               {monthNames.map((monthName) => <option value={monthName} key={monthName}>{monthName}</option>)}
             </select>
           </label>
-          {tab === "csv" && selectedMonthExists ? <span className="field-note">Existing report month</span> : null}
+          {tab === "csv" && selectedMonthExists ? (
+            <span className="field-note danger-text">
+              This report month already exists.
+            </span>
+          ) : null}
         </div>
       </div>
       <div className="tabs">
@@ -167,22 +212,44 @@ export default function AddReportModal({
           <>
             <div className="csv-action-bar">
               <div>
-                <strong>{uploadedCount} of {CSV_TYPES.length} CSV files selected</strong>
-                <span>{uploadedCount ? "Ready to save selected files into the database." : "Choose CSV files first."}</span>
+                <strong>
+                  {isUpdateMode
+                    ? `${uploadedCount} of ${CSV_TYPES.length} CSV files available`
+                    : `${selectedFileCount} of ${CSV_TYPES.length} CSV files selected`}
+                </strong>
+                <span>
+                  {isUpdateMode
+                    ? selectedFileCount
+                      ? `${selectedFileCount} replacement file${selectedFileCount === 1 ? "" : "s"} selected.`
+                      : isMonthChanged
+                        ? "The report month will be updated without replacing CSV data."
+                        : "Choose a file to replace existing data, or change the report month."
+                    : selectedFileCount
+                      ? "Ready to save selected files into the database."
+                      : "Choose CSV files first."}
+                </span>
               </div>
               <button
                 type="button"
                 className="primary-button"
-                disabled={isImporting || uploadedCount === 0}
+                disabled={isImporting || !canSaveCsv}
                 onClick={importCsv}
               >
-                {isImporting ? "Saving..." : "Save CSV Data"}
+                {isImporting
+                  ? "Saving..."
+                  : isUpdateMode
+                    ? "Save Changes"
+                    : "Save CSV Data"}
               </button>
             </div>
             <div className="upload-list">
               {CSV_TYPES.map(({ key, title, description, optional }) => {
                 const result = importResult?.files?.find((item) => item.slot === key);
                 const hasWarning = (result?.warnings || []).length > 0;
+                const selectedFile = files[key];
+                const existingFilename = existingFiles[key];
+                const displayedFilename = selectedFile?.name || existingFilename;
+                const hasStoredFile = Boolean(existingFilename && !selectedFile);
                 return (
                   <div
                     className={`upload-row ${draggingSlot === key ? "is-dragging" : ""}`}
@@ -192,14 +259,17 @@ export default function AddReportModal({
                     onDragLeave={() => setDraggingSlot("")}
                     onDrop={(event) => handleDrop(event, key)}
                   >
-                    <div className="upload-icon">{files[key] ? "ok" : "csv"}</div>
+                    <div className="upload-icon">{displayedFilename ? "ok" : "csv"}</div>
                     <div>
                       <div className="upload-title">{title}</div>
                       <div className="upload-desc">
-                        {files[key]?.name || description}
+                        {displayedFilename || description}
                         {result?.rows ? ` - ${result.rows} rows` : ""}
                       </div>
-                      {!files[key] && <div className="drop-hint">Drop CSV here or choose a file</div>}
+                      {!displayedFilename && <div className="drop-hint">Drop CSV here or choose a file</div>}
+                      {hasStoredFile && (
+                        <div className="drop-hint">Choose a new file only if this data needs to be replaced</div>
+                      )}
                       {hasWarning && (
                         <ul className="warning-list compact">
                           {result.warnings.slice(0, 2).map((warning) => <li key={warning}>{warning}</li>)}
@@ -207,17 +277,35 @@ export default function AddReportModal({
                       )}
                     </div>
                     <StatusBadge
-                      text={files[key] ? (hasWarning ? "Partial" : "Ready") : (optional ? "Optional" : "Required")}
-                      state={files[key] ? (hasWarning ? "partial" : "ready") : "partial"}
+                      text={selectedFile
+                        ? (hasWarning ? "Partial" : "Ready")
+                        : hasStoredFile
+                          ? "Uploaded"
+                          : (optional ? "Optional" : "Required")}
+                      state={displayedFilename ? (hasWarning ? "partial" : "ready") : "partial"}
                     />
-                    <label className="file-button">
-                      Choose
-                      <input
-                        type="file"
-                        accept=".csv,text/csv"
-                        onChange={(event) => selectFile(key, event.target.files?.[0])}
-                      />
-                    </label>
+                    <div className="upload-actions">
+                      <label className="file-button">
+                        {displayedFilename ? "Replace" : "Choose"}
+                        <input
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={(event) => {
+                            selectFile(key, event.target.files?.[0]);
+                            event.target.value = "";
+                          }}
+                        />
+                      </label>
+                      {!isUpdateMode && selectedFile ? (
+                        <button
+                          type="button"
+                          className="danger-link upload-remove-button"
+                          onClick={() => removeFile(key)}
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 );
               })}
@@ -226,7 +314,11 @@ export default function AddReportModal({
             {importResult && (
               <section className="import-result">
                 <div>
-                  <strong>{importResult.summary.uploaded} of {importResult.summary.expected} files imported</strong>
+                  <strong>
+                    {isUpdateMode
+                      ? `${importResult.summary.uploaded} CSV file${importResult.summary.uploaded === 1 ? "" : "s"} updated`
+                      : `${importResult.summary.uploaded} of ${importResult.summary.expected} files imported`}
+                  </strong>
                   <span>{warningCount ? `${warningCount} warnings found` : "No warnings found"}</span>
                 </div>
                 {!!importResult.summary.missing_files?.length && (
@@ -275,7 +367,9 @@ export default function AddReportModal({
                   return (
                     <div className="kpi-target-row" key={metric}>
                       <strong>{prettyMetric(metric)}</strong>
-                      <span className="muted">Actual: {formatNumber(row.actual_month)}</span>
+                      <span className="muted">
+                        Actual month / YTD: {formatNumber(row.actual_month)} / {formatNumber(row.actual_year)}
+                      </span>
                       <input
                         name={`${platform}:${metric}:target_month`}
                         type="number"
@@ -307,9 +401,15 @@ export default function AddReportModal({
       <div className="modal-actions sticky-actions">
         <span className="action-hint">
           {tab === "csv"
-            ? uploadedCount
-              ? `${uploadedCount} file selected. Click import to save into database.`
-              : "Choose at least one CSV file to import."
+            ? selectedMonthExists
+              ? "Choose a report month that does not already exist."
+              : selectedFileCount
+                ? `${selectedFileCount} file${selectedFileCount === 1 ? "" : "s"} selected for saving.`
+                : isUpdateMode && isMonthChanged
+                  ? "Save to update the report month without replacing CSV data."
+                  : isUpdateMode
+                    ? "Choose a replacement file or change the report month."
+                    : "Choose at least one CSV file to import."
             : "Save KPI targets independently from CSV upload."}
         </span>
         <div>
@@ -317,11 +417,15 @@ export default function AddReportModal({
           <button
             type="button"
             className="primary-button"
-            disabled={tab === "csv" ? isImporting || uploadedCount === 0 : isSavingKpi}
+            disabled={tab === "csv" ? isImporting || !canSaveCsv : isSavingKpi}
             onClick={tab === "csv" ? importCsv : saveKpiTargets}
           >
             {tab === "csv"
-              ? isImporting ? "Saving..." : "Save CSV Data"
+              ? isImporting
+                ? "Saving..."
+                : isUpdateMode
+                  ? "Save Changes"
+                  : "Save CSV Data"
               : isSavingKpi ? "Saving..." : "Save KPI Targets"}
           </button>
         </div>

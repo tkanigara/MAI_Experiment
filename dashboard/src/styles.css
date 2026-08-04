@@ -1022,6 +1022,22 @@ label, .field-label {
 .upload-title { font-weight: 850; }
 .upload-desc { color: var(--muted); margin-top: 5px; }
 
+.upload-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.upload-remove-button {
+  padding: 4px 8px;
+  text-align: center;
+}
+
+.danger-text {
+  color: var(--red) !important;
+}
+
 .drop-hint {
   color: var(--muted);
   font-size: 12px;

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import Modal, { ModalHeader } from "./Modal";
+import { PLATFORM_LABELS, PLATFORMS } from "../lib/constants";
 
 const DEFAULT_INDUSTRIES = ["Automotive", "Retail & E-Commerce", "Technology"];
 
@@ -38,10 +39,12 @@ export default function AddClientModal({
       await onAddClient({
         client_name: form.get("client_name"),
         industry,
-        has_instagram: platforms.includes("instagram"),
-        has_facebook: platforms.includes("facebook"),
-        has_tiktok: platforms.includes("tiktok"),
-        has_youtube: platforms.includes("youtube"),
+        ...Object.fromEntries(
+          PLATFORMS.map((platform) => [
+            `has_${platform}`,
+            platforms.includes(platform),
+          ]),
+        ),
       });
     } catch (err) {
       if (!onReportLocked?.(err)) setError(err.message);
@@ -77,10 +80,17 @@ export default function AddClientModal({
         <div>
           <div className="field-label">Connected Platforms</div>
           <div className="check-grid">
-            <label><input type="checkbox" name="platforms" value="instagram" defaultChecked={client?.has_instagram} /> Instagram</label>
-            <label><input type="checkbox" name="platforms" value="facebook" defaultChecked={client?.has_facebook} /> Facebook</label>
-            <label><input type="checkbox" name="platforms" value="tiktok" defaultChecked={client?.has_tiktok} /> TikTok</label>
-            <label><input type="checkbox" name="platforms" value="youtube" defaultChecked={client?.has_youtube} /> YouTube</label>
+            {PLATFORMS.map((platform) => (
+              <label key={platform}>
+                <input
+                  type="checkbox"
+                  name="platforms"
+                  value={platform}
+                  defaultChecked={client?.[`has_${platform}`]}
+                />{" "}
+                {PLATFORM_LABELS[platform]}
+              </label>
+            ))}
           </div>
         </div>
         {error && <div className="import-alert danger">{error}</div>}

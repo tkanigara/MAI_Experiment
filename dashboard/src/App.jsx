@@ -381,6 +381,41 @@ export default function App() {
     }
   }
 
+  async function updateReportMonth(month, monthSlug) {
+    if (!selectedClient?.id || !month?.id) return false;
+    try {
+      const updated = await api(
+        `/api/clients/${selectedClient.id}/report-periods/${month.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ month_slug: monthSlug }),
+        },
+      );
+      await loadClient(selectedClient);
+      setPlatformData({});
+      if (
+        currentClient?.id === selectedClient.id
+        && route[2] === month.slug
+      ) {
+        const suffix = route.slice(3).join("/");
+        navigate(
+          `/clients/${clientSlug(selectedClient)}/${updated.slug}${suffix ? `/${suffix}` : ""}`,
+          true,
+        );
+      }
+      showToast(`${month.label} changed to ${updated.label}.`);
+      return true;
+    } catch (err) {
+      if (handleReportDataLock(err, {
+        client: selectedClient,
+        month,
+      })) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
   function requestSlidesReportGeneration(month) {
     if (!selectedClient || !month?.id) return;
     const activeJob = reportJobs.find(
@@ -834,15 +869,29 @@ export default function App() {
           platformData={platformData}
           activePlatform={modal === "add-report-kpi" ? currentPlatform : null}
           initialTab={modal === "add-report-kpi" ? "kpi" : "csv"}
+          onUpdateMonth={updateReportMonth}
           onSaveKpiTargets={saveKpiTargets}
           onReportLocked={(err) => handleReportDataLock(err, {
             client: selectedClient,
             month: currentMonth,
           })}
-          onImported={async () => {
+          onImported={async (data) => {
+            const previousMonth = currentMonth;
             await loadClients();
             await loadClient(selectedClient);
             await loadPlatformData(selectedClient);
+            if (
+              previousMonth?.id
+              && String(data?.period?.id) === String(previousMonth.id)
+              && data?.period?.slug
+              && data.period.slug !== previousMonth.slug
+            ) {
+              const suffix = route.slice(3).join("/");
+              navigate(
+                `/clients/${clientSlug(selectedClient)}/${data.period.slug}${suffix ? `/${suffix}` : ""}`,
+                true,
+              );
+            }
             showToast("CSV data imported. Overview refreshed.");
           }}
           onClose={() => setModal(null)}

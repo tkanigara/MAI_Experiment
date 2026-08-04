@@ -35,7 +35,20 @@ PLATFORM_TABLES = {
     "facebook": "facebook_reports",
     "tiktok": "tiktok_reports",
     "youtube": "youtube_reports",
+    "linkedin": "linkedin_reports",
+    "threads": "threads_reports",
 }
+
+
+class ReportPeriodAlreadyExistsError(ValueError):
+    code = "REPORT_PERIOD_ALREADY_EXISTS"
+
+    def __init__(self, period: dict, requested_label: str):
+        self.period = dict(period)
+        self.requested_label = requested_label
+        super().__init__(
+            f"{requested_label} already exists for this client."
+        )
 
 PLATFORM_DATA_FIELDS = {
     "instagram": [
@@ -118,18 +131,85 @@ PLATFORM_DATA_FIELDS = {
         ("live_posts", "Live posts"),
         ("demographics", "Audience demographics"),
     ],
+    "linkedin": [
+        ("total_followers", "Total followers"),
+        ("follower_growth", "Follower growth"),
+        ("follower_growth_rate", "Follower growth rate"),
+        ("follows", "Follows"),
+        ("unfollows", "Unfollows"),
+        ("impressions", "Impressions"),
+        ("reach", "Reach"),
+        ("total_engagement", "Total engagement"),
+        ("engagement_rate", "Engagement rate"),
+        ("likes", "Likes"),
+        ("comments", "Comments"),
+        ("shares", "Shares"),
+        ("reposts", "Reposts"),
+        ("total_posts", "Total posts"),
+        ("photo_posts", "Photo posts"),
+        ("video_posts", "Video posts"),
+        ("demographics", "Audience demographics"),
+    ],
+    "threads": [
+        ("total_followers", "Total followers"),
+        ("follower_growth", "Follower growth"),
+        ("follower_growth_rate", "Follower growth rate"),
+        ("follows", "Follows"),
+        ("unfollows", "Unfollows"),
+        ("total_views", "Total views"),
+        ("reach", "Reach"),
+        ("total_engagement", "Total engagement"),
+        ("engagement_rate", "Engagement rate"),
+        ("likes", "Likes"),
+        ("comments", "Comments"),
+        ("shares", "Shares"),
+        ("reposts", "Reposts"),
+        ("total_posts", "Total posts"),
+        ("text_posts", "Text posts"),
+        ("photo_posts", "Photo posts"),
+        ("video_posts", "Video posts"),
+        ("demographics", "Audience demographics"),
+    ],
 }
 PLATFORM_KPI_METRICS = {
     "instagram": {"followers", "engagement", "reach"},
     "facebook": {"followers", "engagement", "reach"},
     "tiktok": {"followers", "likes", "views"},
     "youtube": {"subscribers", "engagement", "views"},
+    "linkedin": {"followers", "engagement", "impressions"},
+    "threads": {"followers", "engagement", "views"},
 }
 CUMULATIVE_KPI_FIELDS = {
-    "instagram": {"engagement": "total_engagement", "reach": "reach"},
-    "facebook": {"engagement": "total_engagement", "reach": "reach"},
-    "tiktok": {"likes": "likes", "views": "total_views"},
-    "youtube": {"engagement": "total_engagement", "views": "total_views"},
+    "instagram": {
+        "followers": ("follower_growth", False),
+        "engagement": ("total_engagement", True),
+        "reach": ("reach", True),
+    },
+    "facebook": {
+        "followers": ("follower_growth", False),
+        "engagement": ("total_engagement", True),
+        "reach": ("reach", True),
+    },
+    "tiktok": {
+        "followers": ("follower_growth", False),
+        "likes": ("likes", True),
+        "views": ("total_views", True),
+    },
+    "youtube": {
+        "subscribers": ("subscriber_growth", False),
+        "engagement": ("total_engagement", True),
+        "views": ("total_views", True),
+    },
+    "linkedin": {
+        "followers": ("follower_growth", False),
+        "engagement": ("total_engagement", True),
+        "impressions": ("impressions", True),
+    },
+    "threads": {
+        "followers": ("follower_growth", False),
+        "engagement": ("total_engagement", True),
+        "views": ("total_views", True),
+    },
 }
 CSV_IMPORT_SLOTS = {
     "account": {
@@ -203,7 +283,13 @@ CSV_IMPORT_SLOTS = {
         "label": "Instagram Stories",
         "platform": "instagram",
         "required_columns": ["Date", "Profile", "Story reach", "Story views", "Post-ID", "Link", "Image Link"],
-        "important_columns": ["Story reach", "Story views", "Story replies", "Story shares"],
+        "important_columns": [
+            "Story reach",
+            "Story views",
+            "Story replies",
+            "Story shares",
+            "Story total interaction",
+        ],
     },
     "fb_post": {
         "label": "Facebook Posts",
@@ -235,12 +321,17 @@ SOCIAL_NETWORK_PLATFORMS = {
     "FACEBOOK": "facebook",
     "TIKTOK": "tiktok",
     "YOUTUBE": "youtube",
+    "LINKEDIN": "linkedin",
+    "LINKEDIN COMPANY": "linkedin",
+    "THREADS": "threads",
 }
 PLATFORM_CONTENT_SLOTS = {
     "instagram": ("all_content", "ig_post", "ig_story"),
     "facebook": ("all_content", "fb_post"),
     "tiktok": ("all_content", "tt_post"),
     "youtube": ("all_content", "yt_post"),
+    "linkedin": ("all_content",),
+    "threads": ("all_content",),
 }
 PRIMARY_CSV_IMPORT_SLOTS = (
     "account",
@@ -454,26 +545,85 @@ def platform_from_content_row(
         return "tiktok"
     if "youtube." in link or "youtu.be" in link:
         return "youtube"
+    if "linkedin." in link or "lnkd.in" in link:
+        return "linkedin"
+    if "threads.net" in link:
+        return "threads"
     profile_id = str(row.get("Profile-ID", "") or "").strip()
     if profile_id and profile_platforms:
         return profile_platforms.get(profile_id)
     return None
 
 
+def default_content_type(platform: str) -> str:
+    return {
+        "tiktok": "video",
+        "youtube": "video",
+        "linkedin": "photo",
+        "threads": "text",
+    }.get(platform, "post")
+
+
 def content_type_from_row(row: dict, platform: str, fallback: str) -> str:
+    raw_type = str(
+        row.get("Content type")
+        or row.get("Post type")
+        or row.get("Media type")
+        or row.get("Type")
+        or ""
+    ).strip().lower()
     if fallback == "story" or number_from(row, "Number of Stories"):
-        return "story"
-    if number_from(row, "Number of Carousels/Albums"):
-        return "carousel"
-    if number_from(row, "Number of Reels/Shorts"):
-        return "short" if platform == "youtube" else "reel"
-    if number_from(row, "Number of Image Posts"):
-        return "image"
-    return fallback
+        detected = "story"
+    elif number_from(row, "Number of Carousels/Albums") or any(
+        token in raw_type for token in ("carousel", "album", "document")
+    ):
+        detected = "carousel"
+    elif number_from(row, "Number of Reels/Shorts"):
+        detected = "short" if platform == "youtube" else "reel"
+    elif number_from(row, "Number of Video Posts", "Number of Videos") or any(
+        token in raw_type for token in ("video", "reel", "short", "live")
+    ):
+        detected = "video"
+    elif number_from(row, "Number of Image Posts", "Number of Photo Posts") or any(
+        token in raw_type for token in ("image", "photo", "picture")
+    ):
+        detected = "image"
+    elif raw_type in {"text", "status", "link"}:
+        detected = "text"
+    else:
+        detected = fallback
+
+    if platform == "linkedin":
+        return "video" if detected in {"video", "reel", "short", "live"} else "photo"
+    if platform == "threads":
+        if detected in {"video", "reel", "short", "live"}:
+            return "video"
+        if detected in {"image", "photo", "carousel"}:
+            return "photo"
+        return "text"
+    return detected
 
 
 def post_json(row: dict, content_type: str, platform: str):
-    total_engagement = parse_number(row.get("Reactions, Comments & Shares"))
+    normalized_content_type = content_type_from_row(
+        row,
+        platform,
+        content_type,
+    )
+    total_engagement = None
+    if normalized_content_type == "story":
+        total_engagement = number_from(
+            row,
+            "Story total interaction",
+            "Story total interactions",
+            "Total story interactions",
+            "Interactions",
+            "Total interactions",
+        )
+    if total_engagement is None:
+        total_engagement = parse_number(
+            row.get("Reactions, Comments & Shares")
+        )
     likes = float(number_from(row, "Number of Likes") or 0)
     comments = float(
         number_from(row, "Number of comments", "Story replies") or 0
@@ -522,7 +672,7 @@ def post_json(row: dict, content_type: str, platform: str):
         "caption": row.get("Message") or "-",
         "permalink": row.get("Link"),
         "image_url": row.get("Image Link"),
-        "content_type": content_type_from_row(row, platform, content_type),
+        "content_type": normalized_content_type,
         "likes": likes,
         "comments": comments,
         "shares": shares,
@@ -604,7 +754,7 @@ def split_combined_content_rows(
     }
     duplicates = {}
     for platform, platform_rows in split_rows.items():
-        fallback = "video" if platform in {"tiktok", "youtube"} else "post"
+        fallback = default_content_type(platform)
         split_rows[platform], duplicates[platform] = deduplicate_content_rows(
             platform_rows,
             platform,
@@ -708,6 +858,8 @@ class DashboardRepository:
                         c.has_facebook,
                         c.has_tiktok,
                         c.has_youtube,
+                        c.has_linkedin,
+                        c.has_threads,
                         COUNT(p.id) FILTER (WHERE p.is_active) AS connected_profiles
                     FROM clients c
                     LEFT JOIN client_social_profiles p ON p.client_id = c.id
@@ -753,14 +905,17 @@ class DashboardRepository:
                     """
                     INSERT INTO clients (
                         client_code, client_name, industry,
-                        has_instagram, has_facebook, has_tiktok, has_youtube
+                        has_instagram, has_facebook, has_tiktok, has_youtube,
+                        has_linkedin, has_threads
                     )
                     VALUES (
                         :client_code, :client_name, :industry,
-                        :has_instagram, :has_facebook, :has_tiktok, :has_youtube
+                        :has_instagram, :has_facebook, :has_tiktok, :has_youtube,
+                        :has_linkedin, :has_threads
                     )
                     RETURNING id, client_code, client_name, industry,
                               has_instagram, has_facebook, has_tiktok, has_youtube,
+                              has_linkedin, has_threads,
                               0 AS connected_profiles
                     """
                 ),
@@ -772,6 +927,8 @@ class DashboardRepository:
                     "has_facebook": bool(payload.get("has_facebook")),
                     "has_tiktok": bool(payload.get("has_tiktok")),
                     "has_youtube": bool(payload.get("has_youtube")),
+                    "has_linkedin": bool(payload.get("has_linkedin")),
+                    "has_threads": bool(payload.get("has_threads")),
                 },
             ).mappings().one()
             return row_dict(row)
@@ -794,10 +951,13 @@ class DashboardRepository:
                         has_facebook = :has_facebook,
                         has_tiktok = :has_tiktok,
                         has_youtube = :has_youtube,
+                        has_linkedin = :has_linkedin,
+                        has_threads = :has_threads,
                         updated_at = now()
                     WHERE id = :client_id
                     RETURNING id, client_code, client_name, industry,
                               has_instagram, has_facebook, has_tiktok, has_youtube,
+                              has_linkedin, has_threads,
                               (
                                   SELECT COUNT(*)
                                   FROM client_social_profiles p
@@ -813,6 +973,8 @@ class DashboardRepository:
                     "has_facebook": bool(payload.get("has_facebook")),
                     "has_tiktok": bool(payload.get("has_tiktok")),
                     "has_youtube": bool(payload.get("has_youtube")),
+                    "has_linkedin": bool(payload.get("has_linkedin")),
+                    "has_threads": bool(payload.get("has_threads")),
                 },
             ).mappings().first()
             if not row:
@@ -888,13 +1050,95 @@ class DashboardRepository:
                 "period_label": label,
             }
 
+    def update_report_period(self, client_id: str, period_id: str, payload: dict):
+        month_slug = str(payload.get("month_slug") or "").strip().lower()
+        if not month_slug:
+            raise ValueError("month_slug is required")
+        period_start, period_end, period_label = month_range_from_slug(month_slug)
+
+        with self.engine.begin() as conn:
+            lock_report_period(conn, client_id, period_id)
+            return self._update_report_period_in_connection(
+                conn,
+                client_id,
+                period_id,
+                period_start,
+                period_end,
+                period_label,
+            )
+
+    def _update_report_period_in_connection(
+        self,
+        conn,
+        client_id: str,
+        period_id: str,
+        period_start,
+        period_end,
+        period_label: str,
+    ):
+        duplicate = conn.execute(
+            text(
+                """
+                SELECT id, period_label, period_start, period_end
+                FROM report_periods
+                WHERE client_id = CAST(:client_id AS UUID)
+                  AND id <> CAST(:period_id AS UUID)
+                  AND (
+                      period_start = :period_start
+                      OR lower(trim(COALESCE(period_label, ''))) = lower(:period_label)
+                  )
+                LIMIT 1
+                FOR UPDATE
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_id": period_id,
+                "period_start": period_start,
+                "period_label": period_label,
+            },
+        ).mappings().first()
+        if duplicate:
+            raise ReportPeriodAlreadyExistsError(
+                dict(duplicate),
+                period_label,
+            )
+
+        updated = conn.execute(
+            text(
+                """
+                UPDATE report_periods
+                SET period_start = :period_start,
+                    period_end = :period_end,
+                    period_label = :period_label
+                WHERE id = CAST(:period_id AS UUID)
+                  AND client_id = CAST(:client_id AS UUID)
+                RETURNING id, period_label, period_start, period_end
+                """
+            ),
+            {
+                "client_id": client_id,
+                "period_id": period_id,
+                "period_start": period_start,
+                "period_end": period_end,
+                "period_label": period_label,
+            },
+        ).mappings().first()
+        if not updated:
+            raise ValueError("Report month not found")
+        result = dict(updated)
+        result["label"] = result["period_label"]
+        result["slug"] = month_slug_from_date(result["period_start"])
+        return result
+
     def platforms(self, client_id: str):
         with self.engine.begin() as conn:
             client = conn.execute(
                 text(
                     """
                     SELECT id, client_code, client_name, industry,
-                           has_instagram, has_facebook, has_tiktok, has_youtube
+                           has_instagram, has_facebook, has_tiktok, has_youtube,
+                           has_linkedin, has_threads
                     FROM clients
                     WHERE id = :client_id
                     """
@@ -963,7 +1207,89 @@ class DashboardRepository:
                             SELECT 1 FROM youtube_reports r
                             WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
                         ) THEN 1 ELSE 0 END
+                    ) + (
+                        CASE WHEN EXISTS (
+                            SELECT 1 FROM linkedin_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        ) THEN 1 ELSE 0 END
+                    ) + (
+                        CASE WHEN EXISTS (
+                            SELECT 1 FROM threads_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                        ) THEN 1 ELSE 0 END
                     ) AS platform_reports,
+                    COALESCE((
+                        SELECT jsonb_object_agg(
+                            latest_file.slot,
+                            latest_file.filename
+                        )
+                        FROM (
+                            SELECT DISTINCT ON (file_entry.key)
+                                file_entry.key AS slot,
+                                file_entry.value AS filename
+                            FROM etl_runs file_run
+                            CROSS JOIN LATERAL jsonb_each_text(
+                                COALESCE(
+                                    file_run.metadata -> 'files',
+                                    '{}'::jsonb
+                                )
+                            ) AS file_entry
+                            WHERE file_run.report_period_id = rp.id
+                              AND file_run.client_id = rp.client_id
+                              AND file_run.status = 'success'
+                              AND file_entry.key IN (
+                                  'account',
+                                  'competitor',
+                                  'competitor_content',
+                                  'all_content',
+                                  'ig_story'
+                              )
+                            ORDER BY
+                                file_entry.key,
+                                COALESCE(
+                                    file_run.finished_at,
+                                    file_run.started_at,
+                                    file_run.created_at
+                                ) DESC,
+                                file_run.created_at DESC
+                        ) latest_file
+                    ), '{}'::jsonb) AS uploaded_csv_files,
+                    COALESCE((
+                        SELECT string_agg(
+                            latest_legacy_file.filename,
+                            ', '
+                            ORDER BY latest_legacy_file.slot
+                        )
+                        FROM (
+                            SELECT DISTINCT ON (file_entry.key)
+                                file_entry.key AS slot,
+                                file_entry.value AS filename
+                            FROM etl_runs file_run
+                            CROSS JOIN LATERAL jsonb_each_text(
+                                COALESCE(
+                                    file_run.metadata -> 'files',
+                                    '{}'::jsonb
+                                )
+                            ) AS file_entry
+                            WHERE file_run.report_period_id = rp.id
+                              AND file_run.client_id = rp.client_id
+                              AND file_run.status = 'success'
+                              AND file_entry.key IN (
+                                  'ig_post',
+                                  'fb_post',
+                                  'tt_post',
+                                  'yt_post'
+                              )
+                            ORDER BY
+                                file_entry.key,
+                                COALESCE(
+                                    file_run.finished_at,
+                                    file_run.started_at,
+                                    file_run.created_at
+                                ) DESC,
+                                file_run.created_at DESC
+                        ) latest_legacy_file
+                    ), '') AS legacy_content_filenames,
                     (
                         SELECT MAX(updated_at) FROM (
                             SELECT COALESCE(er.finished_at, er.started_at) AS updated_at
@@ -988,6 +1314,14 @@ class DashboardRepository:
                             FROM youtube_reports r
                             WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
                             UNION ALL
+                            SELECT r.updated_at
+                            FROM linkedin_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                            UNION ALL
+                            SELECT r.updated_at
+                            FROM threads_reports r
+                            WHERE r.client_id = rp.client_id AND r.report_period_id = rp.id
+                            UNION ALL
                             SELECT rar.fetched_at AS updated_at
                             FROM raw_api_responses rar
                             JOIN etl_runs er ON er.id = rar.run_id
@@ -1010,6 +1344,14 @@ class DashboardRepository:
         for row in rows:
             uploaded_files = int(row["uploaded_files"] or 0)
             platform_reports = int(row["platform_reports"] or 0)
+            uploaded_csv_files = dict(row["uploaded_csv_files"] or {})
+            if (
+                not uploaded_csv_files.get("all_content")
+                and row["legacy_content_filenames"]
+            ):
+                uploaded_csv_files["all_content"] = row[
+                    "legacy_content_filenames"
+                ]
             status = (
                 f"{uploaded_files} of 5 files uploaded"
                 if uploaded_files
@@ -1023,6 +1365,7 @@ class DashboardRepository:
                     "period_start": row["period_start"],
                     "period_end": row["period_end"],
                     "uploaded_files": uploaded_files,
+                    "uploaded_csv_files": uploaded_csv_files,
                     "platform_reports": platform_reports,
                     "last_updated": row["last_updated"],
                     "status": status,
@@ -1064,6 +1407,7 @@ class DashboardRepository:
             report_data = row_dict(report)
             period_id = report_data["report_period_id"] if report_data else None
             kpi_results = []
+            cumulative_actuals = {}
             competitor_profiles = []
             content_missing = []
             if period_id:
@@ -1088,6 +1432,12 @@ class DashboardRepository:
                         },
                     ).mappings()
                 ]
+                cumulative_actuals = self.kpi_year_to_date_actuals(
+                    conn,
+                    client_id,
+                    period_id,
+                    platform,
+                )
                 competitor_profiles = [
                     row_dict(row)
                     for row in conn.execute(
@@ -1137,7 +1487,13 @@ class DashboardRepository:
             ]
         if report_data is not None:
             report_data["competitor_profiles"] = competitor_profiles
-        kpi_results = dashboard_kpi_results(platform, report_data, kpi_results, kpi_targets)
+        kpi_results = dashboard_kpi_results(
+            platform,
+            report_data,
+            kpi_results,
+            kpi_targets,
+            cumulative_actuals,
+        )
         missing_data = missing_platform_data(platform, report_data, content_missing)
         return {
             "platform": platform,
@@ -1404,6 +1760,7 @@ class DashboardRepository:
     def import_csv_report(self, payload: dict, files: dict):
         client_id = payload.get("client_id")
         month_slug = payload.get("month_slug") or "june-2026"
+        requested_period_id = str(payload.get("period_id") or "").strip() or None
         if not client_id:
             raise ValueError("Missing client_id")
         has_combined_content = bool(
@@ -1431,7 +1788,11 @@ class DashboardRepository:
             ):
                 continue
             if file_item is None or not getattr(file_item, "filename", ""):
-                if slot in PRIMARY_CSV_IMPORT_SLOTS and not spec.get("optional"):
+                if (
+                    not requested_period_id
+                    and slot in PRIMARY_CSV_IMPORT_SLOTS
+                    and not spec.get("optional")
+                ):
                     missing_files.append(spec["label"])
                 file_results.append(
                     {
@@ -1439,7 +1800,11 @@ class DashboardRepository:
                         "label": spec["label"],
                         "filename": None,
                         "rows": 0,
-                        "warnings": [] if spec.get("optional") else ["File was not uploaded."],
+                        "warnings": (
+                            []
+                            if spec.get("optional") or requested_period_id
+                            else ["File was not uploaded."]
+                        ),
                     }
                 )
                 continue
@@ -1459,13 +1824,31 @@ class DashboardRepository:
             )
 
         with self.engine.begin() as conn:
-            lock_existing_report_period(
-                conn,
-                client_id,
-                period_start,
-                period_end,
-            )
-            period_id = self.ensure_report_period(conn, client_id, period_start, period_end, period_label)
+            if requested_period_id:
+                lock_report_period(conn, client_id, requested_period_id)
+                updated_period = self._update_report_period_in_connection(
+                    conn,
+                    client_id,
+                    requested_period_id,
+                    period_start,
+                    period_end,
+                    period_label,
+                )
+                period_id = updated_period["id"]
+            else:
+                lock_existing_report_period(
+                    conn,
+                    client_id,
+                    period_start,
+                    period_end,
+                )
+                period_id = self.ensure_report_period(
+                    conn,
+                    client_id,
+                    period_start,
+                    period_end,
+                    period_label,
+                )
             run_id = self.create_import_run(conn, client_id, period_id, parsed_files, missing_files)
             profile_ids = self.upsert_account_profiles(conn, client_id, parsed_files.get("account", {}).get("rows", []))
             profile_platforms = self.content_profile_platforms(conn, client_id)
@@ -1599,14 +1982,20 @@ class DashboardRepository:
                 "facebook": "fb_post",
                 "tiktok": "tt_post",
                 "youtube": "yt_post",
+                "linkedin": None,
+                "threads": None,
             }
             for platform, legacy_slot in legacy_slots.items():
                 platform_rows = (
                     combined_rows[platform]
                     if "all_content" in parsed_files
-                    else parsed_files.get(legacy_slot, {}).get("rows", [])
+                    else (
+                        parsed_files.get(legacy_slot, {}).get("rows", [])
+                        if legacy_slot
+                        else []
+                    )
                 )
-                fallback = "video" if platform in {"tiktok", "youtube"} else "post"
+                fallback = default_content_type(platform)
                 summary = summarize_posts(
                     platform_rows,
                     fallback,
@@ -1624,6 +2013,8 @@ class DashboardRepository:
                 for platform, legacy_slot in legacy_slots.items():
                     combined_breakdown["detected"][platform] = len(
                         parsed_files.get(legacy_slot, {}).get("rows", [])
+                        if legacy_slot
+                        else []
                     )
                 combined_breakdown["detected"]["instagram"] = len(
                     parsed_files.get("ig_post", {}).get("rows", [])
@@ -1729,7 +2120,13 @@ class DashboardRepository:
 
         warnings = sum(len(item.get("warnings") or []) for item in file_results)
         return {
-            "period": {"id": period_id, "label": period_label, "start": period_start, "end": period_end},
+            "period": {
+                "id": period_id,
+                "label": period_label,
+                "slug": month_slug_from_date(period_start),
+                "start": period_start,
+                "end": period_end,
+            },
             "summary": {
                 "uploaded": len(parsed_files),
                 "expected": len(PRIMARY_CSV_IMPORT_SLOTS),
@@ -1805,7 +2202,7 @@ class DashboardRepository:
             row["platform"]: row["id"]
             for row in existing_profiles
         }
-        flags = {"instagram": False, "facebook": False, "tiktok": False, "youtube": False}
+        flags = {platform: False for platform in PLATFORM_TABLES}
         for row in rows:
             platform = platform_from_row(row)
             profile_source_id = row.get("Profile-ID")
@@ -1854,6 +2251,8 @@ class DashboardRepository:
                     has_facebook = has_facebook OR :facebook,
                     has_tiktok = has_tiktok OR :tiktok,
                     has_youtube = has_youtube OR :youtube,
+                    has_linkedin = has_linkedin OR :linkedin,
+                    has_threads = has_threads OR :threads,
                     updated_at = now()
                 WHERE id = :client_id
                 """
@@ -2106,6 +2505,15 @@ class DashboardRepository:
                     if posts_uploaded
                     else None
                 ),
+                "photo_posts": (
+                    sum(content_type_counts.get(kind, 0) for kind in ("photo", "image", "carousel"))
+                    if posts_uploaded
+                    else None
+                ),
+                "text_posts": content_type_counts.get("text", 0) if posts_uploaded else None,
+                "content_type_breakdown": (
+                    json.dumps(content_type_counts) if posts_uploaded else None
+                ),
                 "shorts_posts": content_type_counts.get("short", 0) if posts_uploaded else None,
                 "long_form_posts": content_type_counts.get("video", 0) if posts_uploaded else None,
                 "content_has_rows": content_has_rows,
@@ -2144,6 +2552,8 @@ class DashboardRepository:
                 report_id = self.upsert_youtube_report(conn, table, base)
             elif platform == "tiktok":
                 report_id = self.upsert_tiktok_report(conn, table, base)
+            elif platform in {"linkedin", "threads"}:
+                report_id = self.upsert_extended_social_report(conn, table, base)
             else:
                 report_id = self.upsert_meta_report(conn, table, base)
             if content_has_rows:
@@ -2495,6 +2905,119 @@ class DashboardRepository:
         ).mappings().one()
         return row["id"]
 
+    def upsert_extended_social_report(self, conn, table, data):
+        if data.get("existing_report_id"):
+            row = conn.execute(
+                text(
+                    f"""
+                    UPDATE {table}
+                    SET
+                        profile_id = COALESCE(:profile_id, profile_id),
+                        total_followers = COALESCE(:followers, total_followers),
+                        follower_growth = COALESCE(:follower_growth, follower_growth),
+                        follower_growth_rate = COALESCE(:follower_growth_rate, follower_growth_rate),
+                        follows = COALESCE(:follows, follows),
+                        unfollows = COALESCE(:unfollows, unfollows),
+                        total_views = COALESCE(:views, total_views),
+                        reach = COALESCE(:reach, reach),
+                        impressions = COALESCE(:views, impressions),
+                        total_engagement = COALESCE(:engagement, total_engagement),
+                        engagement_rate = COALESCE(:engagement_rate, engagement_rate),
+                        likes = COALESCE(:likes, likes),
+                        comments = COALESCE(:comments, comments),
+                        shares = COALESCE(:shares, shares),
+                        saves = COALESCE(:saves, saves),
+                        reposts = COALESCE(:reposts, reposts),
+                        reactions = COALESCE(:reactions, reactions),
+                        total_posts = COALESCE(:posts, total_posts),
+                        photo_posts = COALESCE(:photo_posts, photo_posts),
+                        video_posts = COALESCE(:video_posts, video_posts),
+                        text_posts = COALESCE(:text_posts, text_posts),
+                        content_type_breakdown = COALESCE(
+                            CAST(:content_type_breakdown AS JSONB),
+                            content_type_breakdown
+                        ),
+                        top_posts = CASE
+                            WHEN :content_has_rows
+                            THEN CAST(COALESCE(:top_posts, '[]') AS JSONB)
+                            ELSE top_posts
+                        END,
+                        low_posts = CASE
+                            WHEN :content_has_rows
+                            THEN CAST(COALESCE(:low_posts, '[]') AS JSONB)
+                            ELSE low_posts
+                        END,
+                        raw_sections = COALESCE(raw_sections, '{{}}'::jsonb)
+                            || jsonb_strip_nulls(CAST(:raw_sections AS JSONB)),
+                        updated_at = now()
+                    WHERE id = :existing_report_id
+                    RETURNING id
+                    """
+                ),
+                data,
+            ).mappings().one()
+            return row["id"]
+        row = conn.execute(
+            text(
+                f"""
+                INSERT INTO {table} (
+                    client_id, profile_id, report_period_id, source,
+                    total_followers, follower_growth, follower_growth_rate,
+                    follows, unfollows, total_views, reach, impressions,
+                    total_engagement, engagement_rate, likes, comments, shares,
+                    saves, reposts, reactions, total_posts,
+                    photo_posts, video_posts, text_posts,
+                    content_type_breakdown, top_posts, low_posts, raw_sections
+                )
+                VALUES (
+                    :client_id, :profile_id, :period_id, 'fanpage_karma_csv',
+                    :followers, :follower_growth, :follower_growth_rate,
+                    :follows, :unfollows, :views, :reach, :views,
+                    :engagement, :engagement_rate, :likes, :comments, :shares,
+                    :saves, :reposts, :reactions, :posts,
+                    :photo_posts, :video_posts, :text_posts,
+                    CAST(COALESCE(:content_type_breakdown, '{{}}') AS JSONB),
+                    CAST(COALESCE(:top_posts, '[]') AS JSONB),
+                    CAST(COALESCE(:low_posts, '[]') AS JSONB),
+                    CAST(:raw_sections AS JSONB)
+                )
+                ON CONFLICT (client_id, profile_id, report_period_id)
+                DO UPDATE SET
+                    total_followers = COALESCE(EXCLUDED.total_followers, {table}.total_followers),
+                    follower_growth = COALESCE(EXCLUDED.follower_growth, {table}.follower_growth),
+                    follower_growth_rate = COALESCE(EXCLUDED.follower_growth_rate, {table}.follower_growth_rate),
+                    follows = COALESCE(EXCLUDED.follows, {table}.follows),
+                    unfollows = COALESCE(EXCLUDED.unfollows, {table}.unfollows),
+                    total_views = COALESCE(EXCLUDED.total_views, {table}.total_views),
+                    reach = COALESCE(EXCLUDED.reach, {table}.reach),
+                    impressions = COALESCE(EXCLUDED.impressions, {table}.impressions),
+                    total_engagement = COALESCE(EXCLUDED.total_engagement, {table}.total_engagement),
+                    engagement_rate = COALESCE(EXCLUDED.engagement_rate, {table}.engagement_rate),
+                    likes = COALESCE(EXCLUDED.likes, {table}.likes),
+                    comments = COALESCE(EXCLUDED.comments, {table}.comments),
+                    shares = COALESCE(EXCLUDED.shares, {table}.shares),
+                    saves = COALESCE(EXCLUDED.saves, {table}.saves),
+                    reposts = COALESCE(EXCLUDED.reposts, {table}.reposts),
+                    reactions = COALESCE(EXCLUDED.reactions, {table}.reactions),
+                    total_posts = COALESCE(EXCLUDED.total_posts, {table}.total_posts),
+                    photo_posts = COALESCE(EXCLUDED.photo_posts, {table}.photo_posts),
+                    video_posts = COALESCE(EXCLUDED.video_posts, {table}.video_posts),
+                    text_posts = COALESCE(EXCLUDED.text_posts, {table}.text_posts),
+                    content_type_breakdown = COALESCE(
+                        CAST(:content_type_breakdown AS JSONB),
+                        {table}.content_type_breakdown
+                    ),
+                    top_posts = CASE WHEN :content_has_rows THEN EXCLUDED.top_posts ELSE {table}.top_posts END,
+                    low_posts = CASE WHEN :content_has_rows THEN EXCLUDED.low_posts ELSE {table}.low_posts END,
+                    raw_sections = EXCLUDED.raw_sections,
+                    updated_at = now()
+                RETURNING id
+                """
+            ),
+            data,
+        ).mappings().one()
+        return row["id"]
+
     def upsert_youtube_report(self, conn, table, data):
         if data.get("existing_report_id"):
             row = conn.execute(
@@ -2712,7 +3235,7 @@ class DashboardRepository:
             profile_name = str(row.get("Profile", "")).strip()
             if not platform or not profile_name:
                 continue
-            fallback_type = "post" if platform in {"instagram", "facebook"} else "video"
+            fallback_type = default_content_type(platform)
             post = post_json(row, fallback_type, platform)
             content_rows.append(
                 {
@@ -2861,11 +3384,12 @@ class DashboardRepository:
         count = 0
         for platform, report in reports.items():
             metric_values = {
-                "followers": report.get("followers"),
-                "subscribers": report.get("followers"),
+                "followers": report.get("follower_growth"),
+                "subscribers": report.get("follower_growth"),
                 "engagement": report.get("engagement"),
                 "reach": report.get("reach"),
                 "views": report.get("views"),
+                "impressions": report.get("views"),
                 "likes": report.get("likes"),
             }
             cumulative_actuals = self.kpi_year_to_date_actuals(
@@ -3002,8 +3526,11 @@ class DashboardRepository:
             return {}
         table = PLATFORM_TABLES[platform]
         aggregate_columns = ", ".join(
-            f"SUM({field}) FILTER (WHERE report_rank = 1) AS {metric_name}"
-            for metric_name, field in metric_fields.items()
+            f"SUM({field}) FILTER ("
+            f"WHERE report_rank = 1"
+            f"{' AND has_content' if requires_content else ''}"
+            f") AS {metric_name}"
+            for metric_name, (field, requires_content) in metric_fields.items()
         )
         row = conn.execute(
             text(
@@ -3017,6 +3544,14 @@ class DashboardRepository:
                 ranked_reports AS (
                     SELECT
                         r.*,
+                        EXISTS (
+                            SELECT 1
+                            FROM social_content_reports content
+                            WHERE content.client_id = r.client_id
+                              AND content.report_period_id = r.report_period_id
+                              AND content.platform = :platform
+                              AND content.performance_bucket = 'all'
+                        ) AS has_content,
                         ROW_NUMBER() OVER (
                             PARTITION BY r.report_period_id
                             ORDER BY
@@ -3030,14 +3565,6 @@ class DashboardRepository:
                     WHERE r.client_id = :client_id
                       AND EXTRACT(YEAR FROM rp.period_start) = EXTRACT(YEAR FROM selected.period_start)
                       AND rp.period_start <= selected.period_start
-                      AND EXISTS (
-                          SELECT 1
-                          FROM social_content_reports content
-                          WHERE content.client_id = r.client_id
-                            AND content.report_period_id = r.report_period_id
-                            AND content.platform = :platform
-                            AND content.performance_bucket = 'all'
-                      )
                 )
                 SELECT {aggregate_columns}
                 FROM ranked_reports
@@ -3074,6 +3601,26 @@ def overview_metrics(platform: str, report: dict | None):
             metric("Eng. Rate", report.get("engagement_rate"), "%"),
             metric("Posts", report.get("total_posts")),
         ]
+    if platform == "linkedin":
+        return [
+            metric("Followers", report.get("total_followers")),
+            metric("Follows", report.get("follows")),
+            metric("Growth Rate", report.get("follower_growth_rate"), "%"),
+            metric("Impressions", report.get("impressions")),
+            metric("Engagement", report.get("total_engagement")),
+            metric("Eng. Rate", report.get("engagement_rate"), "%"),
+            metric("Posts", report.get("total_posts")),
+        ]
+    if platform == "threads":
+        return [
+            metric("Followers", report.get("total_followers")),
+            metric("Follows", report.get("follows")),
+            metric("Growth Rate", report.get("follower_growth_rate"), "%"),
+            metric("Views", report.get("total_views")),
+            metric("Engagement", report.get("total_engagement")),
+            metric("Eng. Rate", report.get("engagement_rate"), "%"),
+            metric("Posts", report.get("total_posts")),
+        ]
     return [
         metric("Followers", report.get("total_followers")),
         metric("Follows", report.get("follows")),
@@ -3093,9 +3640,9 @@ def kpi_actual_value(platform: str, report: dict | None, metric_name: str):
     if not report:
         return None
     if metric_name == "followers":
-        return report.get("total_followers")
+        return report.get("follower_growth")
     if metric_name == "subscribers":
-        return report.get("total_subscribers")
+        return report.get("subscriber_growth")
     if metric_name == "engagement":
         return report.get("total_engagement")
     if metric_name == "reach":
@@ -3104,6 +3651,8 @@ def kpi_actual_value(platform: str, report: dict | None, metric_name: str):
         return report.get("total_views") or report.get("views")
     if metric_name == "likes":
         return report.get("likes")
+    if metric_name == "impressions":
+        return report.get("impressions")
     return None
 
 
@@ -3118,7 +3667,14 @@ def achievement(actual, target):
     return round(float((actual_number / target_number) * 100), 2)
 
 
-def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], targets: list[dict]):
+def dashboard_kpi_results(
+    platform: str,
+    report: dict | None,
+    rows: list[dict],
+    targets: list[dict],
+    cumulative_actuals: dict | None = None,
+):
+    cumulative_actuals = cumulative_actuals or {}
     configured_metrics = sorted(PLATFORM_KPI_METRICS.get(platform, set()))
     rows_by_metric = {row.get("metric_name"): dict(row) for row in rows or []}
     report_period = (report or {}).get("period_start")
@@ -3147,10 +3703,13 @@ def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], 
             (target for target in target_candidates if target.get("target_year") is not None),
             {},
         )
-        actual_month = row.get("actual_month")
+        source_actual = kpi_actual_value(platform, report, metric_name)
+        actual_month = source_actual
         if actual_month is None:
-            actual_month = kpi_actual_value(platform, report, metric_name)
-        actual_year = row.get("actual_year")
+            actual_month = row.get("actual_month")
+        actual_year = cumulative_actuals.get(metric_name)
+        if actual_year is None:
+            actual_year = row.get("actual_year")
         if actual_year is None:
             actual_year = actual_month
         target_month = row.get("target_month")
@@ -3159,12 +3718,8 @@ def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], 
         target_year = row.get("target_year")
         if target_year is None:
             target_year = monthly_target.get("target_year") or yearly_target.get("target_year")
-        achievement_month = row.get("achievement_month")
-        if achievement_month is None:
-            achievement_month = achievement(actual_month, target_month)
-        achievement_year = row.get("achievement_year")
-        if achievement_year is None:
-            achievement_year = achievement(actual_year, target_year)
+        achievement_month = achievement(actual_month, target_month)
+        achievement_year = achievement(actual_year, target_year)
         result.append(
             {
                 **row,

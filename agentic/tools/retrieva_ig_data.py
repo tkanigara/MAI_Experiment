@@ -277,10 +277,7 @@ def retrieve_followers_growth(client_code:str, report_date: str):
 
 
 @tool
-def retrieve_followers_growth_history(
-    client_code: str,
-    current_report_period_id: str,
-):
+def retrieve_followers_growth_history( client_code: str, current_report_period_id: str,):
     """
     Retrieve all historical followers growth data before
     the current report period.

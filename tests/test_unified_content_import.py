@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dashboard.repositories.dashboard_repository import (
     content_type_from_row,
     deduplicate_content_rows,
+    platform_from_content_row,
     split_combined_content_rows,
     summarize_post_objects,
     json_safe,
@@ -39,10 +40,12 @@ class UnifiedContentImportTests(unittest.TestCase):
         self.assertEqual(
             {platform: len(rows) for platform, rows in split_rows.items()},
             {
-                "instagram": 10,
-                "facebook": 11,
+                "instagram": 13,
+                "facebook": 14,
                 "tiktok": 3,
                 "youtube": 3,
+                "linkedin": 3,
+                "threads": 0,
             },
         )
         self.assertEqual(audit["summary_rows_skipped"], 1)
@@ -69,6 +72,46 @@ class UnifiedContentImportTests(unittest.TestCase):
         )
         self.assertEqual(detected["tiktok"], {"video"})
         self.assertEqual(detected["youtube"], {"short", "video"})
+
+    def test_linkedin_and_threads_are_detected_from_network_or_link(self):
+        self.assertEqual(
+            platform_from_content_row({"Social network": "LinkedIn"}),
+            "linkedin",
+        )
+        self.assertEqual(
+            platform_from_content_row({"Link": "https://www.threads.net/@mai/post/1"}),
+            "threads",
+        )
+        self.assertEqual(
+            platform_from_content_row({"Link": "https://www.linkedin.com/posts/mai-1"}),
+            "linkedin",
+        )
+
+    def test_new_platform_content_types_are_normalized(self):
+        self.assertEqual(
+            content_type_from_row(
+                {"Post type": "Native Video"},
+                "linkedin",
+                "photo",
+            ),
+            "video",
+        )
+        self.assertEqual(
+            content_type_from_row({}, "linkedin", "photo"),
+            "photo",
+        )
+        self.assertEqual(
+            content_type_from_row(
+                {"Number of Image Posts": "1"},
+                "threads",
+                "text",
+            ),
+            "photo",
+        )
+        self.assertEqual(
+            content_type_from_row({}, "threads", "text"),
+            "text",
+        )
 
     def test_unknown_rows_warn_without_blocking_valid_rows(self):
         rows = [

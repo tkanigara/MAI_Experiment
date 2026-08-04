@@ -262,6 +262,8 @@ function connectedPlatforms(client) {
     facebook: client.has_facebook,
     tiktok: client.has_tiktok,
     youtube: client.has_youtube,
+    linkedin: client.has_linkedin,
+    threads: client.has_threads,
   };
   return Object.entries(flags)
     .filter(([, enabled]) => Boolean(enabled))

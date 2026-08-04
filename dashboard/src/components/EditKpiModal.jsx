@@ -20,6 +20,7 @@ export default function EditKpiModal({
       await onSave({
         metric_name: row.metric_name,
         target_month: form.get("target_month"),
+        target_year: form.get("target_year"),
         unit: form.get("unit"),
       });
     } catch (err) {
@@ -38,8 +39,10 @@ export default function EditKpiModal({
       />
       <form className="modal-body" onSubmit={handleSubmit}>
         <label>Metric <input value={prettyMetric(row.metric_name)} readOnly /></label>
-        <label>Actual <input value={formatNumber(row.actual_month)} readOnly /></label>
+        <label>Actual Month <input value={formatNumber(row.actual_month)} readOnly /></label>
+        <label>Actual YTD <input value={formatNumber(row.actual_year)} readOnly /></label>
         <label>Monthly Target <input name="target_month" type="number" step="0.01" defaultValue={row.target_month || ""} /></label>
+        <label>Yearly Target <input name="target_year" type="number" step="0.01" defaultValue={row.target_year || ""} /></label>
         <label>Unit <input name="unit" defaultValue={row.unit || "count"} /></label>
         {error && <div className="import-alert danger">{error}</div>}
         <div className="modal-actions">

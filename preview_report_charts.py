@@ -63,6 +63,18 @@ PLATFORMS = {
         "reach": "r.reach",
         "visibility_label": "Views",
     },
+    "linkedin": {
+        "table": "linkedin_reports",
+        "audience": "Followers",
+        "audience_total": "total_followers",
+        "net_growth": "follower_growth",
+        "growth_rate": "follower_growth_rate",
+        "gained": "follows",
+        "lost": "unfollows",
+        "impressions": "r.impressions",
+        "reach": "r.reach",
+        "visibility_label": "Impressions",
+    },
 }
 
 COLORS = {
@@ -90,6 +102,7 @@ PLATFORM_COLORS = {
     "facebook": "#1877F2",
     "tiktok": "#20242A",
     "youtube": "#E53935",
+    "linkedin": "#0A66C2",
 }
 
 
@@ -164,7 +177,8 @@ def fetch_context(engine, client_code: str, month: str | None):
             text(
                 """
                 SELECT id, client_code, client_name,
-                       has_instagram, has_facebook, has_tiktok, has_youtube
+                       has_instagram, has_facebook, has_tiktok, has_youtube,
+                       has_linkedin
                 FROM clients
                 WHERE lower(client_code) = lower(:client_code)
                   AND is_active

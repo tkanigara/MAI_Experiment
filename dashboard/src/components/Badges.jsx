@@ -3,12 +3,16 @@ import facebookLogo from "./logo/facebook.png";
 import instagramLogo from "./logo/instagram.png";
 import tiktokLogo from "./logo/tiktok.png";
 import youtubeLogo from "./logo/youtube.png";
+import linkedinLogo from "./logo/linkedin.png";
+import threadsLogo from "./logo/threads.png";
 
 const PLATFORM_LOGOS = {
   facebook: facebookLogo,
   instagram: instagramLogo,
   tiktok: tiktokLogo,
   youtube: youtubeLogo,
+  linkedin: linkedinLogo,
+  threads: threadsLogo,
 };
 
 export function PlatformBadge({ platform, label }) {

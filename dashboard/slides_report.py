@@ -39,6 +39,7 @@ PLATFORM_TABLES = {
     "facebook": "facebook_reports",
     "tiktok": "tiktok_reports",
     "youtube": "youtube_reports",
+    "linkedin": "linkedin_reports",
 }
 
 PLATFORM_PREFIXES = {
@@ -46,6 +47,7 @@ PLATFORM_PREFIXES = {
     "facebook": "FB",
     "tiktok": "TK",
     "youtube": "YT",
+    "linkedin": "LK",
 }
 
 PLATFORM_LABELS = {
@@ -53,11 +55,42 @@ PLATFORM_LABELS = {
     "facebook": "Facebook",
     "tiktok": "TikTok",
     "youtube": "YouTube",
+    "linkedin": "LinkedIn",
 }
+
+AUDIENCE_GROWTH_KPI = {
+    "instagram": ("followers", "follower_growth"),
+    "facebook": ("followers", "follower_growth"),
+    "tiktok": ("followers", "follower_growth"),
+    "youtube": ("subscribers", "subscriber_growth"),
+    "linkedin": ("followers", "follower_growth"),
+}
+
+# Section headings and overview-table headers in the native Slides template.
+# Threads is deliberately listed here even though it is not in PLATFORM_TABLES:
+# until its slide mapping is implemented, its section and overview column must
+# be removed from generated reports instead of leaking raw placeholders.
+SLIDE_PLATFORM_HEADINGS = {
+    "INSTAGRAM": "instagram",
+    "FACEBOOK": "facebook",
+    "TIKTOK": "tiktok",
+    "YOUTUBE": "youtube",
+    "LINKEDIN": "linkedin",
+    "THREADS": "threads",
+}
+SLIDE_PLATFORM_SECTION_END_HEADINGS = {
+    "WEBSITE TRAFFIC & SEO HEALTH",
+    "PAID ADS PERFORMANCE OVERVIEW",
+}
+EMU_PER_INCH = 914_400
+OVERVIEW_TABLE_TOTAL_WIDTH_EMU = 12 * EMU_PER_INCH
+# Preserve the wider MATRIX column from the current native template while the
+# platform columns share all remaining horizontal space.
+OVERVIEW_MATRIX_COLUMN_WIDTH_EMU = 1_929_625
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
 EVIDENCE_PLACEHOLDER_PATTERN = re.compile(
-    r"^\{\{(?P<prefix>IG|FB|TK|YT)_(?P<family>EVIDENCE|STORY)_"
+    r"^\{\{(?P<prefix>IG|FB|TK|YT|LK)_(?P<family>EVIDENCE|STORY)_"
     r"(?P<index>\d+)(?:_[A-Za-z0-9_]+)?\}\}$"
 )
 TEMPLATE_PLACEHOLDER_CACHE: dict[str, set[str]] = {}
@@ -1654,7 +1687,8 @@ class SlidesReportRepository:
                     text(
                         """
                         SELECT id, client_code, client_name, industry,
-                               has_instagram, has_facebook, has_tiktok, has_youtube
+                               has_instagram, has_facebook, has_tiktok, has_youtube,
+                               has_linkedin
                         FROM clients
                         WHERE id = :client_id
                         """
@@ -1781,6 +1815,15 @@ class SlidesReportRepository:
                         },
                     ).mappings()
                 ]
+                self.apply_audience_growth_kpi_actuals(
+                    conn,
+                    client_id,
+                    period,
+                    platform,
+                    table_name,
+                    reports[platform],
+                    kpi_results[platform],
+                )
                 trends[platform] = self.monthly_trends(conn, client_id, period, platform, table_name)
 
             insights = [
@@ -1928,6 +1971,62 @@ class SlidesReportRepository:
         ]
         return filtered[:3]
 
+    def apply_audience_growth_kpi_actuals(
+        self,
+        conn,
+        client_id: str,
+        period: dict,
+        platform: str,
+        table_name: str,
+        report: dict | None,
+        rows: list[dict],
+    ) -> None:
+        metric_config = AUDIENCE_GROWTH_KPI.get(platform)
+        if not metric_config:
+            return
+        metric_name, growth_field = metric_config
+        actual_month = (report or {}).get(growth_field)
+        actual_year = conn.execute(
+            text(
+                f"""
+                SELECT SUM(selected.metric_value)
+                FROM (
+                    SELECT DISTINCT ON (r.report_period_id)
+                        r.report_period_id,
+                        r.{growth_field} AS metric_value
+                    FROM {table_name} r
+                    JOIN report_periods rp ON rp.id = r.report_period_id
+                    WHERE r.client_id = :client_id
+                      AND EXTRACT(YEAR FROM rp.period_start) = :year
+                      AND rp.period_start <= :period_start
+                    ORDER BY
+                        r.report_period_id,
+                        (r.profile_id IS NOT NULL) DESC,
+                        r.updated_at DESC,
+                        r.created_at DESC
+                ) selected
+                """
+            ),
+            {
+                "client_id": client_id,
+                "year": period["period_start"].year,
+                "period_start": period["period_start"],
+            },
+        ).scalar_one_or_none()
+        row = next(
+            (item for item in rows if item.get("metric_name") == metric_name),
+            None,
+        )
+        if row is None:
+            row = {"metric_name": metric_name}
+            rows.append(row)
+        row["actual_month"] = actual_month
+        row["actual_year"] = actual_year
+        # Stored achievement values may still reflect the previous total-audience
+        # semantics. Let add_kpi_mapping recompute them from the growth actuals.
+        row["achievement_month"] = None
+        row["achievement_year"] = None
+
     def monthly_trends(self, conn, client_id: str, period: dict, platform: str, table_name: str) -> list[dict]:
         follower_field = "total_subscribers" if platform == "youtube" else "total_followers"
         growth_field = "subscriber_growth" if platform == "youtube" else "follower_growth"
@@ -2045,8 +2144,8 @@ def add_kpi_mapping(mapping: dict, prefix: str, platform: str, rows: list[dict],
         "likes": ["LIKES"],
     }
     fallback_actuals = {
-        "followers": report_value(report, platform, "audience_total"),
-        "subscribers": report_value(report, platform, "audience_total"),
+        "followers": report_value(report, platform, "growth"),
+        "subscribers": report_value(report, platform, "growth"),
         "reach": report_value(report, platform, "reach"),
         "views": report_value(report, platform, "views"),
         "engagement": report_value(report, platform, "total_engagement"),
@@ -2130,6 +2229,7 @@ def add_platform_mapping(mapping: dict, payload: dict, platform: str):
             placeholder(f"{prefix}_TOTAL_REELS"): fmt_number(report_value(report, platform, "reels_posts")),
             placeholder(f"{prefix}_TOTAL_CAROUSEL"): fmt_number(report_value(report, platform, "carousel_posts")),
             placeholder(f"{prefix}_TOTAL_SINGLE"): fmt_number(report_value(report, platform, "single_posts")),
+            placeholder(f"{prefix}_TOTAL_PHOTOS"): fmt_number(report_value(report, platform, "photo_posts")),
             placeholder(f"{prefix}_TOTAL_STORIES"): fmt_number(report_value(report, platform, "story_posts")),
             placeholder(f"{prefix}_TOTAL_VIDEOS"): fmt_number(report_value(report, platform, "video_posts")),
             placeholder(f"{prefix}_TOTAL_SHORTS"): fmt_number(report_value(report, platform, "shorts_posts")),
@@ -2189,6 +2289,7 @@ def add_platform_mapping(mapping: dict, payload: dict, platform: str):
             family="EVIDENCE",
             limit=48,
         )
+        add_best_story_mapping(mapping, story_content)
         add_evidence_posts(
             mapping,
             prefix,
@@ -2358,6 +2459,63 @@ def is_story_content(post: dict) -> bool:
     return "story" in content_type or "/stories/" in permalink
 
 
+def numeric_metric(post: dict, field: str) -> float | None:
+    value = post.get(field)
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def best_story(posts: list[dict], primary_field: str, secondary_field: str) -> dict:
+    candidates = [
+        post
+        for post in posts
+        if numeric_metric(post, primary_field) is not None
+    ]
+    if not candidates:
+        return {}
+
+    def rank(post: dict) -> tuple[float, float, float]:
+        published_at = post.get("published_at")
+        published_rank = 0.0
+        if hasattr(published_at, "timestamp"):
+            published_rank = published_at.timestamp()
+        return (
+            numeric_metric(post, primary_field) or 0.0,
+            numeric_metric(post, secondary_field) or 0.0,
+            published_rank,
+        )
+
+    return max(candidates, key=rank)
+
+
+def add_best_story_mapping(mapping: dict, stories: list[dict]) -> None:
+    selections = {
+        "INT": best_story(stories, "total_engagement", "profile_visits"),
+        "PV": best_story(stories, "profile_visits", "total_engagement"),
+    }
+    for suffix, story in selections.items():
+        base = f"IG_STORY_{suffix}"
+        published_at = story.get("published_at")
+        if hasattr(published_at, "strftime"):
+            published_at = published_at.strftime("%d %B %Y").upper()
+        mapping[placeholder(f"{base}_DATE")] = clean_text(published_at, 28)
+        mapping[placeholder(f"{base}_REACH")] = fmt_number(story.get("reach"))
+        mapping[placeholder(f"{base}_VIEWS")] = fmt_number(story.get("views"))
+        mapping[placeholder(f"{base}_INTERACTIONS")] = fmt_number(
+            story.get("total_engagement")
+        )
+        mapping[placeholder(f"{base}_VISITS")] = fmt_number(
+            story.get("profile_visits")
+        )
+        mapping[placeholder(f"{base}_IMAGE")] = clean_text(
+            story.get("image_url")
+        )
+
+
 def add_evidence_posts(
     mapping: dict,
     prefix: str,
@@ -2394,6 +2552,11 @@ def add_evidence_posts(
             mapping[placeholder(f"{base}_REACH")] = reach_value
         mapping[placeholder(f"{base}_LIKES")] = fmt_number(post.get("likes"))
         mapping[placeholder(f"{base}_COMMENTS")] = fmt_number(post.get("comments"))
+        mapping[placeholder(f"{base}_SHARE")] = fmt_number(post.get("shares"))
+        mapping[placeholder(f"{base}_SHARES")] = fmt_number(post.get("shares"))
+        mapping[placeholder(f"{base}_INTERACTIONS")] = fmt_number(
+            post.get("total_engagement")
+        )
         mapping[placeholder(f"{base}_ENGAGEMENT")] = fmt_number(
             post.get("total_engagement")
         )
@@ -2420,7 +2583,7 @@ def evidence_post_counts(payload: dict) -> dict[str, int]:
             1 for post in instagram_posts if is_story_content(post)
         ),
     }
-    for platform in ("facebook", "tiktok", "youtube"):
+    for platform in ("facebook", "tiktok", "youtube", "linkedin"):
         prefix = PLATFORM_PREFIXES[platform]
         counts[f"{prefix}_EVIDENCE"] = sum(
             1
@@ -2493,6 +2656,249 @@ def evidence_slide_pruning_plan(
         "deleted_slide_object_ids": deleted_slide_object_ids,
         "groups": group_audits,
     }
+
+
+def active_slide_platforms(payload: dict) -> set[str]:
+    """Platforms that have both client configuration and current-period data."""
+    client = payload.get("client") or {}
+    reports = payload.get("reports") or {}
+    return {
+        platform
+        for platform in PLATFORM_TABLES
+        if client.get(f"has_{platform}") and reports.get(platform)
+    }
+
+
+def _shape_text_values(page_elements: list[dict]):
+    for element in page_elements:
+        shape_text = element.get("shape", {}).get("text", {}).get("textElements", [])
+        if shape_text:
+            text_value, _boundaries = text_with_api_boundaries(shape_text)
+            yield re.sub(r"\s+", " ", text_value).strip()
+        group_elements = element.get("elementGroup", {}).get("children", [])
+        if group_elements:
+            yield from _shape_text_values(group_elements)
+
+
+def _slide_section_heading(slide: dict) -> str | None:
+    for value in _shape_text_values(slide.get("pageElements", [])):
+        normalized = value.upper()
+        if (
+            normalized in SLIDE_PLATFORM_HEADINGS
+            or normalized in SLIDE_PLATFORM_SECTION_END_HEADINGS
+        ):
+            return normalized
+    return None
+
+
+def platform_section_pruning_plan(presentation: dict, payload: dict) -> dict:
+    """Delete complete social sections that have no usable period report."""
+    active_platforms = active_slide_platforms(payload)
+    current_platform = None
+    section_slide_ids: dict[str, list[str]] = {
+        platform: [] for platform in SLIDE_PLATFORM_HEADINGS.values()
+    }
+
+    for slide in presentation.get("slides", []):
+        heading = _slide_section_heading(slide)
+        if heading in SLIDE_PLATFORM_SECTION_END_HEADINGS:
+            current_platform = None
+        elif heading in SLIDE_PLATFORM_HEADINGS:
+            current_platform = SLIDE_PLATFORM_HEADINGS[heading]
+
+        object_id = slide.get("objectId")
+        if current_platform and object_id:
+            section_slide_ids[current_platform].append(object_id)
+
+    deleted_platforms = [
+        platform
+        for platform, slide_ids in section_slide_ids.items()
+        if slide_ids and platform not in active_platforms
+    ]
+    deleted_slide_object_ids = [
+        object_id
+        for platform in deleted_platforms
+        for object_id in section_slide_ids[platform]
+    ]
+    return {
+        "active_platforms": sorted(active_platforms),
+        "deleted_platforms": deleted_platforms,
+        "deleted_slide_count": len(deleted_slide_object_ids),
+        "deleted_slide_object_ids": deleted_slide_object_ids,
+        "sections": {
+            platform: {
+                "slide_count": len(slide_ids),
+                "kept": platform in active_platforms,
+            }
+            for platform, slide_ids in section_slide_ids.items()
+            if slide_ids
+        },
+    }
+
+
+def _table_cell_text(cell: dict) -> str:
+    text_elements = cell.get("text", {}).get("textElements", [])
+    if not text_elements:
+        return ""
+    text_value, _boundaries = text_with_api_boundaries(text_elements)
+    return re.sub(r"\s+", " ", text_value).strip()
+
+
+def overview_table_pruning_plan(presentation: dict, payload: dict) -> dict:
+    """Remove inactive platform columns and spread remaining columns evenly."""
+    active_platforms = active_slide_platforms(payload)
+    for slide in presentation.get("slides", []):
+        for element in slide.get("pageElements", []):
+            table = element.get("table") or {}
+            rows = table.get("tableRows") or []
+            if not rows:
+                continue
+            header_cells = rows[0].get("tableCells") or []
+            headers = [_table_cell_text(cell).upper() for cell in header_cells]
+            if not headers or headers[0] != "MATRIX":
+                continue
+
+            table_object_id = element.get("objectId")
+            deleted_columns = [
+                index
+                for index, header in enumerate(headers[1:], start=1)
+                if (
+                    header in SLIDE_PLATFORM_HEADINGS
+                    and SLIDE_PLATFORM_HEADINGS[header] not in active_platforms
+                )
+            ]
+            remaining_column_count = len(headers) - len(deleted_columns)
+            requests = [
+                {
+                    "deleteTableColumn": {
+                        "tableObjectId": table_object_id,
+                        "cellLocation": {"rowIndex": 0, "columnIndex": index},
+                    }
+                }
+                for index in sorted(deleted_columns, reverse=True)
+            ]
+
+            target_width = None
+            platform_column_count = remaining_column_count - 1
+            if table_object_id and platform_column_count > 0:
+                target_width = (
+                    OVERVIEW_TABLE_TOTAL_WIDTH_EMU
+                    - OVERVIEW_MATRIX_COLUMN_WIDTH_EMU
+                ) / platform_column_count
+                requests.append(
+                    {
+                        "updateTableColumnProperties": {
+                            "objectId": table_object_id,
+                            "columnIndices": [0],
+                            "tableColumnProperties": {
+                                "columnWidth": {
+                                    "magnitude": OVERVIEW_MATRIX_COLUMN_WIDTH_EMU,
+                                    "unit": "EMU",
+                                }
+                            },
+                            "fields": "columnWidth",
+                        }
+                    }
+                )
+                requests.append(
+                    {
+                        "updateTableColumnProperties": {
+                            "objectId": table_object_id,
+                            "columnIndices": list(range(1, remaining_column_count)),
+                            "tableColumnProperties": {
+                                "columnWidth": {
+                                    "magnitude": target_width,
+                                    "unit": "EMU",
+                                }
+                            },
+                            "fields": "columnWidth",
+                        }
+                    }
+                )
+
+            return {
+                "found": True,
+                "slide_object_id": slide.get("objectId"),
+                "table_object_id": table_object_id,
+                "original_headers": headers,
+                "deleted_column_indices": deleted_columns,
+                "deleted_platforms": [
+                    SLIDE_PLATFORM_HEADINGS[headers[index]]
+                    for index in deleted_columns
+                ],
+                "remaining_column_count": remaining_column_count,
+                "total_table_width": OVERVIEW_TABLE_TOTAL_WIDTH_EMU,
+                "matrix_column_width": OVERVIEW_MATRIX_COLUMN_WIDTH_EMU,
+                "target_column_width": target_width,
+                "requests": requests,
+            }
+
+    return {
+        "found": False,
+        "deleted_column_indices": [],
+        "deleted_platforms": [],
+        "remaining_column_count": None,
+        "total_table_width": OVERVIEW_TABLE_TOTAL_WIDTH_EMU,
+        "matrix_column_width": OVERVIEW_MATRIX_COLUMN_WIDTH_EMU,
+        "target_column_width": None,
+        "requests": [],
+    }
+
+
+def prune_presentation_structure(
+    slides_service,
+    presentation_id: str,
+    payload: dict,
+) -> tuple[dict, dict, dict, set[str]]:
+    """Apply platform, evidence, and overview-table pruning in one API batch."""
+    presentation = (
+        slides_service.presentations()
+        .get(presentationId=presentation_id)
+        .execute()
+    )
+    platform_audit = platform_section_pruning_plan(presentation, payload)
+    evidence_audit = evidence_slide_pruning_plan(presentation, payload)
+    overview_audit = overview_table_pruning_plan(presentation, payload)
+
+    platform_deleted_ids = set(platform_audit["deleted_slide_object_ids"])
+    evidence_only_ids = [
+        object_id
+        for object_id in evidence_audit["deleted_slide_object_ids"]
+        if object_id not in platform_deleted_ids
+    ]
+    deleted_slide_ids = [
+        *platform_audit["deleted_slide_object_ids"],
+        *evidence_only_ids,
+    ]
+    requests = [
+        *overview_audit.pop("requests"),
+        *(
+            {"deleteObject": {"objectId": object_id}}
+            for object_id in deleted_slide_ids
+        ),
+    ]
+    if requests:
+        cancellation_checkpoint()
+        execute_slides_batch_update(slides_service, presentation_id, requests)
+        presentation = (
+            slides_service.presentations()
+            .get(presentationId=presentation_id)
+            .execute()
+        )
+
+    active_placeholders = extract_placeholders_from_presentation(presentation)
+    evidence_audit["request_count"] = len(evidence_only_ids)
+    evidence_audit["active_placeholder_count"] = len(active_placeholders)
+    platform_audit["request_count"] = len(platform_deleted_ids)
+    overview_audit["request_count"] = len(requests) - len(deleted_slide_ids)
+    print(
+        "[slides_report] structurePruning "
+        f"platformSlides={platform_audit['deleted_slide_count']} "
+        f"evidenceSlides={len(evidence_only_ids)} "
+        f"overviewColumns={len(overview_audit['deleted_column_indices'])}",
+        flush=True,
+    )
+    return evidence_audit, platform_audit, overview_audit, active_placeholders
 
 
 def delete_unused_evidence_slides(
@@ -3194,18 +3600,21 @@ def _generate_dashboard_slides_report(
     permission = share_presentation_as_editor(drive_service, presentation_id)
     profiler.record("share_file", start)
 
-    report_stage("slides_prune_evidence")
+    report_stage("slides_prune_structure")
     start = time.perf_counter()
-    evidence_slide_pruning, active_presentation_placeholders = (
-        delete_unused_evidence_slides(
-            slides_service,
-            presentation_id,
-            payload,
-        )
+    (
+        evidence_slide_pruning,
+        platform_slide_pruning,
+        overview_table_pruning,
+        active_presentation_placeholders,
+    ) = prune_presentation_structure(
+        slides_service,
+        presentation_id,
+        payload,
     )
     if replacement_placeholders is not None:
         replacement_placeholders &= active_presentation_placeholders
-    profiler.record("prune_evidence_slides", start)
+    profiler.record("prune_presentation_structure", start)
 
     replace_images = should_replace_images()
     image_mapping = image_placeholder_mapping(mapping) if replace_images else {}
@@ -3448,6 +3857,8 @@ def _generate_dashboard_slides_report(
             "resumed_existing_presentation": bool(existing_presentation_id),
             "permission": permission,
             "evidence_slide_pruning": evidence_slide_pruning,
+            "platform_slide_pruning": platform_slide_pruning,
+            "overview_table_pruning": overview_table_pruning,
             "images_replaced": bool(image_audit.get("replaced")),
             "image_replacement": image_audit,
             "competitor_metric_styles": competitor_style_audit,
