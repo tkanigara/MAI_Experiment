@@ -1903,32 +1903,32 @@ class ReportEditorService:
             self._refresh_content_rankings(conn, client_id, period_id)
         metric_sources = {
             "instagram": {
-                "followers": ("instagram_reports", "total_followers", False),
+                "followers": ("instagram_reports", "follower_growth", True),
                 "engagement": ("instagram_reports", "total_engagement", True),
                 "reach": ("instagram_reports", "reach", True),
             },
             "facebook": {
-                "followers": ("facebook_reports", "total_followers", False),
+                "followers": ("facebook_reports", "follower_growth", True),
                 "engagement": ("facebook_reports", "total_engagement", True),
                 "reach": ("facebook_reports", "reach", True),
             },
             "tiktok": {
-                "followers": ("tiktok_reports", "total_followers", False),
+                "followers": ("tiktok_reports", "follower_growth", True),
                 "likes": ("tiktok_reports", "likes", True),
                 "views": ("tiktok_reports", "total_views", True),
             },
             "youtube": {
-                "subscribers": ("youtube_reports", "total_subscribers", False),
+                "subscribers": ("youtube_reports", "subscriber_growth", True),
                 "engagement": ("youtube_reports", "total_engagement", True),
                 "views": ("youtube_reports", "total_views", True),
             },
             "linkedin": {
-                "followers": ("linkedin_reports", "total_followers", False),
+                "followers": ("linkedin_reports", "follower_growth", True),
                 "engagement": ("linkedin_reports", "total_engagement", True),
                 "impressions": ("linkedin_reports", "impressions", True),
             },
             "threads": {
-                "followers": ("threads_reports", "total_followers", False),
+                "followers": ("threads_reports", "follower_growth", True),
                 "engagement": ("threads_reports", "total_engagement", True),
                 "views": ("threads_reports", "total_views", True),
             },

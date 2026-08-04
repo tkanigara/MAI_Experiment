@@ -30,9 +30,9 @@ export default function KpiTable({ platform, rows, onEdit }) {
         <thead>
           <tr>
             <th>Metric</th>
-            <th>Actual</th>
-            <th>Target</th>
-            <th>Achievement</th>
+            <th>Actual (Month / YTD)</th>
+            <th>Target (Month / Year)</th>
+            <th>Achievement (Month / YTD)</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -48,10 +48,10 @@ export default function KpiTable({ platform, rows, onEdit }) {
             return (
               <tr key={row.metric_name}>
                 <td>{prettyMetric(row.metric_name)}</td>
-                <td>{formatNumber(row.actual_month)}</td>
+                <td>{formatNumber(row.actual_month)} / {formatNumber(row.actual_year)}</td>
                 <td>
                   <div className="editable-value">
-                    <span>{formatNumber(row.target_month)}</span>
+                    <span>{formatNumber(row.target_month)} / {formatNumber(row.target_year)}</span>
                     <button
                       className="edit-icon-button"
                       type="button"
@@ -64,7 +64,9 @@ export default function KpiTable({ platform, rows, onEdit }) {
                   </div>
                 </td>
                 <td className={achievement >= 100 ? "status-good" : row.target_month ? "status-bad" : ""}>
-                  {formatNumber(row.achievement_month, row.achievement_month ? "%" : "")}
+                  {formatNumber(row.achievement_month, row.achievement_month !== null && row.achievement_month !== undefined ? "%" : "")}
+                  {" / "}
+                  {formatNumber(row.achievement_year, row.achievement_year !== null && row.achievement_year !== undefined ? "%" : "")}
                 </td>
                 <td><StatusBadge text={status} state={state} /></td>
               </tr>

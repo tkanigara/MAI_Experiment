@@ -169,12 +169,36 @@ PLATFORM_KPI_METRICS = {
     "threads": {"followers", "engagement", "views"},
 }
 CUMULATIVE_KPI_FIELDS = {
-    "instagram": {"engagement": "total_engagement", "reach": "reach"},
-    "facebook": {"engagement": "total_engagement", "reach": "reach"},
-    "tiktok": {"likes": "likes", "views": "total_views"},
-    "youtube": {"engagement": "total_engagement", "views": "total_views"},
-    "linkedin": {"engagement": "total_engagement", "impressions": "impressions"},
-    "threads": {"engagement": "total_engagement", "views": "total_views"},
+    "instagram": {
+        "followers": ("follower_growth", False),
+        "engagement": ("total_engagement", True),
+        "reach": ("reach", True),
+    },
+    "facebook": {
+        "followers": ("follower_growth", False),
+        "engagement": ("total_engagement", True),
+        "reach": ("reach", True),
+    },
+    "tiktok": {
+        "followers": ("follower_growth", False),
+        "likes": ("likes", True),
+        "views": ("total_views", True),
+    },
+    "youtube": {
+        "subscribers": ("subscriber_growth", False),
+        "engagement": ("total_engagement", True),
+        "views": ("total_views", True),
+    },
+    "linkedin": {
+        "followers": ("follower_growth", False),
+        "engagement": ("total_engagement", True),
+        "impressions": ("impressions", True),
+    },
+    "threads": {
+        "followers": ("follower_growth", False),
+        "engagement": ("total_engagement", True),
+        "views": ("total_views", True),
+    },
 }
 CSV_IMPORT_SLOTS = {
     "account": {
@@ -248,7 +272,13 @@ CSV_IMPORT_SLOTS = {
         "label": "Instagram Stories",
         "platform": "instagram",
         "required_columns": ["Date", "Profile", "Story reach", "Story views", "Post-ID", "Link", "Image Link"],
-        "important_columns": ["Story reach", "Story views", "Story replies", "Story shares"],
+        "important_columns": [
+            "Story reach",
+            "Story views",
+            "Story replies",
+            "Story shares",
+            "Story total interaction",
+        ],
     },
     "fb_post": {
         "label": "Facebook Posts",
@@ -564,7 +594,25 @@ def content_type_from_row(row: dict, platform: str, fallback: str) -> str:
 
 
 def post_json(row: dict, content_type: str, platform: str):
-    total_engagement = parse_number(row.get("Reactions, Comments & Shares"))
+    normalized_content_type = content_type_from_row(
+        row,
+        platform,
+        content_type,
+    )
+    total_engagement = None
+    if normalized_content_type == "story":
+        total_engagement = number_from(
+            row,
+            "Story total interaction",
+            "Story total interactions",
+            "Total story interactions",
+            "Interactions",
+            "Total interactions",
+        )
+    if total_engagement is None:
+        total_engagement = parse_number(
+            row.get("Reactions, Comments & Shares")
+        )
     likes = float(number_from(row, "Number of Likes") or 0)
     comments = float(
         number_from(row, "Number of comments", "Story replies") or 0
@@ -613,7 +661,7 @@ def post_json(row: dict, content_type: str, platform: str):
         "caption": row.get("Message") or "-",
         "permalink": row.get("Link"),
         "image_url": row.get("Image Link"),
-        "content_type": content_type_from_row(row, platform, content_type),
+        "content_type": normalized_content_type,
         "likes": likes,
         "comments": comments,
         "shares": shares,
@@ -1186,6 +1234,7 @@ class DashboardRepository:
             report_data = row_dict(report)
             period_id = report_data["report_period_id"] if report_data else None
             kpi_results = []
+            cumulative_actuals = {}
             competitor_profiles = []
             content_missing = []
             if period_id:
@@ -1210,6 +1259,12 @@ class DashboardRepository:
                         },
                     ).mappings()
                 ]
+                cumulative_actuals = self.kpi_year_to_date_actuals(
+                    conn,
+                    client_id,
+                    period_id,
+                    platform,
+                )
                 competitor_profiles = [
                     row_dict(row)
                     for row in conn.execute(
@@ -1259,7 +1314,13 @@ class DashboardRepository:
             ]
         if report_data is not None:
             report_data["competitor_profiles"] = competitor_profiles
-        kpi_results = dashboard_kpi_results(platform, report_data, kpi_results, kpi_targets)
+        kpi_results = dashboard_kpi_results(
+            platform,
+            report_data,
+            kpi_results,
+            kpi_targets,
+            cumulative_actuals,
+        )
         missing_data = missing_platform_data(platform, report_data, content_missing)
         return {
             "platform": platform,
@@ -2666,11 +2727,10 @@ class DashboardRepository:
                         photo_posts = COALESCE(:photo_posts, photo_posts),
                         video_posts = COALESCE(:video_posts, video_posts),
                         text_posts = COALESCE(:text_posts, text_posts),
-                        content_type_breakdown = CASE
-                            WHEN :content_type_breakdown IS NOT NULL
-                            THEN CAST(:content_type_breakdown AS JSONB)
-                            ELSE content_type_breakdown
-                        END,
+                        content_type_breakdown = COALESCE(
+                            CAST(:content_type_breakdown AS JSONB),
+                            content_type_breakdown
+                        ),
                         top_posts = CASE
                             WHEN :content_has_rows
                             THEN CAST(COALESCE(:top_posts, '[]') AS JSONB)
@@ -2737,11 +2797,10 @@ class DashboardRepository:
                     photo_posts = COALESCE(EXCLUDED.photo_posts, {table}.photo_posts),
                     video_posts = COALESCE(EXCLUDED.video_posts, {table}.video_posts),
                     text_posts = COALESCE(EXCLUDED.text_posts, {table}.text_posts),
-                    content_type_breakdown = CASE
-                        WHEN :content_type_breakdown IS NOT NULL
-                        THEN EXCLUDED.content_type_breakdown
-                        ELSE {table}.content_type_breakdown
-                    END,
+                    content_type_breakdown = COALESCE(
+                        CAST(:content_type_breakdown AS JSONB),
+                        {table}.content_type_breakdown
+                    ),
                     top_posts = CASE WHEN :content_has_rows THEN EXCLUDED.top_posts ELSE {table}.top_posts END,
                     low_posts = CASE WHEN :content_has_rows THEN EXCLUDED.low_posts ELSE {table}.low_posts END,
                     raw_sections = EXCLUDED.raw_sections,
@@ -3119,8 +3178,8 @@ class DashboardRepository:
         count = 0
         for platform, report in reports.items():
             metric_values = {
-                "followers": report.get("followers"),
-                "subscribers": report.get("followers"),
+                "followers": report.get("follower_growth"),
+                "subscribers": report.get("follower_growth"),
                 "engagement": report.get("engagement"),
                 "reach": report.get("reach"),
                 "views": report.get("views"),
@@ -3261,8 +3320,11 @@ class DashboardRepository:
             return {}
         table = PLATFORM_TABLES[platform]
         aggregate_columns = ", ".join(
-            f"SUM({field}) FILTER (WHERE report_rank = 1) AS {metric_name}"
-            for metric_name, field in metric_fields.items()
+            f"SUM({field}) FILTER ("
+            f"WHERE report_rank = 1"
+            f"{' AND has_content' if requires_content else ''}"
+            f") AS {metric_name}"
+            for metric_name, (field, requires_content) in metric_fields.items()
         )
         row = conn.execute(
             text(
@@ -3276,6 +3338,14 @@ class DashboardRepository:
                 ranked_reports AS (
                     SELECT
                         r.*,
+                        EXISTS (
+                            SELECT 1
+                            FROM social_content_reports content
+                            WHERE content.client_id = r.client_id
+                              AND content.report_period_id = r.report_period_id
+                              AND content.platform = :platform
+                              AND content.performance_bucket = 'all'
+                        ) AS has_content,
                         ROW_NUMBER() OVER (
                             PARTITION BY r.report_period_id
                             ORDER BY
@@ -3289,14 +3359,6 @@ class DashboardRepository:
                     WHERE r.client_id = :client_id
                       AND EXTRACT(YEAR FROM rp.period_start) = EXTRACT(YEAR FROM selected.period_start)
                       AND rp.period_start <= selected.period_start
-                      AND EXISTS (
-                          SELECT 1
-                          FROM social_content_reports content
-                          WHERE content.client_id = r.client_id
-                            AND content.report_period_id = r.report_period_id
-                            AND content.platform = :platform
-                            AND content.performance_bucket = 'all'
-                      )
                 )
                 SELECT {aggregate_columns}
                 FROM ranked_reports
@@ -3372,9 +3434,9 @@ def kpi_actual_value(platform: str, report: dict | None, metric_name: str):
     if not report:
         return None
     if metric_name == "followers":
-        return report.get("total_followers")
+        return report.get("follower_growth")
     if metric_name == "subscribers":
-        return report.get("total_subscribers")
+        return report.get("subscriber_growth")
     if metric_name == "engagement":
         return report.get("total_engagement")
     if metric_name == "reach":
@@ -3399,7 +3461,14 @@ def achievement(actual, target):
     return round(float((actual_number / target_number) * 100), 2)
 
 
-def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], targets: list[dict]):
+def dashboard_kpi_results(
+    platform: str,
+    report: dict | None,
+    rows: list[dict],
+    targets: list[dict],
+    cumulative_actuals: dict | None = None,
+):
+    cumulative_actuals = cumulative_actuals or {}
     configured_metrics = sorted(PLATFORM_KPI_METRICS.get(platform, set()))
     rows_by_metric = {row.get("metric_name"): dict(row) for row in rows or []}
     report_period = (report or {}).get("period_start")
@@ -3428,10 +3497,13 @@ def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], 
             (target for target in target_candidates if target.get("target_year") is not None),
             {},
         )
-        actual_month = row.get("actual_month")
+        source_actual = kpi_actual_value(platform, report, metric_name)
+        actual_month = source_actual
         if actual_month is None:
-            actual_month = kpi_actual_value(platform, report, metric_name)
-        actual_year = row.get("actual_year")
+            actual_month = row.get("actual_month")
+        actual_year = cumulative_actuals.get(metric_name)
+        if actual_year is None:
+            actual_year = row.get("actual_year")
         if actual_year is None:
             actual_year = actual_month
         target_month = row.get("target_month")
@@ -3440,12 +3512,8 @@ def dashboard_kpi_results(platform: str, report: dict | None, rows: list[dict], 
         target_year = row.get("target_year")
         if target_year is None:
             target_year = monthly_target.get("target_year") or yearly_target.get("target_year")
-        achievement_month = row.get("achievement_month")
-        if achievement_month is None:
-            achievement_month = achievement(actual_month, target_month)
-        achievement_year = row.get("achievement_year")
-        if achievement_year is None:
-            achievement_year = achievement(actual_year, target_year)
+        achievement_month = achievement(actual_month, target_month)
+        achievement_year = achievement(actual_year, target_year)
         result.append(
             {
                 **row,

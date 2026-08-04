@@ -10,6 +10,8 @@ export function formatNumber(value, suffix = "") {
 }
 
 export function prettyMetric(metric) {
+  if (metric === "followers") return "Followers Growth";
+  if (metric === "subscribers") return "Subscriber Growth";
   return String(metric || "")
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());

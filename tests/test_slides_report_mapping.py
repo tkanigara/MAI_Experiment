@@ -27,6 +27,8 @@ from dashboard.slides_report import (
     image_placeholder_priority,
     is_image_placeholder_key,
     merge_image_replacement_audits,
+    overview_table_pruning_plan,
+    platform_section_pruning_plan,
     replace_image_placeholders_safe,
     resolve_report_presentation,
     replace_text_placeholders_chunked,
@@ -50,6 +52,28 @@ class FakeSlidesService:
 
 
 class SlidesReportMappingTests(unittest.TestCase):
+    @staticmethod
+    def text_element(value):
+        return {
+            "text": {
+                "textElements": [
+                    {"textRun": {"content": f"{value}\n"}},
+                ]
+            }
+        }
+
+    @classmethod
+    def heading_slide(cls, object_id, heading):
+        return {
+            "objectId": object_id,
+            "pageElements": [
+                {
+                    "objectId": f"{object_id}-title",
+                    "shape": cls.text_element(heading),
+                }
+            ],
+        }
+
     @staticmethod
     def evidence_slide(object_id: str, *placeholder_keys: str) -> dict:
         return {
@@ -184,13 +208,15 @@ class SlidesReportMappingTests(unittest.TestCase):
         self.assertEqual(permission_request.execute.call_count, 4)
         self.assertEqual(uploaded_ids, ["orphan-file-id"])
 
-    def test_story_replies_are_imported_as_comments_with_numeric_types_normalized(self):
+    def test_story_total_interaction_is_imported_as_total_engagement(self):
         post = post_json(
             {
                 "Post-ID": "story-1",
                 "Number of Likes": Decimal("2"),
+                "Reactions, Comments & Shares": "0",
                 "Story replies": "3",
                 "Story shares": "1",
+                "Story total interaction": "12",
                 "Story views": "250",
                 "Story reach": "200",
                 "Profile visits based on the story": "17",
@@ -201,6 +227,20 @@ class SlidesReportMappingTests(unittest.TestCase):
 
         self.assertEqual(post["comments"], 3.0)
         self.assertEqual(post["profile_visits"], 17)
+        self.assertEqual(post["total_engagement"], 12.0)
+
+    def test_story_engagement_falls_back_to_components_for_legacy_csv(self):
+        post = post_json(
+            {
+                "Post-ID": "story-legacy",
+                "Number of Likes": Decimal("2"),
+                "Story replies": "3",
+                "Story shares": "1",
+            },
+            "story",
+            "instagram",
+        )
+
         self.assertEqual(post["total_engagement"], 6.0)
 
     def test_chart_placeholders_are_image_placeholders(self):
@@ -423,6 +463,19 @@ class SlidesReportMappingTests(unittest.TestCase):
                         "views": 510,
                         "comments": 3,
                         "profile_visits": 19,
+                        "total_engagement": 11,
+                    },
+                    {
+                        "published_at": datetime(2026, 7, 4),
+                        "caption": "-",
+                        "content_type": "story",
+                        "permalink": "https://instagram.com/stories/example/2",
+                        "image_url": "https://example.com/story-interactions.jpg",
+                        "reach": 600,
+                        "views": 720,
+                        "comments": 2,
+                        "profile_visits": 4,
+                        "total_engagement": 25,
                     },
                 ]
             },
@@ -463,7 +516,25 @@ class SlidesReportMappingTests(unittest.TestCase):
         self.assertEqual(mapping["{{IG_STORY_1_REACH}}"], "420")
         self.assertEqual(mapping["{{IG_STORY_1_VIEWS}}"], "510")
         self.assertEqual(mapping["{{IG_STORY_1_COMMENTS}}"], "3")
+        self.assertEqual(mapping["{{IG_STORY_1_INTERACTIONS}}"], "11")
         self.assertEqual(mapping["{{IG_STORY_1_VISITS}}"], "19")
+        self.assertEqual(mapping["{{IG_STORY_INT_REACH}}"], "600")
+        self.assertEqual(mapping["{{IG_STORY_INT_VIEWS}}"], "720")
+        self.assertEqual(mapping["{{IG_STORY_INT_INTERACTIONS}}"], "25")
+        self.assertEqual(mapping["{{IG_STORY_INT_VISITS}}"], "4")
+        self.assertEqual(mapping["{{IG_STORY_INT_DATE}}"], "04 JULY 2026")
+        self.assertEqual(
+            mapping["{{IG_STORY_INT_IMAGE}}"],
+            "https://example.com/story-interactions.jpg",
+        )
+        self.assertEqual(mapping["{{IG_STORY_PV_REACH}}"], "420")
+        self.assertEqual(mapping["{{IG_STORY_PV_VIEWS}}"], "510")
+        self.assertEqual(mapping["{{IG_STORY_PV_INTERACTIONS}}"], "11")
+        self.assertEqual(mapping["{{IG_STORY_PV_VISITS}}"], "19")
+        self.assertEqual(
+            mapping["{{IG_STORY_PV_IMAGE}}"],
+            "https://example.com/story.jpg",
+        )
         self.assertNotEqual(
             mapping["{{IG_EVIDENCE_1_IMAGE}}"],
             mapping["{{IG_STORY_1_IMAGE}}"],
@@ -598,6 +669,217 @@ class SlidesReportMappingTests(unittest.TestCase):
             "presentation-id",
             [{"deleteObject": {"objectId": "fb-evidence-2"}}],
         )
+
+    def test_linkedin_report_and_evidence_are_mapped(self):
+        payload = {
+            "client": {
+                "client_name": "Example Client",
+                "client_code": "example",
+                "has_linkedin": True,
+            },
+            "period": {
+                "period_label": "July 2026",
+                "period_start": date(2026, 7, 1),
+            },
+            "reports": {
+                "linkedin": {
+                    "total_followers": 2691,
+                    "follower_growth": 36,
+                    "total_engagement": 42,
+                    "reach": 1468,
+                    "total_posts": 3,
+                    "photo_posts": 3,
+                    "video_posts": 0,
+                }
+            },
+            "content": {"linkedin": {"top": [], "low": []}},
+            "all_content": {
+                "linkedin": [
+                    {
+                        "caption": "LinkedIn post",
+                        "content_type": "photo",
+                        "image_url": "https://example.com/linkedin.jpg",
+                        "reach": 302,
+                        "views": 542,
+                        "total_engagement": 10,
+                        "shares": 2,
+                    }
+                ]
+            },
+            "competitors": {},
+            "competitor_content": {},
+            "kpi_results": {},
+            "trends": {},
+            "insights": [],
+        }
+
+        mapping = build_mapping(payload)
+
+        self.assertEqual(mapping["{{LK_TOTAL_FOLLOWERS}}"], "2,691")
+        self.assertEqual(mapping["{{LK_FOLLOWERS_GROWTH}}"], "36")
+        self.assertEqual(mapping["{{LK_TOTAL_PHOTOS}}"], "3")
+        self.assertEqual(
+            mapping["{{LK_EVIDENCE_1_IMAGE}}"],
+            "https://example.com/linkedin.jpg",
+        )
+        self.assertEqual(mapping["{{LK_EVIDENCE_1_SHARES}}"], "2")
+
+    def test_empty_platform_sections_are_removed_without_deleting_website(self):
+        presentation = {
+            "slides": [
+                self.heading_slide("ig-title", "INSTAGRAM"),
+                {"objectId": "ig-content", "pageElements": []},
+                self.heading_slide("fb-title", "FACEBOOK"),
+                {"objectId": "fb-content", "pageElements": []},
+                self.heading_slide("lk-title", "LINKEDIN"),
+                {"objectId": "lk-content", "pageElements": []},
+                self.heading_slide("th-title", "THREADS"),
+                {"objectId": "th-content", "pageElements": []},
+                self.heading_slide("website", "WEBSITE TRAFFIC & SEO HEALTH"),
+                {"objectId": "website-content", "pageElements": []},
+            ]
+        }
+        payload = {
+            "client": {
+                "has_instagram": True,
+                "has_facebook": True,
+                "has_linkedin": True,
+                "has_threads": True,
+            },
+            "reports": {
+                "instagram": {"id": "ig-report"},
+                "linkedin": {"id": "lk-report"},
+            },
+        }
+
+        plan = platform_section_pruning_plan(presentation, payload)
+
+        self.assertEqual(plan["active_platforms"], ["instagram", "linkedin"])
+        self.assertEqual(plan["deleted_platforms"], ["facebook", "threads"])
+        self.assertEqual(
+            plan["deleted_slide_object_ids"],
+            ["fb-title", "fb-content", "th-title", "th-content"],
+        )
+        self.assertNotIn("website", plan["deleted_slide_object_ids"])
+        self.assertNotIn("website-content", plan["deleted_slide_object_ids"])
+
+    def test_overview_removes_middle_columns_and_resizes_remaining_columns(self):
+        headers = [
+            "MATRIX",
+            "INSTAGRAM",
+            "FACEBOOK",
+            "TIKTOK",
+            "YOUTUBE",
+            "LINKEDIN",
+            "THREADS",
+        ]
+        presentation = {
+            "slides": [
+                {
+                    "objectId": "overview-slide",
+                    "pageElements": [
+                        {
+                            "objectId": "overview-table",
+                            "size": {
+                                "width": {"magnitude": 3000000, "unit": "EMU"}
+                            },
+                            "table": {
+                                "columns": len(headers),
+                                "tableRows": [
+                                    {
+                                        "tableCells": [
+                                            self.text_element(header)
+                                            for header in headers
+                                        ]
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        payload = {
+            "client": {
+                "has_instagram": True,
+                "has_facebook": True,
+                "has_linkedin": True,
+            },
+            "reports": {
+                "instagram": {"id": "ig-report"},
+                "facebook": {"id": "fb-report"},
+                "linkedin": {"id": "lk-report"},
+            },
+        }
+
+        plan = overview_table_pruning_plan(presentation, payload)
+
+        self.assertTrue(plan["found"])
+        self.assertEqual(plan["deleted_column_indices"], [3, 4, 6])
+        self.assertEqual(
+            [
+                request["deleteTableColumn"]["cellLocation"]["columnIndex"]
+                for request in plan["requests"]
+                if "deleteTableColumn" in request
+            ],
+            [6, 4, 3],
+        )
+        self.assertEqual(plan["remaining_column_count"], 4)
+        self.assertEqual(plan["total_table_width"], 10972800)
+        self.assertEqual(plan["matrix_column_width"], 1929625)
+        self.assertAlmostEqual(plan["target_column_width"], 3014391.6666666665)
+        self.assertEqual(
+            plan["requests"][-2]["updateTableColumnProperties"]["columnIndices"],
+            [0],
+        )
+        self.assertEqual(
+            plan["requests"][-1]["updateTableColumnProperties"]["columnIndices"],
+            [1, 2, 3],
+        )
+
+    def test_overview_width_is_restored_when_columns_were_already_deleted(self):
+        headers = ["MATRIX", "INSTAGRAM", "FACEBOOK", "LINKEDIN"]
+        presentation = {
+            "slides": [
+                {
+                    "objectId": "overview-slide",
+                    "pageElements": [
+                        {
+                            "objectId": "overview-table",
+                            "table": {
+                                "columns": len(headers),
+                                "tableRows": [
+                                    {
+                                        "tableCells": [
+                                            self.text_element(header)
+                                            for header in headers
+                                        ]
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        payload = {
+            "client": {
+                "has_instagram": True,
+                "has_facebook": True,
+                "has_linkedin": True,
+            },
+            "reports": {
+                "instagram": {"id": "ig-report"},
+                "facebook": {"id": "fb-report"},
+                "linkedin": {"id": "lk-report"},
+            },
+        }
+
+        plan = overview_table_pruning_plan(presentation, payload)
+
+        self.assertEqual(plan["deleted_column_indices"], [])
+        self.assertEqual(len(plan["requests"]), 2)
+        self.assertEqual(plan["total_table_width"], 10972800)
 
 
 if __name__ == "__main__":

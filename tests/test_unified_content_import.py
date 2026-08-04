@@ -40,11 +40,11 @@ class UnifiedContentImportTests(unittest.TestCase):
         self.assertEqual(
             {platform: len(rows) for platform, rows in split_rows.items()},
             {
-                "instagram": 10,
-                "facebook": 11,
+                "instagram": 13,
+                "facebook": 14,
                 "tiktok": 3,
                 "youtube": 3,
-                "linkedin": 0,
+                "linkedin": 3,
                 "threads": 0,
             },
         )

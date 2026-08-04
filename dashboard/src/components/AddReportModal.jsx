@@ -275,7 +275,9 @@ export default function AddReportModal({
                   return (
                     <div className="kpi-target-row" key={metric}>
                       <strong>{prettyMetric(metric)}</strong>
-                      <span className="muted">Actual: {formatNumber(row.actual_month)}</span>
+                      <span className="muted">
+                        Actual month / YTD: {formatNumber(row.actual_month)} / {formatNumber(row.actual_year)}
+                      </span>
                       <input
                         name={`${platform}:${metric}:target_month`}
                         type="number"

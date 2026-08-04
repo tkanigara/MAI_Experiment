@@ -19,6 +19,29 @@ from preview_report_charts import render_audience_and_growth_chart
 
 
 class ReportChartTransparencyTests(unittest.TestCase):
+    def test_linkedin_audience_chart_can_be_rendered(self):
+        rows = [
+            {
+                "period_start": date(2026, 7, 1),
+                "audience_total": 2691,
+                "net_growth": 36,
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "linkedin_audience_growth.png"
+            figure = render_audience_and_growth_chart(
+                rows,
+                "PAR",
+                "linkedin",
+                output_path,
+            )
+            plt.close(figure)
+
+            self.assertTrue(output_path.exists())
+            with Image.open(output_path) as image:
+                self.assertEqual(image.mode, "RGBA")
+
     def test_exported_chart_has_a_transparent_canvas(self):
         rows = [
             {
