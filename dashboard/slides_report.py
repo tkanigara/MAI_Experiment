@@ -1688,7 +1688,7 @@ class SlidesReportRepository:
                         """
                         SELECT id, client_code, client_name, industry,
                                has_instagram, has_facebook, has_tiktok, has_youtube,
-                               has_linkedin
+                               has_linkedin, has_threads
                         FROM clients
                         WHERE id = :client_id
                         """

@@ -24,6 +24,33 @@ function displayValue(value) {
   return String(value);
 }
 
+function displayQualityValue(value, valueType = "number") {
+  if (value === null || value === undefined || value === "") return "Not available";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return displayValue(value);
+  const formatted = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: valueType === "percent" ? 4 : 2,
+  }).format(numeric);
+  return valueType === "percent" ? `${formatted}%` : formatted;
+}
+
+function valuesMatch(left, right) {
+  if (left === null || left === undefined || left === "") return false;
+  if (right === null || right === undefined || right === "") return false;
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    return Math.abs(leftNumber - rightNumber) <= 0.000001;
+  }
+  return String(left) === String(right);
+}
+
+function displayFieldKey(value) {
+  return String(value || "")
+    .replaceAll("_", " ")
+    .replace(/^./, (letter) => letter.toUpperCase());
+}
+
 function inputValue(field, draft) {
   const value = Object.prototype.hasOwnProperty.call(draft, field.id)
     ? draft[field.id]
@@ -39,6 +66,11 @@ function inputValue(field, draft) {
 }
 
 function fieldSearchText(field) {
+  const qualityText = (field.quality_checks || []).flatMap((check) => [
+    check.title,
+    check.message,
+    ...(check.related_fields || []),
+  ]);
   return [
     field.label,
     field.field_key,
@@ -47,6 +79,7 @@ function fieldSearchText(field) {
     field.profile_name,
     field.caption,
     ...(field.placeholders || []),
+    ...qualityText,
   ].filter(Boolean).join(" ").toLowerCase();
 }
 
@@ -73,6 +106,7 @@ function FieldInput({
 }) {
   const value = inputValue(field, draft);
   const commonProps = {
+    id: `editor-input-${field.id}`,
     value,
     disabled: field.override_scope === "derived" && !manualEnabled,
     onChange: (event) => onChange(field.id, event.target.value),
@@ -111,6 +145,93 @@ function FieldInput({
   );
 }
 
+function QualityPanel({
+  field,
+  draft,
+  onUseCandidate,
+  onManualEntry,
+}) {
+  const checks = field.quality_checks || [];
+  const candidates = field.value_candidates || [];
+  if (!checks.length && !candidates.length) return null;
+  const currentValue = Object.prototype.hasOwnProperty.call(draft, field.id)
+    ? draft[field.id]
+    : field.value;
+
+  return (
+    <section className="editor-quality-panel">
+      {checks.map((check) => (
+        <div className="editor-quality-warning" key={check.code}>
+          <div>
+            <strong>{check.title}</strong>
+            <p>{check.message}</p>
+            {check.related_fields?.length ? (
+              <div className="editor-quality-related">
+                <span>Related data</span>
+                {check.related_fields.map((fieldKey) => (
+                  <code key={fieldKey}>{displayFieldKey(fieldKey)}</code>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          {check.calculated_value !== null && check.calculated_value !== undefined ? (
+            <div className="editor-quality-comparison">
+              <span>
+                Current
+                <strong>{displayQualityValue(check.actual_value, field.value_type)}</strong>
+              </span>
+              <span>
+                Calculated
+                <strong>{displayQualityValue(check.calculated_value, field.value_type)}</strong>
+              </span>
+              {check.difference !== null && check.difference !== undefined ? (
+                <span>
+                  Difference
+                  <strong>{displayQualityValue(check.difference, field.value_type)}</strong>
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ))}
+
+      {candidates.length ? (
+        <div className="editor-quality-options">
+          {candidates.map((candidate) => {
+            const selected = candidate.available && valuesMatch(currentValue, candidate.value);
+            return (
+              <article className={`editor-quality-option${selected ? " selected" : ""}`} key={candidate.id}>
+                <div>
+                  <strong>{candidate.label}</strong>
+                  <span>{displayQualityValue(candidate.value, field.value_type)}</span>
+                  <small>{candidate.available ? candidate.formula : candidate.unavailable_reason}</small>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!candidate.available || selected}
+                  onClick={() => onUseCandidate(field, candidate)}
+                >
+                  {selected ? "Selected" : "Use value"}
+                </button>
+              </article>
+            );
+          })}
+          {onManualEntry ? (
+            <button
+              type="button"
+              className="text-link editor-quality-manual"
+              onClick={() => onManualEntry(field)}
+            >
+              Enter a value manually
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function FriendlyFieldRow(props) {
   const {
     field,
@@ -120,6 +241,8 @@ function FriendlyFieldRow(props) {
     restoring,
     manualEnabled,
     onManualEnabled,
+    onUseCandidate,
+    onManualEntry,
   } = props;
   return (
     <div className="editor-field-row">
@@ -154,6 +277,12 @@ function FriendlyFieldRow(props) {
           <AffectedPlaceholders placeholders={field.placeholders} />
         </div>
       </div>
+      <QualityPanel
+        field={field}
+        draft={draft}
+        onUseCandidate={onUseCandidate}
+        onManualEntry={onManualEntry}
+      />
       <div className="editor-field-footer">
         <span className={field.warning ? "editor-warning" : ""}>
           {field.warning || (field.edited_by ? `Last edited by ${field.edited_by}` : "No manual correction")}
@@ -173,7 +302,14 @@ function FriendlyFieldRow(props) {
   );
 }
 
-function ContentTable({ fields, draft, onChange, onUpload, actor, uploading }) {
+function ContentTable({
+  fields,
+  draft,
+  onChange,
+  onUpload,
+  actor,
+  uploading,
+}) {
   const groups = useMemo(() => {
     const result = new Map();
     fields.forEach((field) => {
@@ -271,6 +407,7 @@ export default function ReportDataEditorPage({
   const [query, setQuery] = useState("");
   const [missingOnly, setMissingOnly] = useState(false);
   const [editedOnly, setEditedOnly] = useState(false);
+  const [potentialDifferencesOnly, setPotentialDifferencesOnly] = useState(false);
   const [limit, setLimit] = useState(200);
   const [saving, setSaving] = useState(false);
   const [restoring, setRestoring] = useState("");
@@ -292,7 +429,7 @@ export default function ReportDataEditorPage({
 
   useEffect(() => {
     setLimit(200);
-  }, [section, query, missingOnly, editedOnly]);
+  }, [section, query, missingOnly, editedOnly, potentialDifferencesOnly]);
 
   const sectionFields = editor?.sections?.[section] || [];
   const filteredFields = useMemo(() => {
@@ -300,9 +437,10 @@ export default function ReportDataEditorPage({
     return sectionFields.filter((field) => {
       if (missingOnly && field.status !== "missing") return false;
       if (editedOnly && field.status !== "edited" && !Object.prototype.hasOwnProperty.call(draft, field.id)) return false;
+      if (potentialDifferencesOnly && !(field.quality_checks || []).length) return false;
       return !normalizedQuery || fieldSearchText(field).includes(normalizedQuery);
     });
-  }, [sectionFields, query, missingOnly, editedOnly, draft]);
+  }, [sectionFields, query, missingOnly, editedOnly, potentialDifferencesOnly, draft]);
   const visibleFields = filteredFields.slice(0, limit);
   const dirtyIds = Object.keys(draft).filter((id) => (
     sectionFields.some((field) => field.id === id)
@@ -310,6 +448,18 @@ export default function ReportDataEditorPage({
 
   function updateDraft(id, value) {
     setDraft((current) => ({ ...current, [id]: value }));
+  }
+
+  function useCandidate(field, candidate) {
+    setManualOverrides((current) => ({ ...current, [field.id]: true }));
+    updateDraft(field.id, String(candidate.value));
+  }
+
+  function enableManualEntry(field) {
+    setManualOverrides((current) => ({ ...current, [field.id]: true }));
+    window.setTimeout(() => {
+      document.getElementById(`editor-input-${field.id}`)?.focus();
+    }, 0);
   }
 
   async function saveSection() {
@@ -448,6 +598,15 @@ export default function ReportDataEditorPage({
 
       {error ? <div className="editor-error">{error}</div> : null}
 
+      {editor?.quality_summary?.warning_count ? (
+        <div className="editor-quality-summary" role="status">
+          <strong>{editor.quality_summary.warning_count} consistency warnings</strong>
+          <span>
+            Review the source and calculated alternatives. Warnings do not block saving or report generation.
+          </span>
+        </div>
+      ) : null}
+
       <div className="editor-tabs" role="tablist">
         {TABS.map(([key, label]) => (
           <button
@@ -458,6 +617,11 @@ export default function ReportDataEditorPage({
           >
             {label}
             <span>{editor?.sections?.[key]?.length || 0}</span>
+            {editor?.quality_summary?.by_section?.[key] ? (
+              <span className="editor-tab-warning">
+                ⚠ {editor.quality_summary.by_section[key]}
+              </span>
+            ) : null}
           </button>
         ))}
       </div>
@@ -476,6 +640,14 @@ export default function ReportDataEditorPage({
         <label>
           <input type="checkbox" checked={editedOnly} onChange={(event) => setEditedOnly(event.target.checked)} />
           Edited only
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={potentialDifferencesOnly}
+            onChange={(event) => setPotentialDifferencesOnly(event.target.checked)}
+          />
+          Potential differences only
         </label>
         <span>{filteredFields.length} fields</span>
       </div>
@@ -521,6 +693,8 @@ export default function ReportDataEditorPage({
                 ...current,
                 [id]: enabled,
               }))}
+              onUseCandidate={useCandidate}
+              onManualEntry={enableManualEntry}
             />
           ))}
         </div>
