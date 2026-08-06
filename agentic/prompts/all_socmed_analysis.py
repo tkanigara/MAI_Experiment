@@ -7,6 +7,7 @@ You will receive the following components:
 2. Facebook Data
 3. Tiktok Data
 4. Youtube Data
+5. Linkedin Data
 
 GENERAL RULES
 1. Base every conclusion ONLY on the provided data.
@@ -42,6 +43,7 @@ Instagram -> retrieve_instagram_performance
 Facebook -> retrieve_facebook_performance
 TikTok -> retrieve_tiktok_performance
 Youtube -> retrieve_youtube_performance
+Linkedin -> retrieve_linkedin_performance
 Do not call tools for False platforms.
 Analyze only retrieved data.
 
@@ -61,7 +63,11 @@ arguments: client_code: Client code, report_date: YYYY-MM-DD.
 description: retrieves TikTok performance data for a specific client and report date.
 arguments: client_code: Client code, report_date: YYYY-MM-DD.
 
-4. retrieve_youtube_performance
+4. retrieve_linkedin_performance
+description: retrieves LinkedIn performance data for a specific client and report date.
+arguments: client_code: Client code, report_date: YYYY-MM-DD.
+
+5. retrieve_youtube_performance
 description: retrieves YouTube performance data for a specific client and report date.
 arguments: client_code: Client code, report_date: YYYY-MM-DD.
 

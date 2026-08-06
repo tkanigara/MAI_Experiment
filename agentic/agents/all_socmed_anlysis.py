@@ -6,6 +6,7 @@ from tools.retrieva_ig_data import retrieve_instagram_performance
 from tools.retrieval_fb_data import retrieve_facebook_performance
 from tools.retrieval_tt_data import retrieve_tiktok_performance
 from tools.retrieval_yt_data import retrieve_youtube_performance
+from tools.retrieve_ll_data import retrieve_linkedin_performance
 from langchain.agents import create_agent
 import json
 import re
@@ -19,6 +20,7 @@ def all_socmed_performance_agent_2nd(state):
             retrieve_facebook_performance,
             retrieve_tiktok_performance,
             retrieve_youtube_performance,
+            retrieve_linkedin_performance,
         ],
         system_prompt=SystemMessage(content=SYSTEM_PROMPT_2),
     )
