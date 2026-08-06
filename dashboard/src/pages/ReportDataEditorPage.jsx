@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Breadcrumb from "../components/Breadcrumb";
+import TypedNumberInput from "../components/TypedNumberInput";
 import { api } from "../lib/api";
 import { clientSlug } from "../lib/format";
 
@@ -84,13 +85,10 @@ function FieldInput({
   } else if (field.value_type === "datetime") {
     control = <input type="datetime-local" {...commonProps} />;
   } else {
-    control = (
-      <input
-        type={field.value_type === "number" || field.value_type === "percent" ? "number" : "text"}
-        step="any"
-        {...commonProps}
-      />
-    );
+    const isNumeric = field.value_type === "number" || field.value_type === "percent";
+    control = isNumeric
+      ? <TypedNumberInput step="any" {...commonProps} />
+      : <input type="text" {...commonProps} />;
   }
 
   return (

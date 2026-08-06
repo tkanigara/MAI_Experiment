@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { formatNumber, platformFlags, prettyMetric } from "../lib/format";
 import { PlatformBadge, StatusBadge } from "./Badges";
 import Modal, { ModalHeader } from "./Modal";
+import TypedNumberInput from "./TypedNumberInput";
 
 export default function AddReportModal({
   client,
@@ -141,6 +142,11 @@ export default function AddReportModal({
         const targetMonth = form.get(`${platform}:${metric}:target_month`);
         const targetYear = form.get(`${platform}:${metric}:target_year`);
         const existing = (platformData[platform]?.kpi_results || []).find((item) => item.metric_name === metric);
+        const existingTarget = (platformData[platform]?.kpi_targets || []).find(
+          (item) => item.metric_name === metric
+            && Number(item.period_year) === Number(periodYear)
+            && Number(item.period_month) === selectedMonthNumber,
+        );
         if (targetMonth || targetYear || existing?.target_month || existing?.target_year) {
           targets.push({
             platform,
@@ -149,7 +155,7 @@ export default function AddReportModal({
             period_month: selectedMonthNumber,
             target_month: targetMonth || null,
             target_year: targetYear || null,
-            unit: form.get(`${platform}:${metric}:unit`) || existing?.unit || "count",
+            unit: existingTarget?.unit || existing?.unit || "count",
           });
         }
       });
@@ -373,24 +379,17 @@ export default function AddReportModal({
                       <span className="muted">
                         Actual month / YTD: {formatNumber(row.actual_month)} / {formatNumber(row.actual_year)}
                       </span>
-                      <input
+                      <TypedNumberInput
                         name={`${platform}:${metric}:target_month`}
-                        type="number"
                         step="0.01"
                         defaultValue={targetRow.target_month || row.target_month || ""}
                         placeholder="Monthly target"
                       />
-                      <input
+                      <TypedNumberInput
                         name={`${platform}:${metric}:target_year`}
-                        type="number"
                         step="0.01"
                         defaultValue={targetRow.target_year || row.target_year || ""}
                         placeholder="Yearly target"
-                      />
-                      <input
-                        name={`${platform}:${metric}:unit`}
-                        defaultValue={targetRow.unit || row.unit || "count"}
-                        placeholder="Unit"
                       />
                     </div>
                   );
