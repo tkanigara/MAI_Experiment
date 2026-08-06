@@ -128,6 +128,7 @@ def to_number(value):
 
     if isinstance(value, Decimal):
         return int(value) if value % 1 == 0 else float(value)
+    return value
 
 @tool
 def retrieve_socmed_overview(client_code: str,report_date: str):
@@ -143,21 +144,23 @@ def retrieve_socmed_overview(client_code: str,report_date: str):
                 """
                 SELECT
                     so.client_id,
+                    so.report_period_id,
                     so.total_followers,
                     so.follower_growth,
                     so.follower_growth_rate,
                     so.follows,
                     so.unfollows,
                     so.total_posts,
-                    so.reels_posts,
-                    so.carousel_posts,
-                    so.single_posts,
-                    so.story_posts,
+                    so.photo_posts,
+                    so.video_posts,
+                    so.text_posts,
                     so.total_engagement,
                     so.likes,
                     so.comments,
                     so.shares,
                     so.reach,
+                    so.impressions,
+                    so.total_views,
                     so.engagement_rate
                 FROM linkedin_reports so
 
@@ -172,6 +175,9 @@ def retrieve_socmed_overview(client_code: str,report_date: str):
                     AND rp.period_start <= %s
                     AND rp.period_end >= %s
 
+                ORDER BY
+                    (so.profile_id IS NOT NULL) DESC,
+                    so.updated_at DESC
                 LIMIT 1;
                 """,
                 (client_code, report_date,report_date,),
@@ -185,24 +191,26 @@ def retrieve_socmed_overview(client_code: str,report_date: str):
 
             return {
                 "success": True,
+                "report_period_id": str(row[1]),
                 "overview": {
                     "client_id": str(row[0]),
-                    "total_followers": to_number(row[1]),
-                    "follower_growth": to_number(row[2]),
-                    "follower_growth_rate": to_number(row[3]),
-                    "follows": to_number(row[4]),
-                    "unfollows": to_number(row[5]),
-                    "total_posts": to_number(row[6]),
-                    "reels_posts": to_number(row[7]),
-                    "carousel_posts": to_number(row[8]),
-                    "single_posts": to_number(row[9]),
-                    "story_posts": to_number(row[10]),
+                    "total_followers": to_number(row[2]),
+                    "follower_growth": to_number(row[3]),
+                    "follower_growth_rate": to_number(row[4]),
+                    "follows": to_number(row[5]),
+                    "unfollows": to_number(row[6]),
+                    "total_posts": to_number(row[7]),
+                    "photo_posts": to_number(row[8]),
+                    "video_posts": to_number(row[9]),
+                    "text_posts": to_number(row[10]),
                     "total_engagement": to_number(row[11]),
                     "likes": to_number(row[12]),
                     "comments": to_number(row[13]),
                     "shares": to_number(row[14]),
                     "reach": to_number(row[15]),
-                    "engagement_rate": to_number(row[16]),
+                    "impressions": to_number(row[16]),
+                    "total_views": to_number(row[17]),
+                    "engagement_rate": to_number(row[18]),
                 }
             }
 
@@ -243,6 +251,9 @@ def retrieve_followers_growth(client_code:str, report_date: str):
                     c.client_code = %s
                     AND rp.period_start <= %s
                     AND rp.period_end >= %s
+                ORDER BY
+                    (fg.profile_id IS NOT NULL) DESC,
+                    fg.updated_at DESC
                 LIMIT 1;
                 """,
                 (client_code, report_date, report_date)
@@ -250,7 +261,7 @@ def retrieve_followers_growth(client_code:str, report_date: str):
             row = cursor.fetchone()
             if row is None :
                 return {
-                    "succes": False,
+                    "success": False,
                     "message": "Followers Growth Not found"
                 }
             return {
@@ -380,6 +391,9 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
                     c.client_code = %s
                     AND rp.period_start <= %s
                     AND rp.period_end >= %s
+                ORDER BY
+                    (ep.profile_id IS NOT NULL) DESC,
+                    ep.updated_at DESC
                 LIMIT 1;
                 """,
                 (client_code, report_date, report_date)
@@ -387,8 +401,8 @@ def retrieve_engagement_performance(client_code: str, report_date: str):
             row = cursor.fetchone()
             if row is None :
                 return {
-                    "succes": False,
-                    "message": "Followers Growth Not found"
+                    "success": False,
+                    "message": "Engagement Performance not found"
                 }
             return {
                 "success": True,
@@ -728,6 +742,9 @@ def retrieve_competitor_analysis(
                     c.client_code = %s
                     AND rp.period_start <= %s
                     AND rp.period_end >= %s
+                ORDER BY
+                    (ir.profile_id IS NOT NULL) DESC,
+                    ir.updated_at DESC
                 LIMIT 1;
                 """,
                 (
@@ -863,6 +880,8 @@ def retrieve_linkedin_performance(
                     ir.total_engagement,
                     ir.engagement_rate,
                     ir.reach,
+                    ir.impressions,
+                    ir.total_views,
                     ir.total_posts
 
                 FROM linkedin_reports ir
@@ -878,6 +897,9 @@ def retrieve_linkedin_performance(
                     AND rp.period_start <= %s
                     AND rp.period_end >= %s
 
+                ORDER BY
+                    (ir.profile_id IS NOT NULL) DESC,
+                    ir.updated_at DESC
                 LIMIT 1;
                 """,
                 (
@@ -902,11 +924,13 @@ def retrieve_linkedin_performance(
                     "total_followers": to_number(row[1]),
                     "follows": to_number(row[2]),
                     "unfollows": to_number(row[3]),
-                    "followers_growth": to_number(row[4]),
+                    "follower_growth": to_number(row[4]),
                     "total_engagement": to_number(row[5]),
                     "engagement_rate": to_number(row[6]),
                     "reach": to_number(row[7]),
-                    "total_posts": to_number(row[8]),
+                    "impressions": to_number(row[8]),
+                    "total_views": to_number(row[9]),
+                    "total_posts": to_number(row[10]),
                 }
             }
 

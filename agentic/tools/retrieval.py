@@ -20,6 +20,7 @@ def retrieval_metadata(client_code: str, report_date: str) -> dict:
                     c.has_facebook,
                     c.has_tiktok,
                     c.has_youtube,
+                    c.has_linkedin,
                     rp.id,
                     rp.period_start,
                     rp.period_end
@@ -49,6 +50,7 @@ def retrieval_metadata(client_code: str, report_date: str) -> dict:
                     "facebook": False,
                     "tiktok": False,
                     "youtube": False,
+                    "linkedin": False,
                     "loaded": False,
                     "error": "Client not found.",
                 }
@@ -61,11 +63,12 @@ def retrieval_metadata(client_code: str, report_date: str) -> dict:
                 "facebook": bool(row[4]),
                 "tiktok": bool(row[5]),
                 "youtube": bool(row[6]),
-                "report_period_id": str(row[7]) if row[7] else None,
-                "period_start": row[8],
-                "period_end": row[9],
+                "linkedin": bool(row[7]),
+                "report_period_id": str(row[8]) if row[8] else None,
+                "period_start": row[9],
+                "period_end": row[10],
                 "loaded": True,
-                "error": None if row[7] else "Report period not found for the requested date.",
+                "error": None if row[8] else "Report period not found for the requested date.",
             }
 
     except ValueError:
@@ -77,6 +80,7 @@ def retrieval_metadata(client_code: str, report_date: str) -> dict:
             "facebook": False,
             "tiktok": False,
             "youtube": False,
+            "linkedin": False,
             "loaded": False,
             "error": "Invalid report_date format. Expected YYYY-MM-DD."
         }

@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 import json
 import re
 from utils.llm_output import get_llm_text
+from utils.llm_json import parse_llm_json
 
 def all_socmed_performance_agent_2nd(state):
     agent = create_agent(
@@ -27,6 +28,11 @@ def all_socmed_performance_agent_2nd(state):
 
     metadata = state.Metadata
     payload = metadata.model_dump(mode="json")
+    payload["report_date"] = (
+        state.request.report_date.isoformat()
+        if state.request.report_date
+        else None
+    )
     response = agent.invoke(
         {
             "messages": [
@@ -41,7 +47,7 @@ def all_socmed_performance_agent_2nd(state):
     )
     final_message = response["messages"][-1]
     text = get_llm_text(final_message)
-    result = json.loads(text)
+    result = parse_llm_json(text)
     state.summary_all_socmed = SummaryAllSocmed(
         client_code=metadata.client_code,
         summary=result["summary"],

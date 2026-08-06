@@ -28,7 +28,7 @@ Do not return explanations.
 Do not return any text outside the JSON object.
 """
 
-SYSTEM_PROMPT_2 = """"
+SYSTEM_PROMPT_2 = """
 You are an expert social media performance analyst.
 Your task is to analyze all available social media data based on input in the form of metadata.
 
