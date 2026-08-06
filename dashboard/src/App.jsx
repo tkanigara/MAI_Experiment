@@ -24,6 +24,13 @@ function routeParts() {
   return window.location.pathname.split("/").filter(Boolean);
 }
 
+const REPORT_HISTORY_PAGE_SIZE = 20;
+
+function historyPageFromLocation() {
+  const value = Number(new URLSearchParams(window.location.search).get("page"));
+  return Number.isInteger(value) && value > 0 ? value : 1;
+}
+
 export default function App() {
   const [clients, setClients] = useState([]);
   const [query, setQuery] = useState("");
@@ -43,6 +50,12 @@ export default function App() {
   const [deleteReportMonthTarget, setDeleteReportMonthTarget] = useState(null);
   const [isDeletingReportMonth, setIsDeletingReportMonth] = useState(false);
   const [reportJobs, setReportJobs] = useState([]);
+  const [reportJobsPagination, setReportJobsPagination] = useState({
+    page: 1,
+    page_size: REPORT_HISTORY_PAGE_SIZE,
+    total: 0,
+    total_pages: 1,
+  });
   const [focusedReportJobId, setFocusedReportJobId] = useState("");
   const [reportJobActionId, setReportJobActionId] = useState("");
   const [reportElapsed, setReportElapsed] = useState(0);
@@ -61,6 +74,9 @@ export default function App() {
   );
   const isGlobalReportJobs = route[0] === "report-jobs";
   const isClientReportJobs = route[0] === "clients" && route[2] === "report-jobs";
+  const reportHistoryPage = (isGlobalReportJobs || isClientReportJobs)
+    ? historyPageFromLocation()
+    : 1;
   const currentMonth = isClientReportJobs
     ? null
     : reportMonths.find((month) => month.slug === route[2]);
@@ -140,10 +156,17 @@ export default function App() {
   }
 
   function navigate(path, replace = false) {
-    if (window.location.pathname !== path) {
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (currentPath !== path) {
       window.history[replace ? "replaceState" : "pushState"]({}, "", path);
     }
     setRoute(routeParts());
+  }
+
+  function navigateReportHistoryPage(page, replace = false) {
+    const nextPage = Math.max(1, Number(page) || 1);
+    const query = nextPage > 1 ? `?page=${nextPage}` : "";
+    navigate(`${window.location.pathname}${query}`, replace);
   }
 
   function showToast(message) {
@@ -182,9 +205,10 @@ export default function App() {
     });
   }
 
-  function replaceReportJobs(jobs) {
+  function replaceReportJobs(jobs, pagination = null) {
     const sortedJobs = sortReportJobs(jobs);
     setReportJobs(sortedJobs);
+    if (pagination) setReportJobsPagination(pagination);
     setFocusedReportJobId((current) => {
       if (current && sortedJobs.some((job) => job.id === current)) {
         return current;
@@ -194,20 +218,50 @@ export default function App() {
     return sortedJobs;
   }
 
-  async function loadClientReportJobs(client) {
+  async function loadClientReportJobs(client, page = reportHistoryPage) {
     if (!client?.id || String(client.id).startsWith("local-")) {
       setReportJobs([]);
       return [];
     }
-    const jobs = await api(
-      `/api/clients/${client.id}/report-jobs?limit=100`,
+    const payload = await api(
+      `/api/clients/${client.id}/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}`,
     );
-    return replaceReportJobs(jobs);
+    const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
+    const pagination = Array.isArray(payload) ? {
+      page: 1,
+      page_size: REPORT_HISTORY_PAGE_SIZE,
+      total: jobs.filter((job) => !isActiveReportJob(job)).length,
+      total_pages: 1,
+    } : payload.pagination;
+    if (
+      isClientReportJobs
+      && pagination?.page
+      && pagination.page !== page
+    ) {
+      navigateReportHistoryPage(pagination.page, true);
+    }
+    return replaceReportJobs(jobs, pagination);
   }
 
-  async function loadGlobalReportJobs() {
-    const jobs = await api("/api/report-jobs?limit=100");
-    return replaceReportJobs(jobs);
+  async function loadGlobalReportJobs(page = reportHistoryPage) {
+    const payload = await api(
+      `/api/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}`,
+    );
+    const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
+    const pagination = Array.isArray(payload) ? {
+      page: 1,
+      page_size: REPORT_HISTORY_PAGE_SIZE,
+      total: jobs.filter((job) => !isActiveReportJob(job)).length,
+      total_pages: 1,
+    } : payload.pagination;
+    if (
+      isGlobalReportJobs
+      && pagination?.page
+      && pagination.page !== page
+    ) {
+      navigateReportHistoryPage(pagination.page, true);
+    }
+    return replaceReportJobs(jobs, pagination);
   }
 
   async function refreshVisibleReportJobs() {
@@ -562,7 +616,7 @@ export default function App() {
       window.clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGlobalReportJobs]);
+  }, [isGlobalReportJobs, reportHistoryPage]);
 
   useEffect(() => {
     if (
@@ -586,7 +640,12 @@ export default function App() {
       window.clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentClient?.id, selectedClient?.id, isGlobalReportJobs]);
+  }, [
+    currentClient?.id,
+    selectedClient?.id,
+    isGlobalReportJobs,
+    reportHistoryPage,
+  ]);
 
   useEffect(() => {
     if (!currentClient || !selectedClient) return;
@@ -662,15 +721,17 @@ export default function App() {
     content = (
       <ReportJobsPage
         jobs={reportJobs}
+        pagination={reportJobsPagination}
         actionJobId={reportJobActionId}
         onNavigate={navigate}
         onCancel={cancelReportJob}
         onRetry={retryReportJob}
         onRefresh={() => {
-          loadGlobalReportJobs().catch((err) => {
+          loadGlobalReportJobs(reportHistoryPage).catch((err) => {
             showToast(err.message || "Failed to refresh report queue.");
           });
         }}
+        onPageChange={navigateReportHistoryPage}
         onOpenReport={openPresentation}
       />
     );
@@ -747,15 +808,17 @@ export default function App() {
       <ReportJobsPage
         client={selectedClient}
         jobs={reportJobs}
+        pagination={reportJobsPagination}
         actionJobId={reportJobActionId}
         onNavigate={navigate}
         onCancel={cancelReportJob}
         onRetry={retryReportJob}
         onRefresh={() => {
-          loadClientReportJobs(selectedClient).catch((err) => {
+          loadClientReportJobs(selectedClient, reportHistoryPage).catch((err) => {
             showToast(err.message || "Failed to refresh generation history.");
           });
         }}
+        onPageChange={navigateReportHistoryPage}
         onOpenReport={openPresentation}
       />
     );

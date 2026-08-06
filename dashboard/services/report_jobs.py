@@ -524,8 +524,32 @@ class ReportJobService:
             limit=limit,
         )
 
+    def client_history_page(
+        self,
+        client_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        return self.repository.list_for_client_paginated(
+            client_id,
+            page=page,
+            page_size=page_size,
+        )
+
     def all_history(self, *, limit: int = 100) -> list[dict]:
         return self.repository.list_all(limit=limit)
+
+    def all_history_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        return self.repository.list_all_paginated(
+            page=page,
+            page_size=page_size,
+        )
 
     def retry_job(
         self,

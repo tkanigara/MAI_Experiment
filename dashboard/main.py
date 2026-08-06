@@ -451,16 +451,40 @@ def get_report_job(job_id: str):
 
 
 @app.get("/api/report-jobs")
-def get_all_report_jobs(limit: int = 100):
+def get_all_report_jobs(
+    limit: int = 100,
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+):
     try:
+        if page is not None or page_size is not None:
+            return json_response(
+                report_jobs.all_history_page(
+                    page=page or 1,
+                    page_size=page_size or 20,
+                )
+            )
         return json_response(report_jobs.all_history(limit=limit))
     except ValueError as exc:
         raise bad_request(exc)
 
 
 @app.get("/api/clients/{client_id}/report-jobs")
-def get_client_report_jobs(client_id: str, limit: int = 100):
+def get_client_report_jobs(
+    client_id: str,
+    limit: int = 100,
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+):
     try:
+        if page is not None or page_size is not None:
+            return json_response(
+                report_jobs.client_history_page(
+                    client_id,
+                    page=page or 1,
+                    page_size=page_size or 20,
+                )
+            )
         return json_response(
             report_jobs.client_history(client_id, limit=limit)
         )

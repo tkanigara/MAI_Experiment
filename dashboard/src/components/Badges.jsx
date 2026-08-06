@@ -26,8 +26,28 @@ export function PlatformBadge({ platform, label }) {
   );
 }
 
-export function StatusBadge({ text, state = "partial" }) {
-  return <span className={`status-label ${state}`}>{text}</span>;
+const STATUS_STATE_ALIASES = {
+  ready: "success",
+  completed: "success",
+  partial: "warning",
+  missing: "warning",
+  queued: "info",
+  running: "info",
+  retrying: "info",
+  failed: "danger",
+  cancelled: "danger",
+};
+
+export function StatusBadge({ text, state = "neutral" }) {
+  const semanticState = STATUS_STATE_ALIASES[state] || state;
+  return <span className={`status-label ${semanticState}`}>{text}</span>;
+}
+
+export function uploadStatusState(uploadedFiles) {
+  const count = Number(uploadedFiles || 0);
+  if (count >= 5) return "success";
+  if (count > 0) return "warning";
+  return "neutral";
 }
 
 export function PlatformBadges({ platforms }) {

@@ -250,6 +250,13 @@ export default function AddReportModal({
                 const existingFilename = existingFiles[key];
                 const displayedFilename = selectedFile?.name || existingFilename;
                 const hasStoredFile = Boolean(existingFilename && !selectedFile);
+                const uploadStatus = selectedFile
+                  ? (hasWarning ? { text: "Partial", state: "warning" } : { text: "Ready", state: "success" })
+                  : hasStoredFile
+                    ? { text: "Uploaded", state: "neutral" }
+                    : optional
+                      ? { text: "Optional", state: "neutral" }
+                      : { text: "Required", state: "warning" };
                 return (
                   <div
                     className={`upload-row ${draggingSlot === key ? "is-dragging" : ""}`}
@@ -277,12 +284,8 @@ export default function AddReportModal({
                       )}
                     </div>
                     <StatusBadge
-                      text={selectedFile
-                        ? (hasWarning ? "Partial" : "Ready")
-                        : hasStoredFile
-                          ? "Uploaded"
-                          : (optional ? "Optional" : "Required")}
-                      state={displayedFilename ? (hasWarning ? "partial" : "ready") : "partial"}
+                      text={uploadStatus.text}
+                      state={uploadStatus.state}
                     />
                     <div className="upload-actions">
                       <label className="file-button">

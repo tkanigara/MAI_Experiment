@@ -1,6 +1,7 @@
 :root {
   color-scheme: light;
   --bg: #f7f7f4;
+  --surface-1: #fafaf8;
   --surface: #ffffff;
   --surface-soft: #f1f2ef;
   --text: #20252d;
@@ -9,8 +10,16 @@
   --accent: #315c55;
   --accent-dark: #244941;
   --green: #28745c;
+  --bg-success: #edf7f2;
+  --fill-success: var(--green);
+  --blue: #285fa8;
+  --bg-info: #eef5ff;
   --red: #b42318;
+  --bg-danger: #fff1ef;
+  --fill-danger: var(--red);
   --amber: #9a6700;
+  --bg-warning: #fbf5e8;
+  --fill-warning: var(--amber);
   --shadow: 0 8px 20px rgba(32, 37, 45, 0.06);
 }
 
@@ -236,9 +245,9 @@ select {
 .client-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .month-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 24px; }
 .platform-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 40px; }
-.metric-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 30px 0 42px; }
+.metric-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 
-.card, .client-card, .month-card, .platform-overview-card, .metric-card, .summary-strip, .upload-summary, .table-card, .post-card {
+.card, .client-card, .month-card, .platform-overview-card, .metric-card-container, .summary-strip, .upload-summary, .table-card, .post-card {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -246,12 +255,19 @@ select {
 }
 
 .client-card, .month-card {
+  background: var(--surface);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 
 .card-main {
   min-height: 172px;
   padding: 28px;
+}
+
+.client-card .card-main,
+.month-card .card-main {
+  background: var(--surface-1);
 }
 
 .card-footer {
@@ -290,6 +306,7 @@ select {
 
 .badge-row {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 20px;
@@ -330,12 +347,51 @@ select {
 }
 
 .status-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
   color: var(--muted);
-  display: inline-block;
-  margin-top: 7px;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
 }
+
+.status-label.neutral {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.status-label.info {
+  border-color: #c8d8ef;
+  background: var(--bg-info);
+  color: var(--blue);
+}
+
+.status-label.success {
+  border-color: #c7ded5;
+  background: var(--bg-success);
+  color: var(--green);
+}
+
+.status-label.warning {
+  border-color: #ead9af;
+  background: var(--bg-warning);
+  color: var(--amber);
+}
+
+.status-label.danger {
+  border-color: #f0c7c0;
+  background: var(--bg-danger);
+  color: var(--red);
+}
+
+.month-head .status-label { margin-top: 7px; }
 
 .client-meta, .month-meta {
   display: flex;
@@ -419,18 +475,19 @@ select {
 .summary-strip {
   display: grid;
   grid-template-columns: 180px 1fr 160px 180px;
-  gap: 26px;
-  align-items: center;
-  padding: 28px;
+  gap: 12px;
+  align-items: stretch;
+  padding: 16px;
   margin: 36px 0 46px;
 }
 
 .summary-item {
-  border-right: 1px solid var(--line);
-  min-height: 46px;
+  min-height: 80px;
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--surface-1);
 }
 
-.summary-item:last-child { border-right: 0; }
 .summary-label {
   color: var(--muted);
   font-size: 14px;
@@ -440,6 +497,7 @@ select {
 }
 
 .summary-value { font-size: 18px; font-weight: 800; }
+.summary-item .badge-row { margin-top: 0; }
 
 .upload-summary {
   display: flex;
@@ -457,6 +515,7 @@ select {
 
 .upload-summary strong { color: var(--accent); font-size: 18px; }
 .upload-summary span { color: var(--muted); font-size: 16px; }
+.upload-summary .status-label { font-size: 11px; }
 
 .platform-overview-card {
   min-height: 298px;
@@ -491,8 +550,15 @@ select {
 .platform-stat-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 22px 58px;
-  margin-top: 32px;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.platform-stat-grid > div {
+  min-height: 94px;
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--surface-1);
 }
 
 .stat-label, .metric-label {
@@ -506,9 +572,34 @@ select {
   font-weight: 850;
 }
 
+.metric-card-container {
+  margin: 30px 0 42px;
+  padding: 16px;
+}
+
 .metric-card {
-  padding: 22px;
-  min-height: 96px;
+  min-height: 112px;
+  padding: 18px;
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.metric-delta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.metric-delta.positive { color: var(--green); }
+.metric-delta.negative { color: var(--red); }
+.metric-delta.neutral { color: var(--muted); }
+
+.metric-delta > span:first-child {
+  font-size: 14px;
 }
 
 .content-section { margin-top: 36px; }
@@ -642,6 +733,31 @@ tr:last-child td { border-bottom: 0; }
 
 .status-good { color: var(--green); font-weight: 850; }
 .status-bad { color: var(--red); font-weight: 850; }
+
+.achievement-cell {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+}
+
+.achievement-progress {
+  width: min(150px, 100%);
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.achievement-progress > span {
+  display: block;
+  width: var(--progress-value);
+  height: 100%;
+  border-radius: inherit;
+}
+
+.achievement-progress.success > span { background: var(--fill-success); }
+.achievement-progress.warning > span { background: var(--fill-warning); }
+.achievement-progress.danger > span { background: var(--fill-danger); }
 
 .editable-value {
   position: relative;
@@ -1182,7 +1298,7 @@ label, .field-label {
 
 .report-toast-title {
   margin: 0;
-  color: var(--ink);
+  color: var(--text);
   font-size: 14px;
   font-weight: 850;
 }
@@ -1226,7 +1342,7 @@ label, .field-label {
 .report-toast-open.secondary {
   border: 1px solid var(--line);
   background: #ffffff;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .report-toast-cancel,
@@ -1267,7 +1383,7 @@ label, .field-label {
 
 .report-toast-close:hover {
   background: #f3f4f6;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .report-jobs-page {
@@ -1340,6 +1456,10 @@ label, .field-label {
   gap: 12px;
 }
 
+.report-history-section .report-job-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .report-job-row {
   padding: 18px 20px;
   border: 1px solid var(--line);
@@ -1356,7 +1476,7 @@ label, .field-label {
 
 .report-job-row h3 {
   margin: 0 0 10px;
-  color: var(--ink);
+  color: var(--text);
   font-size: 15px;
 }
 
@@ -1367,37 +1487,6 @@ label, .field-label {
   gap: 8px 14px;
   color: var(--muted);
   font-size: 12px;
-}
-
-.report-job-status {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 4px 9px;
-  border-radius: 999px;
-  background: #eef2f6;
-  color: #526170;
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.report-job-status.queued,
-.report-job-status.running,
-.report-job-status.retrying,
-.report-job-status.cancel_requested {
-  background: #eaf2fc;
-  color: #315f8e;
-}
-
-.report-job-status.completed {
-  background: #e7f5ee;
-  color: #287054;
-}
-
-.report-job-status.failed,
-.report-job-status.cancelled {
-  background: #faeaea;
-  color: #993f3f;
 }
 
 .report-job-actions {
@@ -1421,6 +1510,22 @@ label, .field-label {
   color: #9b3838;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.report-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.report-pagination span {
+  min-width: 110px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
 }
 
 .empty {
@@ -1495,7 +1600,7 @@ label, .field-label {
 
 .editor-tabs button.active {
   border-bottom-color: var(--accent);
-  color: var(--ink);
+  color: var(--text);
 }
 
 .editor-tabs button span {
@@ -1789,6 +1894,7 @@ label, .field-label {
 
 @media (max-width: 1100px) {
   .client-grid, .month-grid, .platform-overview-grid, .two-column { grid-template-columns: 1fr; }
+  .report-history-section .report-job-list { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .summary-strip { grid-template-columns: 1fr 1fr; }
 }
@@ -1813,7 +1919,7 @@ label, .field-label {
   .page-shell { padding: 32px 18px 60px; }
   .metric-grid { grid-template-columns: 1fr; }
   .summary-strip { grid-template-columns: 1fr; }
-  .summary-item { border-right: 0; border-bottom: 1px solid var(--line); padding-bottom: 16px; }
+  .summary-item { min-height: auto; }
   .upload-row, .kpi-target-row { grid-template-columns: 1fr; }
   .split-fields { grid-template-columns: 1fr; }
   .modal-context { grid-template-columns: 1fr; }
@@ -1828,6 +1934,10 @@ label, .field-label {
   }
   .report-job-actions {
     justify-content: flex-start;
+  }
+  .report-pagination {
+    align-items: stretch;
+    flex-direction: column;
   }
   .editor-identity,
   .editor-toolbar,
