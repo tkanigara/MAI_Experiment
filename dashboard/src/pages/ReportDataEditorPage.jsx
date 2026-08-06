@@ -2,14 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import Breadcrumb from "../components/Breadcrumb";
 import TypedNumberInput from "../components/TypedNumberInput";
 import { api } from "../lib/api";
+import { PLATFORM_LABELS, PLATFORMS } from "../lib/constants";
 import { clientSlug } from "../lib/format";
 
 const TABS = [
   ["general", "General & Overview"],
-  ["instagram", "Instagram"],
-  ["facebook", "Facebook"],
-  ["tiktok", "TikTok"],
-  ["youtube", "YouTube"],
+  ...PLATFORMS.map((platform) => [platform, PLATFORM_LABELS[platform]]),
   ["kpi", "KPI"],
   ["competitor", "Competitor"],
   ["content", "Content & Evidence"],

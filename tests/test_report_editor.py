@@ -29,6 +29,14 @@ class ReportEditorUnitTests(unittest.TestCase):
         aliases = placeholder_aliases("instagram", "follower_growth")
         self.assertIn("{{IG_NET_GROWTH}}", aliases)
         self.assertIn("{{IG_FOLLOWERS_GROWTH}}", aliases)
+        self.assertIn(
+            "{{LK_TOTAL_FOLLOWERS}}",
+            placeholder_aliases("linkedin", "total_followers"),
+        )
+        self.assertIn(
+            "{{TH_TOTAL_FOLLOWERS}}",
+            placeholder_aliases("threads", "total_followers"),
+        )
         trend_aliases = trend_placeholder_aliases(
             "youtube",
             2,

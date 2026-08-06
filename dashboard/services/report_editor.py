@@ -29,7 +29,7 @@ PLATFORM_PREFIXES = {
     "facebook": "FB",
     "tiktok": "TK",
     "youtube": "YT",
-    "linkedin": "LI",
+    "linkedin": "LK",
     "threads": "TH",
 }
 
