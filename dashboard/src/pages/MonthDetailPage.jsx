@@ -1,11 +1,17 @@
 import Breadcrumb from "../components/Breadcrumb";
+import { StatusBadge, uploadStatusState } from "../components/Badges";
 import PlatformOverviewCard from "../components/PlatformOverviewCard";
 import { clientSlug, platformFlags } from "../lib/format";
 
 function platformStats(platform, report = {}) {
   if (platform === "youtube") {
     return [
-      { label: "Subscribers", value: report.total_subscribers },
+      {
+        label: "Subscribers",
+        value: report.total_subscribers,
+        delta: report.subscriber_growth_rate,
+        deltaSuffix: "%",
+      },
       { label: "Views", value: report.total_views },
       { label: "Engagement", value: report.total_engagement },
       { label: "Videos", value: report.total_posts },
@@ -13,7 +19,12 @@ function platformStats(platform, report = {}) {
   }
   if (platform === "tiktok") {
     return [
-      { label: "Followers", value: report.total_followers },
+      {
+        label: "Followers",
+        value: report.total_followers,
+        delta: report.follower_growth_rate,
+        deltaSuffix: "%",
+      },
       { label: "Views", value: report.total_views },
       { label: "Engagement", value: report.total_engagement },
       { label: "Posts", value: report.total_posts },
@@ -21,7 +32,12 @@ function platformStats(platform, report = {}) {
   }
   if (platform === "linkedin") {
     return [
-      { label: "Followers", value: report.total_followers },
+      {
+        label: "Followers",
+        value: report.total_followers,
+        delta: report.follower_growth_rate,
+        deltaSuffix: "%",
+      },
       { label: "Impressions", value: report.impressions },
       { label: "Engagement", value: report.total_engagement },
       { label: "Posts", value: report.total_posts },
@@ -29,14 +45,24 @@ function platformStats(platform, report = {}) {
   }
   if (platform === "threads") {
     return [
-      { label: "Followers", value: report.total_followers },
+      {
+        label: "Followers",
+        value: report.total_followers,
+        delta: report.follower_growth_rate,
+        deltaSuffix: "%",
+      },
       { label: "Views", value: report.total_views },
       { label: "Engagement", value: report.total_engagement },
       { label: "Posts", value: report.total_posts },
     ];
   }
   return [
-    { label: "Followers", value: report.total_followers },
+    {
+      label: "Followers",
+      value: report.total_followers,
+      delta: report.follower_growth_rate,
+      deltaSuffix: "%",
+    },
     { label: "Reach", value: report.reach },
     { label: "Engagement", value: report.total_engagement },
     { label: "Posts", value: report.total_posts },
@@ -88,7 +114,10 @@ export default function MonthDetailPage({
       </div>
       <section className="upload-summary">
         <div>
-          <strong>{month.status || "Report data imported"}</strong>
+          <StatusBadge
+            text={month.status || "Report data imported"}
+            state={uploadStatusState(month.uploaded_files)}
+          />
           <span>{month.platform_reports || 0} platform reports available</span>
         </div>
         <button className="secondary-button" onClick={onOpenAddReport}>Update Data</button>

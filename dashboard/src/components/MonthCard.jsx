@@ -1,4 +1,4 @@
-import { PlatformBadges, StatusBadge } from "./Badges";
+import { PlatformBadges, StatusBadge, uploadStatusState } from "./Badges";
 import { formatDateTime } from "../lib/format";
 import OpenIconButton from "./OpenIconButton";
 
@@ -17,7 +17,10 @@ export default function MonthCard({
         <div className="month-head">
           <div>
             <div className="month-title">{month.label}</div>
-            <StatusBadge text={month.status} state={month.state} />
+            <StatusBadge
+              text={month.status}
+              state={uploadStatusState(month.uploaded_files)}
+            />
           </div>
           <div className="card-head-actions">
             <OpenIconButton label={`Open ${month.label} report`} onClick={() => onOpen(month.slug)} />

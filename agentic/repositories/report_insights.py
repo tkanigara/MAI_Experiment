@@ -35,6 +35,9 @@ def _data_version(cursor, client_id: str, report_period_id: str) -> str:
             SELECT updated_at FROM youtube_reports
             WHERE client_id = %(client_id)s AND report_period_id = %(period_id)s
             UNION ALL
+            SELECT updated_at FROM linkedin_reports
+            WHERE client_id = %(client_id)s AND report_period_id = %(period_id)s
+            UNION ALL
             SELECT updated_at FROM kpi_results
             WHERE client_id = %(client_id)s AND report_period_id = %(period_id)s
             UNION ALL
@@ -149,6 +152,7 @@ def persist_agent_results(state) -> dict:
                 "facebook": state.facebook_result,
                 "tiktok": state.tiktok_result,
                 "youtube": state.youtube_result,
+                "linkedin": state.linkedin_result,
             }
             for platform, result in platform_results.items():
                 if not getattr(state.Metadata, platform, False):
@@ -177,6 +181,7 @@ def persist_agent_results(state) -> dict:
                 "facebook": state.summary_facebook,
                 "tiktok": state.summary_tiktok,
                 "youtube": state.summary_youtube,
+                "linkedin": state.summary_linkedin,
             }
             for platform, summary in platform_summaries.items():
                 if not getattr(state.Metadata, platform, False):

@@ -44,7 +44,18 @@ export default function KpiTable({ platform, rows, onEdit }) {
               : achievement >= 100
                 ? "On Track"
                 : "Below Target";
-            const state = status === "On Track" ? "ready" : status === "Below Target" ? "danger" : "partial";
+            const state = status === "On Track"
+              ? "success"
+              : status === "Below Target"
+                ? "danger"
+                : "neutral";
+            const showProgress = Boolean(row.target_month) && Number.isFinite(achievement);
+            const progressValue = Math.min(Math.max(achievement, 0), 100);
+            const progressState = state === "success"
+              ? "success"
+              : state === "warning"
+                ? "warning"
+                : "danger";
             return (
               <tr key={row.metric_name}>
                 <td>{prettyMetric(row.metric_name)}</td>
@@ -64,9 +75,26 @@ export default function KpiTable({ platform, rows, onEdit }) {
                   </div>
                 </td>
                 <td className={achievement >= 100 ? "status-good" : row.target_month ? "status-bad" : ""}>
-                  {formatNumber(row.achievement_month, row.achievement_month !== null && row.achievement_month !== undefined ? "%" : "")}
-                  {" / "}
-                  {formatNumber(row.achievement_year, row.achievement_year !== null && row.achievement_year !== undefined ? "%" : "")}
+                  <div className="achievement-cell">
+                    <span>
+                      {formatNumber(row.achievement_month, row.achievement_month !== null && row.achievement_month !== undefined ? "%" : "")}
+                      {" / "}
+                      {formatNumber(row.achievement_year, row.achievement_year !== null && row.achievement_year !== undefined ? "%" : "")}
+                    </span>
+                    {showProgress ? (
+                      <div
+                        className={`achievement-progress ${progressState}`}
+                        role="progressbar"
+                        aria-label={`${prettyMetric(row.metric_name)} monthly achievement`}
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow={progressValue}
+                        aria-valuetext={`${formatNumber(row.achievement_month, "%")} monthly achievement`}
+                      >
+                        <span style={{ "--progress-value": `${progressValue}%` }} />
+                      </div>
+                    ) : null}
+                  </div>
                 </td>
                 <td><StatusBadge text={status} state={state} /></td>
               </tr>

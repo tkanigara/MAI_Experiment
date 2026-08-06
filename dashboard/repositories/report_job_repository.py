@@ -269,6 +269,100 @@ class ReportJobRepository:
             ).mappings()
             return [dict(row) for row in rows]
 
+    def _list_paginated(
+        self,
+        *,
+        client_id: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        safe_page = max(1, int(page))
+        safe_page_size = max(1, min(int(page_size), 100))
+        scope_sql = ""
+        parameters: dict[str, Any] = {}
+        if client_id is not None:
+            scope_sql = "AND client_id = :client_id"
+            parameters["client_id"] = client_id
+
+        with self.engine.begin() as conn:
+            count_row = conn.execute(
+                text(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM report_generation_jobs
+                    WHERE status IN ('completed', 'failed', 'cancelled')
+                    {scope_sql}
+                    """
+                ),
+                parameters,
+            ).mappings().first()
+            total = int((count_row or {}).get("total") or 0)
+            total_pages = max(1, (total + safe_page_size - 1) // safe_page_size)
+            safe_page = min(safe_page, total_pages)
+            offset = (safe_page - 1) * safe_page_size
+
+            active_rows = conn.execute(
+                text(
+                    f"""
+                    SELECT *
+                    FROM report_generation_jobs
+                    WHERE status IN (
+                        'queued',
+                        'running',
+                        'retrying',
+                        'cancel_requested'
+                    )
+                    {scope_sql}
+                    ORDER BY created_at DESC
+                    """
+                ),
+                parameters,
+            ).mappings()
+            history_rows = conn.execute(
+                text(
+                    f"""
+                    SELECT *
+                    FROM report_generation_jobs
+                    WHERE status IN ('completed', 'failed', 'cancelled')
+                    {scope_sql}
+                    ORDER BY created_at DESC
+                    LIMIT :page_size
+                    OFFSET :offset
+                    """
+                ),
+                {
+                    **parameters,
+                    "page_size": safe_page_size,
+                    "offset": offset,
+                },
+            ).mappings()
+
+            jobs = [dict(row) for row in active_rows]
+            jobs.extend(dict(row) for row in history_rows)
+
+        return {
+            "jobs": jobs,
+            "pagination": {
+                "page": safe_page,
+                "page_size": safe_page_size,
+                "total": total,
+                "total_pages": total_pages,
+            },
+        }
+
+    def list_for_client_paginated(
+        self,
+        client_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        return self._list_paginated(
+            client_id=client_id,
+            page=page,
+            page_size=page_size,
+        )
+
     def list_all(self, *, limit: int = 100) -> list[dict]:
         safe_limit = max(1, min(int(limit), 100))
         with self.engine.begin() as conn:
@@ -294,6 +388,14 @@ class ReportJobRepository:
                 {"limit": safe_limit},
             ).mappings()
             return [dict(row) for row in rows]
+
+    def list_all_paginated(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        return self._list_paginated(page=page, page_size=page_size)
 
     def set_cloud_task_name(self, job_id: str, task_name: str) -> dict:
         return self._transition(

@@ -3,6 +3,7 @@ from CentralArch.state import (
     State,
     Request, 
     instagram_result_analysis, facebook_result_analysis, tiktok_result_analysis, youtube_result_analysis, 
+    linkedin_result_analysis
 )
 from datetime import date
 
@@ -127,6 +128,30 @@ print(youtube.low_content_performance)
 print("\n=== Competitor Analysis ===")
 print(youtube.competitor_analysis)
 
+linkedin = result["linkedin_result"]
+print("===============LINKEDIN ANALYSIS RESULT ==========")
+print("===========================================")
+print("=== KPI Analysis ===")
+print(linkedin.kpi_analysis)
+
+print("\n=== Social Media Overview ===")
+print(linkedin.socmed_overview_analysis)
+
+print("\n=== Followers Growth ===")
+print(linkedin.followers_growth_analysis)
+
+print("\n=== Engagement Performance ===")
+print(linkedin.growth_performance_analysis)
+
+print("\n=== Top Performing Content ===")
+print(linkedin.top_content_performance)
+
+print("============= Low Content ===========")
+print(linkedin.low_content_performance)
+
+print("\n=== Competitor Analysis ===")
+print(linkedin.competitor_analysis)
+
 print("\n =========== ALL SOCIAL MEDIA PERFORMANCE =======")
 all_socmed = result["summary_all_socmed"]
 print(all_socmed.summary)
@@ -137,6 +162,7 @@ for platform, field_name in (
     ("Facebook", "summary_facebook"),
     ("TikTok", "summary_tiktok"),
     ("YouTube", "summary_youtube"),
+    ("LinkedIn", "summary_linkedin"),
 ):
     summary = result[field_name]
     print(f"\n=== {platform} ===")

@@ -6,10 +6,12 @@ from tools.retrieva_ig_data import retrieve_instagram_performance
 from tools.retrieval_fb_data import retrieve_facebook_performance
 from tools.retrieval_tt_data import retrieve_tiktok_performance
 from tools.retrieval_yt_data import retrieve_youtube_performance
+from tools.retrieve_ll_data import retrieve_linkedin_performance
 from langchain.agents import create_agent
 import json
 import re
 from utils.llm_output import get_llm_text
+from utils.llm_json import parse_llm_json
 
 def all_socmed_performance_agent_2nd(state):
     agent = create_agent(
@@ -19,12 +21,18 @@ def all_socmed_performance_agent_2nd(state):
             retrieve_facebook_performance,
             retrieve_tiktok_performance,
             retrieve_youtube_performance,
+            retrieve_linkedin_performance,
         ],
         system_prompt=SystemMessage(content=SYSTEM_PROMPT_2),
     )
 
     metadata = state.Metadata
     payload = metadata.model_dump(mode="json")
+    payload["report_date"] = (
+        state.request.report_date.isoformat()
+        if state.request.report_date
+        else None
+    )
     response = agent.invoke(
         {
             "messages": [
@@ -39,7 +47,7 @@ def all_socmed_performance_agent_2nd(state):
     )
     final_message = response["messages"][-1]
     text = get_llm_text(final_message)
-    result = json.loads(text)
+    result = parse_llm_json(text)
     state.summary_all_socmed = SummaryAllSocmed(
         client_code=metadata.client_code,
         summary=result["summary"],

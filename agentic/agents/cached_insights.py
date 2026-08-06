@@ -3,10 +3,12 @@ from CentralArch.state import (
     SummaryAllSocmed,
     SummaryFacebook,
     SummaryInstagram,
+    SummaryLinkedin,
     SummaryTiktok,
     SummaryYoutube,
     facebook_result_analysis,
     instagram_result_analysis,
+    linkedin_result_analysis,
     tiktok_result_analysis,
     youtube_result_analysis,
 )
@@ -19,6 +21,7 @@ RESULT_MODELS = {
     "facebook": ("facebook_result", facebook_result_analysis),
     "tiktok": ("tiktok_result", tiktok_result_analysis),
     "youtube": ("youtube_result", youtube_result_analysis),
+    "linkedin": ("linkedin_result", linkedin_result_analysis),
 }
 
 SUMMARY_MODELS = {
@@ -26,6 +29,7 @@ SUMMARY_MODELS = {
     "facebook": ("summary_facebook", SummaryFacebook),
     "tiktok": ("summary_tiktok", SummaryTiktok),
     "youtube": ("summary_youtube", SummaryYoutube),
+    "linkedin": ("summary_linkedin", SummaryLinkedin),
 }
 
 

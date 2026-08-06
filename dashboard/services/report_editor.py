@@ -21,6 +21,7 @@ from dashboard.repositories.dashboard_repository import (
     json_safe,
 )
 from dashboard.repositories.report_data_lock import lock_report_period
+from dashboard.services.report_data_quality import build_report_quality
 from dashboard.slides_report import SlidesReportRepository, build_mapping
 
 
@@ -29,7 +30,7 @@ PLATFORM_PREFIXES = {
     "facebook": "FB",
     "tiktok": "TK",
     "youtube": "YT",
-    "linkedin": "LI",
+    "linkedin": "LK",
     "threads": "TH",
 }
 
@@ -641,6 +642,23 @@ class ReportEditorService:
                 "website_ads": [],
                 "advanced": [],
             }
+            content_counts = {
+                row["platform"]: int(row["content_count"])
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT platform, COUNT(*) AS content_count
+                        FROM social_content_reports
+                        WHERE client_id = :client_id
+                          AND report_period_id = :period_id
+                          AND performance_bucket = 'all'
+                          AND COALESCE(LOWER(content_type), '') <> 'story'
+                        GROUP BY platform
+                        """
+                    ),
+                    {"client_id": client_id, "period_id": period_id},
+                ).mappings()
+            }
 
             for placeholder_key in (
                 "{{CLIENT_NAME}}",
@@ -667,6 +685,25 @@ class ReportEditorService:
                 if not row_id:
                     continue
                 platform_trends = payload.get("trends", {}).get(platform, [])
+                rate_override = overrides.get(
+                    (
+                        "derived",
+                        f"{table_name}:{row_id}",
+                        "engagement_rate",
+                    )
+                )
+                report_quality = build_report_quality(
+                    platform=platform,
+                    report=report,
+                    trends=platform_trends,
+                    period_id=period_id,
+                    all_content_count=content_counts.get(platform),
+                    fanpage_engagement_rate=(
+                        rate_override.get("source_value")
+                        if rate_override
+                        else report.get("engagement_rate")
+                    ),
+                )
                 trend_db_fields = trend_database_fields(platform)
                 current_trend_aliases: dict[str, list[str]] = {}
                 for trend_index, trend in enumerate(
@@ -696,28 +733,28 @@ class ReportEditorService:
                         if field_name == "demographics"
                         else platform
                     )
-                    sections[section].append(
-                        self._field_item(
-                            section=section,
-                            table=table_name,
-                            row_id=row_id,
-                            field_name=field_name,
-                            label=label,
-                            value=report.get(field_name),
-                            value_type=value_type,
-                            platform=platform,
-                            aliases=[
-                                *placeholder_aliases(platform, field_name),
-                                *current_trend_aliases.get(field_name, []),
-                            ],
-                            overrides=overrides,
-                            override_scope=(
-                                "derived"
-                                if field_name in CALCULATED_REPORT_FIELDS
-                                else "field"
-                            ),
-                        )
+                    field = self._field_item(
+                        section=section,
+                        table=table_name,
+                        row_id=row_id,
+                        field_name=field_name,
+                        label=label,
+                        value=report.get(field_name),
+                        value_type=value_type,
+                        platform=platform,
+                        aliases=[
+                            *placeholder_aliases(platform, field_name),
+                            *current_trend_aliases.get(field_name, []),
+                        ],
+                        overrides=overrides,
+                        override_scope=(
+                            "derived"
+                            if field_name in CALCULATED_REPORT_FIELDS
+                            else "field"
+                        ),
                     )
+                    field.update(report_quality.get(field_name, {}))
+                    sections[section].append(field)
                 for trend_index, trend in enumerate(
                     platform_trends,
                     start=1,
@@ -748,38 +785,44 @@ class ReportEditorService:
                             )
                         )
                     for db_field, trend_field in historical_fields.items():
-                        sections[platform].append(
-                            self._field_item(
-                                section=platform,
-                                table=table_name,
-                                row_id=trend["report_id"],
-                                field_name=db_field,
-                                label=(
-                                    f"{trend.get('period_label') or 'Historical'}"
-                                    f" - {trend_field['label']}"
+                        field = self._field_item(
+                            section=platform,
+                            table=table_name,
+                            row_id=trend["report_id"],
+                            field_name=db_field,
+                            label=(
+                                f"{trend.get('period_label') or 'Historical'}"
+                                f" - {trend_field['label']}"
+                            ),
+                            value=trend_field["value"],
+                            value_type=trend_field["value_type"],
+                            platform=platform,
+                            aliases=trend_field["aliases"],
+                            overrides=overrides,
+                            override_scope=(
+                                "derived"
+                                if db_field in CALCULATED_REPORT_FIELDS
+                                else "field"
+                            ),
+                            extra={
+                                "source_period_id": trend.get(
+                                    "source_period_id"
                                 ),
-                                value=trend_field["value"],
-                                value_type=trend_field["value_type"],
-                                platform=platform,
-                                aliases=trend_field["aliases"],
-                                overrides=overrides,
-                                override_scope=(
-                                    "derived"
-                                    if db_field in CALCULATED_REPORT_FIELDS
-                                    else "field"
+                                "historical": True,
+                                "warning": (
+                                    "Editing this source period can affect "
+                                    "other reports."
                                 ),
-                                extra={
-                                    "source_period_id": trend.get(
-                                        "source_period_id"
-                                    ),
-                                    "historical": True,
-                                    "warning": (
-                                        "Editing this source period can affect "
-                                        "other reports."
-                                    ),
-                                },
-                            )
+                            },
                         )
+                        historical_quality_key = (
+                            f"historical|{trend.get('source_period_id')}|"
+                            f"{db_field}"
+                        )
+                        field.update(
+                            report_quality.get(historical_quality_key, {})
+                        )
+                        sections[platform].append(field)
 
             for platform, rows in payload.get("kpi_results", {}).items():
                 for row in rows:
@@ -958,10 +1001,29 @@ class ReportEditorService:
                 )
                 for section in sections
             }
+            warning_ids_by_section = {
+                section: {
+                    check.get("issue_id")
+                    or f"{field['id']}:{check.get('code')}"
+                    for field in fields
+                    for check in (field.get("quality_checks") or [])
+                }
+                for section, fields in sections.items()
+            }
+            warnings_by_section = {
+                section: len(issue_ids)
+                for section, issue_ids in warning_ids_by_section.items()
+            }
             return {
                 "context": context,
                 "sections": sections,
                 "versions": versions,
+                "quality_summary": {
+                    "warning_count": len(
+                        set().union(*warning_ids_by_section.values())
+                    ),
+                    "by_section": warnings_by_section,
+                },
                 "history_count": conn.execute(
                     text(
                         """

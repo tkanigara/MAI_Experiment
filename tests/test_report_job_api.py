@@ -127,6 +127,32 @@ class ReportJobApiTests(unittest.TestCase):
         self.assertEqual(len(response.json()), 2)
         service.all_history.assert_called_once_with(limit=50)
 
+    def test_global_history_supports_server_side_pagination(self):
+        service = Mock()
+        service.all_history_page.return_value = {
+            "jobs": [{"id": "job-21", "status": "completed"}],
+            "pagination": {
+                "page": 2,
+                "page_size": 20,
+                "total": 41,
+                "total_pages": 3,
+            },
+        }
+
+        with patch.object(main, "report_jobs", service):
+            response = self.client.get(
+                "/api/report-jobs",
+                params={"page": 2, "page_size": 20},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["pagination"]["page"], 2)
+        self.assertEqual(response.json()["jobs"][0]["id"], "job-21")
+        service.all_history_page.assert_called_once_with(
+            page=2,
+            page_size=20,
+        )
+
     def test_client_history_returns_jobs_across_periods(self):
         service = Mock()
         service.client_history.return_value = [
@@ -148,6 +174,32 @@ class ReportJobApiTests(unittest.TestCase):
         service.client_history.assert_called_once_with(
             "client-1",
             limit=50,
+        )
+
+    def test_client_history_supports_server_side_pagination(self):
+        service = Mock()
+        service.client_history_page.return_value = {
+            "jobs": [{"id": "job-21", "client_id": "client-1"}],
+            "pagination": {
+                "page": 2,
+                "page_size": 20,
+                "total": 24,
+                "total_pages": 2,
+            },
+        }
+
+        with patch.object(main, "report_jobs", service):
+            response = self.client.get(
+                "/api/clients/client-1/report-jobs",
+                params={"page": 2, "page_size": 20},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["pagination"]["total"], 24)
+        service.client_history_page.assert_called_once_with(
+            "client-1",
+            page=2,
+            page_size=20,
         )
 
     def test_cancel_returns_updated_job(self):

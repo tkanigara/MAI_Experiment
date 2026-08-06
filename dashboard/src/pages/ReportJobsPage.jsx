@@ -1,4 +1,5 @@
 import Breadcrumb from "../components/Breadcrumb";
+import { StatusBadge } from "../components/Badges";
 import { clientSlug } from "../lib/format";
 
 export const ACTIVE_REPORT_JOB_STATUSES = new Set([
@@ -28,6 +29,15 @@ export function reportJobStatusLabel(status) {
     failed: "Failed",
     cancelled: "Cancelled",
   }[status] || status || "Unknown";
+}
+
+export function reportJobStatusState(status) {
+  if (["queued", "running", "retrying", "cancel_requested"].includes(status)) {
+    return "info";
+  }
+  if (status === "completed") return "success";
+  if (["failed", "cancelled"].includes(status)) return "danger";
+  return "neutral";
 }
 
 export function reportJobStageLabel(stage) {
@@ -133,9 +143,10 @@ function JobActions({
 function JobSummary({ job, queuePosition }) {
   return (
     <div className="report-job-summary">
-      <span className={`report-job-status ${job.status}`}>
-        {reportJobStatusLabel(job.status)}
-      </span>
+      <StatusBadge
+        text={reportJobStatusLabel(job.status)}
+        state={reportJobStatusState(job.status)}
+      />
       {queuePosition && (
         <span className="report-queue-position">
           Queue #{queuePosition}
@@ -185,11 +196,13 @@ function JobRow({
 export default function ReportJobsPage({
   client,
   jobs,
+  pagination,
   actionJobId,
   onNavigate,
   onCancel,
   onRetry,
   onRefresh,
+  onPageChange,
   onOpenReport,
 }) {
   const isGlobal = !client;
@@ -200,6 +213,12 @@ export default function ReportJobsPage({
   const recentHistory = jobs.filter(
     (job) => TERMINAL_REPORT_JOB_STATUSES.has(job.status),
   );
+  const currentPage = pagination?.page || 1;
+  const pageSize = pagination?.page_size || 20;
+  const totalHistory = pagination?.total ?? recentHistory.length;
+  const totalPages = pagination?.total_pages || 1;
+  const historyStart = totalHistory ? ((currentPage - 1) * pageSize) + 1 : 0;
+  const historyEnd = Math.min(currentPage * pageSize, totalHistory);
 
   function queuePosition(job) {
     const index = waitingJobs.findIndex((item) => item.id === job.id);
@@ -279,7 +298,7 @@ export default function ReportJobsPage({
             <p>Completed, failed, and cancelled attempts, newest first.</p>
           </div>
           <span className="report-history-count">
-            {recentHistory.length} jobs
+            {historyStart}-{historyEnd} of {totalHistory} jobs
           </span>
         </div>
 
@@ -300,6 +319,30 @@ export default function ReportJobsPage({
           <div className="empty">
             No completed report generation history yet.
           </div>
+        )}
+
+        {totalPages > 1 && (
+          <nav className="report-pagination" aria-label="Report history pages">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={currentPage <= 1}
+              onClick={() => onPageChange(currentPage - 1)}
+            >
+              Previous
+            </button>
+            <span aria-live="polite">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={currentPage >= totalPages}
+              onClick={() => onPageChange(currentPage + 1)}
+            >
+              Next
+            </button>
+          </nav>
         )}
       </section>
     </section>

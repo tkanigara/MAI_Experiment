@@ -7,10 +7,12 @@ from agents.ig_analysis_agent import ig_analysis_agent, ig_analysis_agent_2nd
 from agents.fb_analysis_agent import fb_analysis_agent, fb_analysis_agent_2nd
 from agents.tt_analysis_agent import tt_analysis_agent, tt_analysis_agent_2nd
 from agents.yt_analysis_agent import yt_analysis_agent, yt_analysis_agent_2nd
+from agents.linkedin_analysis import linkedin_analysis_agent
 from agents.ig_summary_agent import ig_summary_agent
 from agents.fb_summary_agent import fb_summary_agent
 from agents.tt_summary_agent import tt_summary_agent
 from agents.yt_summary_agent import yt_summary_agent
+from agents.linkedin_summary_agent import linkedin_summary_agent
 from agents.persist_insights import persist_insights_node
 from agents.slides_generation import slides_generation_node
 from agents.cached_insights import cached_insights_node
@@ -43,7 +45,8 @@ workflow.add_node("ig_analysis_agent", ig_analysis_agent_2nd)
 workflow.add_node("fb_analysis_agent", fb_analysis_agent_2nd)
 workflow.add_node("tt_analysis_agent", tt_analysis_agent_2nd)
 workflow.add_node("yt_analysis_agent", yt_analysis_agent_2nd)
-
+workflow.add_node("linkedin_analysis_agent", linkedin_analysis_agent)
+workflow.add_node("linkedin_summary_agent", linkedin_summary_agent)
 workflow.add_node("all_socmed_performance", all_socmed_performance_agent_2nd)
 workflow.add_node("ig_summary_agent", ig_summary_agent)
 workflow.add_node("fb_summary_agent", fb_summary_agent)
@@ -68,12 +71,13 @@ workflow.add_edge("ig_analysis_agent", "ig_summary_agent")
 workflow.add_edge("fb_analysis_agent", "fb_summary_agent")
 workflow.add_edge("tt_analysis_agent", "tt_summary_agent")
 workflow.add_edge("yt_analysis_agent", "yt_summary_agent")
-
+workflow.add_edge("linkedin_analysis_agent", "linkedin_summary_agent")
 # Summary -> END
 workflow.add_edge("ig_summary_agent", "all_socmed_performance")
 workflow.add_edge("fb_summary_agent", "all_socmed_performance")
 workflow.add_edge("tt_summary_agent", "all_socmed_performance")
 workflow.add_edge("yt_summary_agent", "all_socmed_performance")
+workflow.add_edge("linkedin_summary_agent", "all_socmed_performance")
 workflow.add_edge("all_socmed_performance", "persist_insights")
 workflow.add_conditional_edges("persist_insights", route_after_persistence)
 workflow.add_edge("generate_slides", END)

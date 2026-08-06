@@ -25,7 +25,7 @@ export default function ClientCard({ client, onOpen, onEdit, onDelete }) {
           Edit
         </button>
         <button
-          className="danger-link"
+          className="danger-button"
           type="button"
           onClick={() => onDelete(client)}
         >

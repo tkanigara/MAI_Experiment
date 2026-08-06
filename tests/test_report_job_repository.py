@@ -345,6 +345,60 @@ class ReportJobRepositoryTests(unittest.TestCase):
         self.assertNotIn("WHERE client_id", statement)
         self.assertEqual(parameters["limit"], 100)
 
+    def test_global_history_paginates_terminal_jobs_and_keeps_active_jobs(self):
+        active_rows = [{"id": "job-active", "status": "running"}]
+        history_rows = [{"id": "job-21", "status": "completed"}]
+        connection = FakeConnection(
+            [
+                FakeMappingResult(first={"total": 41}),
+                FakeMappingResult(rows=active_rows),
+                FakeMappingResult(rows=history_rows),
+            ]
+        )
+        repository = ReportJobRepository(FakeEngine(connection))
+
+        result = repository.list_all_paginated(page=2, page_size=20)
+
+        self.assertEqual(
+            [row["id"] for row in result["jobs"]],
+            ["job-active", "job-21"],
+        )
+        self.assertEqual(
+            result["pagination"],
+            {
+                "page": 2,
+                "page_size": 20,
+                "total": 41,
+                "total_pages": 3,
+            },
+        )
+        history_statement, history_parameters = connection.calls[2]
+        self.assertIn("OFFSET :offset", history_statement)
+        self.assertEqual(history_parameters["page_size"], 20)
+        self.assertEqual(history_parameters["offset"], 20)
+
+    def test_client_history_pagination_is_scoped_and_clamps_last_page(self):
+        connection = FakeConnection(
+            [
+                FakeMappingResult(first={"total": 21}),
+                FakeMappingResult(rows=[]),
+                FakeMappingResult(rows=[{"id": "job-21", "status": "failed"}]),
+            ]
+        )
+        repository = ReportJobRepository(FakeEngine(connection))
+
+        result = repository.list_for_client_paginated(
+            "client-1",
+            page=99,
+            page_size=20,
+        )
+
+        self.assertEqual(result["pagination"]["page"], 2)
+        self.assertEqual(connection.calls[2][1]["offset"], 20)
+        for statement, parameters in connection.calls:
+            self.assertIn("client_id = :client_id", statement)
+            self.assertEqual(parameters["client_id"], "client-1")
+
 
 if __name__ == "__main__":
     unittest.main()
