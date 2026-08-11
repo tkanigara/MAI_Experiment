@@ -5,24 +5,33 @@ import { PlatformBadge, StatusBadge } from "./Badges";
 import Modal, { ModalHeader } from "./Modal";
 
 const DEFAULT_INDUSTRIES = ["Automotive", "Retail & E-Commerce", "Technology"];
-
 export default function AddAdsClientModal({ client = null, clients, industries, onClose, onSave }) {
   const [mode, setMode] = useState(client ? "edit" : clients.length ? "existing" : "new");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [industryMode, setIndustryMode] = useState("");
+  const [selectedPlatforms, setSelectedPlatforms] = useState(() => (
+    client ? adsPlatformFlags(client) : ADS_PLATFORMS
+  ));
   const industryOptions = useMemo(
     () => [...new Set([...DEFAULT_INDUSTRIES, ...industries].filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [industries],
   );
+
+  function togglePlatform(platform) {
+    setSelectedPlatforms((current) => (
+      current.includes(platform)
+        ? current.filter((item) => item !== platform)
+        : ADS_PLATFORMS.filter((item) => [...current, platform].includes(item))
+    ));
+  }
 
   async function submit(event) {
     event.preventDefault();
     setSaving(true);
     setError("");
     const form = new FormData(event.currentTarget);
-    const adsPlatforms = form.getAll("ads_platforms");
-    if (!adsPlatforms.length) {
+    if (!selectedPlatforms.length) {
       setError("Select at least one Ads platform.");
       setSaving(false);
       return;
@@ -32,14 +41,14 @@ export default function AddAdsClientModal({ client = null, clients, industries, 
       : String(form.get("industry") || "").trim();
     try {
       await onSave(mode === "edit"
-        ? { existing_client_id: client.id, ads_platforms: adsPlatforms }
+        ? { existing_client_id: client.id, ads_platforms: selectedPlatforms }
         : mode === "existing"
-          ? { existing_client_id: form.get("existing_client_id"), ads_platforms: adsPlatforms }
-        : {
-            client_name: String(form.get("client_name") || "").trim(),
-            industry,
-            ads_platforms: adsPlatforms,
-          });
+          ? { existing_client_id: form.get("existing_client_id"), ads_platforms: selectedPlatforms }
+          : {
+              client_name: String(form.get("client_name") || "").trim(),
+              industry,
+              ads_platforms: selectedPlatforms,
+            });
     } catch (err) {
       setError(err.message);
       setSaving(false);
@@ -51,7 +60,7 @@ export default function AddAdsClientModal({ client = null, clients, industries, 
       <ModalHeader
         title={client ? "Edit Ads Client" : "Add New Client"}
         subtitle={client
-          ? "Update the paid media platforms connected to this Ads client."
+          ? "Choose the paid media platforms connected to this client."
           : "Create an Ads client or enable Ads for an existing client master."}
         onClose={onClose}
       />
@@ -69,8 +78,8 @@ export default function AddAdsClientModal({ client = null, clients, industries, 
             Client
             <select name="existing_client_id" required defaultValue="">
               <option value="" disabled>Select a client</option>
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>{client.client_name}</option>
+              {clients.map((item) => (
+                <option key={item.id} value={item.id}>{item.client_name}</option>
               ))}
             </select>
           </label>
@@ -92,18 +101,20 @@ export default function AddAdsClientModal({ client = null, clients, industries, 
           <div className="ads-platform-picker">
             {ADS_PLATFORMS.map((platform) => {
               const source = ADS_PLATFORM_SOURCES[platform];
-              const defaults = client ? adsPlatformFlags(client) : ADS_PLATFORMS;
+              const checked = selectedPlatforms.includes(platform);
               return (
-                <label className="ads-platform-option" key={platform}>
-                  <input type="checkbox" name="ads_platforms" value={platform} defaultChecked={defaults.includes(platform)} />
-                  <PlatformBadge platform={platform} />
-                  <span><strong>{PLATFORM_LABELS[platform]} Ads</strong><small>{source.label}</small></span>
-                  <StatusBadge text={source.available ? "Available" : "Coming soon"} state={source.available ? "success" : "info"} />
-                </label>
+                <div className={`ads-platform-config ${checked ? "is-selected" : ""}`} key={platform}>
+                  <label className="ads-platform-option">
+                    <input type="checkbox" checked={checked} onChange={() => togglePlatform(platform)} />
+                    <PlatformBadge platform={platform} />
+                    <span><strong>{PLATFORM_LABELS[platform]} Ads</strong><small>{source.label}</small></span>
+                    <StatusBadge text={source.available ? "Available" : "Coming soon"} state={source.available ? "success" : "info"} />
+                  </label>
+                </div>
               );
             })}
           </div>
-          <div className="field-note">YouTube and TikTok can be configured now; ingestion and performance storage will be connected later.</div>
+          <div className="field-note">Goals, monthly KPI, and budget are selected when creating each report month.</div>
         </div>
         {error && <div className="import-alert danger">{error}</div>}
         <div className="modal-actions">

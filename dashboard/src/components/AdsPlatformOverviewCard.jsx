@@ -3,7 +3,7 @@ import { formatNumber } from "../lib/format";
 import { PlatformBadge, StatusBadge } from "./Badges";
 import OpenIconButton from "./OpenIconButton";
 
-export default function AdsPlatformOverviewCard({ platform, period, configured = true, onOpen }) {
+export default function AdsPlatformOverviewCard({ platform, period, definition, configured = true, onOpen }) {
   const source = ADS_PLATFORM_SOURCES[platform];
   const available = Boolean(source?.available && configured && period?.import_status === "success");
   const status = !configured
@@ -34,6 +34,11 @@ export default function AdsPlatformOverviewCard({ platform, period, configured =
               {source?.available
                 ? `Source: ${source.label}`
                 : `${source?.label} ingestion and storage are not connected yet`}
+            </div>
+            <div className="goal-chip-row">
+              {(definition?.active_goals || []).map((goal) => (
+                <span className="goal-chip" key={goal.key}>{goal.key.replaceAll("_", " ")}</span>
+              ))}
             </div>
           </div>
           <OpenIconButton label={`View ${PLATFORM_LABELS[platform]} Ads details`} onClick={() => onOpen(platform)} />

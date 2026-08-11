@@ -9,12 +9,21 @@ from sqlalchemy import text
 try:
     from dashboard.db import create_db_engine
     from dashboard.services.ads_workspace import (
+        ADS_GOAL_DEFINITIONS,
+        ADS_PLATFORM_KEYS,
+        ads_period_configuration,
         ads_platform_catalog,
         ads_product_configuration,
     )
 except ModuleNotFoundError:
     from db import create_db_engine
-    from services.ads_workspace import ads_platform_catalog, ads_product_configuration
+    from services.ads_workspace import (
+        ADS_GOAL_DEFINITIONS,
+        ADS_PLATFORM_KEYS,
+        ads_period_configuration,
+        ads_platform_catalog,
+        ads_product_configuration,
+    )
 
 
 TABLES = {
@@ -24,6 +33,13 @@ TABLES = {
     "placement": "meta_ads_placement_breakdown",
     "demographic": "meta_ads_demographic_breakdown",
     "region": "meta_ads_region_breakdown",
+}
+
+META_GOAL_RESULT_TYPES = {
+    "reach": ("reach",),
+    "engagement": ("actions:post_interaction_gross", "post_engagement"),
+    "profile_visits": ("profile_visit_view", "profile_visit"),
+    "page_likes": ("page_like", "page_likes", "actions:page_like"),
 }
 
 COMMON_FIELDS = (
@@ -323,9 +339,17 @@ class MetaAdsRepository:
             if not client:
                 raise ValueError("Ads client was not found.")
             client = dict(client)
-            configuration = ads_product_configuration(
-                client.get("ads_configuration") or None
+            raw_product_configuration = client.get("ads_configuration") or None
+            legacy_goal_configuration = (
+                raw_product_configuration
+                if isinstance(raw_product_configuration, dict)
+                and (
+                    raw_product_configuration.get("goals")
+                    or raw_product_configuration.get("ads_goals")
+                )
+                else None
             )
+            configuration = ads_product_configuration(raw_product_configuration)
             client["ads_configuration"] = configuration
             client["ads_platforms"] = configuration["platforms"]
             rows = conn.execute(
@@ -336,6 +360,7 @@ class MetaAdsRepository:
                         p.period_start,
                         p.period_end,
                         p.period_label,
+                        p.configuration AS ads_configuration,
                         LOWER(REPLACE(p.period_label, ' ', '-')) AS slug,
                         p.status AS period_status,
                         i.id AS import_id,
@@ -367,11 +392,562 @@ class MetaAdsRepository:
                 period["status"] = period.get("import_status") or "No import"
                 period["uploaded_files"] = len(period.get("filenames") or {})
                 period["platforms"] = configuration["platforms"]
+                period_configuration = ads_period_configuration(
+                    period.get("ads_configuration") or legacy_goal_configuration,
+                    configuration["platforms"],
+                )
+                period["ads_configuration"] = period_configuration
+                period["goals"] = period_configuration["goals"]
+                period["platform_catalog"] = ads_platform_catalog(
+                    configuration,
+                    period_configuration,
+                )
                 periods.append(period)
             return {
                 "client": client,
-                "platforms": ads_platform_catalog(configuration["platforms"]),
+                "platforms": ads_platform_catalog(configuration),
                 "periods": periods,
+            }
+
+    def platform_detail(self, client_id: str, period_id: str, platform: str) -> dict:
+        UUID(client_id)
+        UUID(period_id)
+        platform = str(platform or "").strip().lower()
+        if platform not in ADS_PLATFORM_KEYS:
+            raise ValueError("Unsupported Ads platform.")
+
+        with self.engine.connect() as conn:
+            context = conn.execute(
+                text(
+                    """
+                    SELECT
+                        c.id AS client_id,
+                        c.client_name,
+                        cp.configuration AS ads_configuration,
+                        p.configuration AS period_configuration,
+                        p.id AS period_id,
+                        p.period_label,
+                        p.period_start,
+                        p.period_end,
+                        i.id AS import_id,
+                        i.status AS import_status,
+                        i.imported_at
+                    FROM clients c
+                    JOIN client_products cp
+                      ON cp.client_id = c.id
+                     AND cp.product = 'meta_ads'
+                     AND cp.is_active
+                    JOIN meta_ads_report_periods p
+                      ON p.client_id = c.id
+                     AND p.id = CAST(:period_id AS UUID)
+                    LEFT JOIN meta_ads_imports i
+                      ON i.meta_ads_report_period_id = p.id
+                     AND i.platform = 'meta'
+                    WHERE c.id = CAST(:client_id AS UUID)
+                      AND c.is_active
+                    """
+                ),
+                {"client_id": client_id, "period_id": period_id},
+            ).mappings().first()
+            if not context:
+                raise ValueError("Ads report period was not found.")
+
+            context = dict(context)
+            raw_product_configuration = context.get("ads_configuration") or None
+            legacy_goal_configuration = (
+                raw_product_configuration
+                if isinstance(raw_product_configuration, dict)
+                and (
+                    raw_product_configuration.get("goals")
+                    or raw_product_configuration.get("ads_goals")
+                )
+                else None
+            )
+            configuration = ads_product_configuration(raw_product_configuration)
+            if platform not in configuration["platforms"]:
+                raise ValueError("Ads platform is not connected for this client.")
+            period_configuration = ads_period_configuration(
+                context.get("period_configuration") or legacy_goal_configuration,
+                configuration["platforms"],
+            )
+
+            definition = next(
+                item
+                for item in ads_platform_catalog(configuration, period_configuration)
+                if item["key"] == platform
+            )
+            response = {
+                "platform": definition,
+                "period": {
+                    key: context.get(key)
+                    for key in (
+                        "period_id",
+                        "period_label",
+                        "period_start",
+                        "period_end",
+                        "import_status",
+                        "imported_at",
+                    )
+                },
+                "data_status": "not_configured"
+                if not definition["active_goals"]
+                else "coming_soon"
+                if definition["ingestion_status"] != "available"
+                else "missing_data",
+                "goals": [],
+            }
+            if not definition["active_goals"]:
+                return response
+            if definition["ingestion_status"] != "available":
+                return response
+            if not context.get("import_id") or context.get("import_status") != "success":
+                return response
+
+            for goal_config in period_configuration["goals"].get(platform, []):
+                goal_key = goal_config["key"]
+                result_types = list(META_GOAL_RESULT_TYPES.get(goal_key, ()))
+                goal_definition = next(
+                    item
+                    for item in ADS_GOAL_DEFINITIONS[platform]
+                    if item["key"] == goal_key
+                )
+                primary_metric = (
+                    "post_engagements" if goal_key == "engagement" else "result_value"
+                )
+                totals = conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(SUM({primary_metric}), 0) AS result_value,
+                            COALESCE(SUM(spend), 0) AS spend,
+                            COALESCE(SUM(impressions), 0) AS impressions,
+                            COALESCE(SUM(reach), 0) AS reach,
+                            COALESCE(SUM(post_engagements), 0) AS engagements,
+                            COALESCE(SUM(link_clicks), 0) AS link_clicks,
+                            COALESCE(SUM(instagram_follows), 0) AS follows,
+                            COALESCE(SUM(page_engagements), 0) AS page_engagements
+                        FROM meta_ads_placement_breakdown
+                        WHERE import_id = CAST(:import_id AS UUID)
+                          AND LOWER(COALESCE(publisher_platform, '')) = :platform
+                          AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                        """
+                    ),
+                    {
+                        "import_id": context["import_id"],
+                        "platform": platform,
+                        "result_types": result_types,
+                    },
+                ).mappings().one()
+                totals = dict(totals)
+                numeric = {
+                    key: float(value or 0)
+                    for key, value in totals.items()
+                }
+                result_value = numeric["result_value"]
+                spend = numeric["spend"]
+                impressions = numeric["impressions"]
+                reach = numeric["reach"]
+                engagements = numeric["engagements"]
+                follows = numeric["follows"]
+                monthly_target = goal_config.get("target_monthly")
+                monthly_budget = goal_config.get("budget_monthly")
+                numeric.update({
+                    "frequency": impressions / reach if reach else None,
+                    "ctr": numeric["link_clicks"] / impressions * 100 if impressions else None,
+                    "engagement_rate": engagements / impressions * 100 if impressions else None,
+                    "cost_per_result": spend / result_value if result_value else None,
+                    "cost_per_thousand_reached": spend / reach * 1000 if reach else None,
+                    "visit_to_follow_rate": follows / result_value * 100
+                    if goal_key == "profile_visits" and result_value
+                    else None,
+                })
+
+                cumulative = conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(SUM(r.{primary_metric}), 0) AS result_value,
+                            COALESCE(SUM(r.spend), 0) AS spend
+                        FROM meta_ads_placement_breakdown r
+                        JOIN meta_ads_report_periods p
+                          ON p.id = r.meta_ads_report_period_id
+                        WHERE r.client_id = CAST(:client_id AS UUID)
+                          AND p.period_end <= CAST(:period_end AS DATE)
+                          AND LOWER(COALESCE(r.publisher_platform, '')) = :platform
+                          AND LOWER(COALESCE(r.result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                        """
+                    ),
+                    {
+                        "client_id": client_id,
+                        "period_end": context["period_end"],
+                        "platform": platform,
+                        "result_types": result_types,
+                    },
+                ).mappings().one()
+
+                base_parameters = {
+                    "import_id": context["import_id"],
+                    "platform": platform,
+                    "result_types": result_types,
+                }
+                creatives = conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(NULLIF(ad_name, ''), 'Unnamed ad') AS label,
+                            COALESCE(SUM({primary_metric}), 0) AS result_value,
+                            COALESCE(SUM(reach), 0) AS reach,
+                            COALESCE(SUM(impressions), 0) AS impressions,
+                            COALESCE(SUM(post_engagements), 0) AS engagements,
+                            COALESCE(SUM(link_clicks), 0) AS link_clicks,
+                            COALESCE(SUM(spend), 0) AS spend
+                        FROM meta_ads_placement_breakdown
+                        WHERE import_id = CAST(:import_id AS UUID)
+                          AND LOWER(COALESCE(publisher_platform, '')) = :platform
+                          AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                        GROUP BY COALESCE(NULLIF(ad_name, ''), 'Unnamed ad')
+                        ORDER BY result_value DESC, spend DESC
+                        LIMIT 10
+                        """
+                    ),
+                    base_parameters,
+                ).mappings()
+                placements = conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(NULLIF(placement, ''), 'Unknown placement') AS label,
+                            COALESCE(SUM({primary_metric}), 0) AS result_value,
+                            COALESCE(SUM(impressions), 0) AS impressions,
+                            COALESCE(SUM(spend), 0) AS spend
+                        FROM meta_ads_placement_breakdown
+                        WHERE import_id = CAST(:import_id AS UUID)
+                          AND LOWER(COALESCE(publisher_platform, '')) = :platform
+                          AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                        GROUP BY COALESCE(NULLIF(placement, ''), 'Unknown placement')
+                        ORDER BY result_value DESC, impressions DESC
+                        LIMIT 10
+                        """
+                    ),
+                    base_parameters,
+                ).mappings()
+                demographic_metric = primary_metric
+                region_breakdown_metric = (
+                    "link_clicks" if goal_key == "profile_visits" else primary_metric
+                )
+                demographic = conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(NULLIF(age, ''), 'Unknown') AS age,
+                            COALESCE(NULLIF(gender, ''), 'Unknown') AS gender,
+                            COALESCE(SUM({demographic_metric}), 0) AS result_value
+                        FROM meta_ads_demographic_breakdown
+                        WHERE import_id = CAST(:import_id AS UUID)
+                          AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                        GROUP BY COALESCE(NULLIF(age, ''), 'Unknown'), COALESCE(NULLIF(gender, ''), 'Unknown')
+                        ORDER BY result_value DESC
+                        LIMIT 12
+                        """
+                    ),
+                    {"import_id": context["import_id"], "result_types": result_types},
+                ).mappings()
+                regions = conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(NULLIF(region, ''), 'Unknown') AS label,
+                            COALESCE(SUM({region_breakdown_metric}), 0) AS result_value
+                        FROM meta_ads_region_breakdown
+                        WHERE import_id = CAST(:import_id AS UUID)
+                          AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                        GROUP BY COALESCE(NULLIF(region, ''), 'Unknown')
+                        ORDER BY result_value DESC
+                        LIMIT 10
+                        """
+                    ),
+                    {"import_id": context["import_id"], "result_types": result_types},
+                ).mappings()
+
+                response["goals"].append({
+                    **goal_definition,
+                    "targets": goal_config,
+                    "metrics": numeric,
+                    "achievement": result_value / float(monthly_target) * 100
+                    if monthly_target
+                    else None,
+                    "budget_use": spend / float(monthly_budget) * 100
+                    if monthly_budget
+                    else None,
+                    "cumulative": {
+                        "result_value": float(cumulative["result_value"] or 0),
+                        "spend": float(cumulative["spend"] or 0),
+                    },
+                    "creatives": [dict(row) for row in creatives],
+                    "placements": [dict(row) for row in placements],
+                    "demographics": [dict(row) for row in demographic],
+                    "regions": [dict(row) for row in regions],
+                    "breakdown_scope": "shared_meta",
+                    "region_metric": "link_clicks_proxy"
+                    if goal_key == "profile_visits"
+                    else "goal_result",
+                })
+
+            response["data_status"] = "ready"
+            return response
+
+    def period_overview(self, client_id: str, period_id: str) -> dict:
+        UUID(client_id)
+        UUID(period_id)
+        with self.engine.connect() as conn:
+            context = conn.execute(
+                text(
+                    """
+                    SELECT
+                        cp.configuration AS ads_configuration,
+                        p.configuration AS period_configuration,
+                        p.period_label,
+                        p.period_end,
+                        i.id AS import_id,
+                        i.status AS import_status
+                    FROM client_products cp
+                    JOIN meta_ads_report_periods p
+                      ON p.client_id = cp.client_id
+                     AND p.id = CAST(:period_id AS UUID)
+                    LEFT JOIN meta_ads_imports i
+                      ON i.meta_ads_report_period_id = p.id
+                     AND i.platform = 'meta'
+                    WHERE cp.client_id = CAST(:client_id AS UUID)
+                      AND cp.product = 'meta_ads'
+                      AND cp.is_active
+                    """
+                ),
+                {"client_id": client_id, "period_id": period_id},
+            ).mappings().first()
+            if not context:
+                raise ValueError("Ads report period was not found.")
+            raw_product_configuration = context.get("ads_configuration") or None
+            legacy_goal_configuration = (
+                raw_product_configuration
+                if isinstance(raw_product_configuration, dict)
+                and (
+                    raw_product_configuration.get("goals")
+                    or raw_product_configuration.get("ads_goals")
+                )
+                else None
+            )
+            configuration = ads_product_configuration(raw_product_configuration)
+            period_configuration = ads_period_configuration(
+                context.get("period_configuration") or legacy_goal_configuration,
+                configuration["platforms"],
+            )
+            historical_periods = conn.execute(
+                text(
+                    """
+                    SELECT configuration
+                    FROM meta_ads_report_periods
+                    WHERE client_id = CAST(:client_id AS UUID)
+                      AND period_end <= CAST(:period_end AS DATE)
+                    ORDER BY period_end
+                    """
+                ),
+                {"client_id": client_id, "period_end": context["period_end"]},
+            ).scalars().all()
+            cumulative_targets = {}
+            for historical in historical_periods:
+                historical_configuration = ads_period_configuration(
+                    historical or legacy_goal_configuration,
+                    configuration["platforms"],
+                )
+                for historical_platform, goals in historical_configuration["goals"].items():
+                    for historical_goal in goals:
+                        key = (historical_platform, historical_goal["key"])
+                        target = cumulative_targets.setdefault(
+                            key, {"target": 0, "budget": 0, "has_target": False, "has_budget": False}
+                        )
+                        if historical_goal.get("target_monthly") is not None:
+                            target["target"] += float(historical_goal["target_monthly"])
+                            target["has_target"] = True
+                        if historical_goal.get("budget_monthly") is not None:
+                            target["budget"] += float(historical_goal["budget_monthly"])
+                            target["has_budget"] = True
+            rows = []
+            catalog = {
+                item["key"]: item
+                for item in ads_platform_catalog(configuration, period_configuration)
+            }
+            for platform in configuration["platforms"]:
+                definition = catalog[platform]
+                for goal_config in period_configuration["goals"].get(platform, []):
+                    goal_key = goal_config["key"]
+                    goal_definition = next(
+                        item
+                        for item in ADS_GOAL_DEFINITIONS[platform]
+                        if item["key"] == goal_key
+                    )
+                    row = {
+                        "platform": platform,
+                        "platform_label": definition["label"],
+                        "goal_key": goal_key,
+                        "goal_label": goal_definition["label"],
+                        "target_monthly": goal_config.get("target_monthly"),
+                        "target_total": cumulative_targets.get((platform, goal_key), {}).get("target")
+                        if cumulative_targets.get((platform, goal_key), {}).get("has_target")
+                        else None,
+                        "budget_monthly": goal_config.get("budget_monthly"),
+                        "budget_total": cumulative_targets.get((platform, goal_key), {}).get("budget")
+                        if cumulative_targets.get((platform, goal_key), {}).get("has_budget")
+                        else None,
+                        "actual_monthly": None,
+                        "actual_total": None,
+                        "spend_monthly": None,
+                        "spend_total": None,
+                        "achievement_monthly": None,
+                        "achievement_total": None,
+                        "budget_use_monthly": None,
+                        "budget_use_total": None,
+                        "status": "coming_soon"
+                        if definition["ingestion_status"] != "available"
+                        else "missing_data",
+                    }
+                    if (
+                        definition["ingestion_status"] == "available"
+                        and context.get("import_id")
+                        and context.get("import_status") == "success"
+                    ):
+                        result_types = list(META_GOAL_RESULT_TYPES.get(goal_key, ()))
+                        primary_metric = (
+                            "post_engagements"
+                            if goal_key == "engagement"
+                            else "result_value"
+                        )
+                        monthly = conn.execute(
+                            text(
+                                f"""
+                                SELECT
+                                    COALESCE(SUM({primary_metric}), 0) AS actual,
+                                    COALESCE(SUM(spend), 0) AS spend
+                                FROM meta_ads_placement_breakdown
+                                WHERE import_id = CAST(:import_id AS UUID)
+                                  AND LOWER(COALESCE(publisher_platform, '')) = :platform
+                                  AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                                """
+                            ),
+                            {
+                                "import_id": context["import_id"],
+                                "platform": platform,
+                                "result_types": result_types,
+                            },
+                        ).mappings().one()
+                        cumulative = conn.execute(
+                            text(
+                                f"""
+                                SELECT
+                                    COALESCE(SUM(r.{primary_metric}), 0) AS actual,
+                                    COALESCE(SUM(r.spend), 0) AS spend
+                                FROM meta_ads_placement_breakdown r
+                                JOIN meta_ads_report_periods p
+                                  ON p.id = r.meta_ads_report_period_id
+                                WHERE r.client_id = CAST(:client_id AS UUID)
+                                  AND p.period_end <= CAST(:period_end AS DATE)
+                                  AND LOWER(COALESCE(r.publisher_platform, '')) = :platform
+                                  AND LOWER(COALESCE(r.result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                                """
+                            ),
+                            {
+                                "client_id": client_id,
+                                "period_end": context["period_end"],
+                                "platform": platform,
+                                "result_types": result_types,
+                            },
+                        ).mappings().one()
+                        actual_monthly = float(monthly["actual"] or 0)
+                        spend_monthly = float(monthly["spend"] or 0)
+                        actual_total = float(cumulative["actual"] or 0)
+                        spend_total = float(cumulative["spend"] or 0)
+                        row.update({
+                            "actual_monthly": actual_monthly,
+                            "actual_total": actual_total,
+                            "spend_monthly": spend_monthly,
+                            "spend_total": spend_total,
+                            "achievement_monthly": actual_monthly / float(row["target_monthly"]) * 100
+                            if row["target_monthly"]
+                            else None,
+                            "achievement_total": actual_total / float(row["target_total"]) * 100
+                            if row["target_total"]
+                            else None,
+                            "budget_use_monthly": spend_monthly / float(row["budget_monthly"]) * 100
+                            if row["budget_monthly"]
+                            else None,
+                            "budget_use_total": spend_total / float(row["budget_total"]) * 100
+                            if row["budget_total"]
+                            else None,
+                            "status": "ready",
+                        })
+                    rows.append(row)
+            return {
+                "period_id": period_id,
+                "period_label": context["period_label"],
+                "rows": rows,
+            }
+
+    def update_period_configuration(
+        self, client_id: str, period_id: str, payload: dict | None
+    ) -> dict:
+        UUID(client_id)
+        UUID(period_id)
+        with self.engine.begin() as conn:
+            context = conn.execute(
+                text(
+                    """
+                    SELECT cp.configuration AS ads_configuration
+                    FROM client_products cp
+                    JOIN meta_ads_report_periods p
+                      ON p.client_id = cp.client_id
+                     AND p.id = CAST(:period_id AS UUID)
+                    WHERE cp.client_id = CAST(:client_id AS UUID)
+                      AND cp.product = 'meta_ads'
+                      AND cp.is_active
+                    """
+                ),
+                {"client_id": client_id, "period_id": period_id},
+            ).mappings().first()
+            if not context:
+                raise ValueError("Ads report period was not found.")
+
+            product_configuration = ads_product_configuration(
+                context.get("ads_configuration") or None
+            )
+            period_configuration = ads_period_configuration(
+                payload or {},
+                product_configuration["platforms"],
+            )
+            saved = conn.execute(
+                text(
+                    """
+                    UPDATE meta_ads_report_periods
+                    SET configuration = CAST(:configuration AS JSONB),
+                        updated_at = now()
+                    WHERE id = CAST(:period_id AS UUID)
+                      AND client_id = CAST(:client_id AS UUID)
+                    RETURNING id, period_label
+                    """
+                ),
+                {
+                    "client_id": client_id,
+                    "period_id": period_id,
+                    "configuration": _json(period_configuration),
+                },
+            ).mappings().one()
+            return {
+                "period_id": saved["id"],
+                "period_label": saved["period_label"],
+                "ads_configuration": period_configuration,
+                "goals": period_configuration["goals"],
+                "platform_catalog": ads_platform_catalog(
+                    product_configuration,
+                    period_configuration,
+                ),
             }
 
     def delete_period(self, client_id: str, period_id: str) -> dict:

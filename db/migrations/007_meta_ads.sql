@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS meta_ads_report_periods (
     period_start DATE NOT NULL,
     period_end DATE NOT NULL,
     period_label TEXT,
+    configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

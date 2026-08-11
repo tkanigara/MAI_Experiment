@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dashboard import main
 from dashboard.services.ads_workspace import (
+    ads_period_configuration,
     ads_platform_catalog,
     ads_product_configuration,
 )
@@ -130,15 +131,129 @@ class ClientProductApiTests(unittest.TestCase):
         self.assertTrue(response.json()["deleted"])
         repository.delete_period.assert_called_once_with("client-1", "period-1")
 
+    def test_ads_platform_detail_uses_goal_aware_repository_contract(self):
+        repository = Mock()
+        repository.platform_detail.return_value = {
+            "platform": {"key": "instagram"},
+            "data_status": "ready",
+            "goals": [{"key": "reach", "metrics": {"result_value": 1000}}],
+        }
+
+        with patch.object(main, "meta_ads_repository", repository):
+            response = self.client.get(
+                "/api/ads/clients/client-1/periods/period-1/platforms/instagram"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["goals"][0]["key"], "reach")
+        repository.platform_detail.assert_called_once_with(
+            "client-1", "period-1", "instagram"
+        )
+
+    def test_ads_period_overview_exposes_kpi_and_budget_rows(self):
+        repository = Mock()
+        repository.period_overview.return_value = {
+            "period_id": "period-1",
+            "rows": [{"platform": "instagram", "goal_key": "reach"}],
+        }
+
+        with patch.object(main, "meta_ads_repository", repository):
+            response = self.client.get(
+                "/api/ads/clients/client-1/periods/period-1/overview"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["rows"][0]["goal_key"], "reach")
+        repository.period_overview.assert_called_once_with("client-1", "period-1")
+
+    def test_ads_period_configuration_can_be_updated_without_reimport(self):
+        repository = Mock()
+        repository.update_period_configuration.return_value = {
+            "period_id": "period-1",
+            "goals": {"instagram": [{"key": "reach"}]},
+        }
+        payload = {
+            "ads_goals": {
+                "instagram": [{"key": "reach", "target_monthly": 1000}]
+            }
+        }
+
+        with patch.object(main, "meta_ads_repository", repository):
+            response = self.client.put(
+                "/api/ads/clients/client-1/periods/period-1/configuration",
+                json=payload,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["goals"]["instagram"][0]["key"], "reach")
+        repository.update_period_configuration.assert_called_once_with(
+            "client-1", "period-1", payload
+        )
+
 
 class AdsWorkspaceContractTests(unittest.TestCase):
     def test_platform_configuration_is_ordered_and_validated(self):
-        self.assertEqual(
-            ads_product_configuration(["tiktok", "instagram", "youtube"]),
-            {"platforms": ["instagram", "youtube", "tiktok"]},
+        configuration = ads_product_configuration(
+            ["tiktok", "instagram", "youtube"]
         )
+        self.assertEqual(
+            configuration["platforms"],
+            ["instagram", "youtube", "tiktok"],
+        )
+        self.assertEqual(set(configuration), {"platforms"})
         with self.assertRaisesRegex(ValueError, "Unsupported Ads platforms"):
             ads_product_configuration(["linkedin"])
+
+    def test_goal_configuration_supports_month_specific_subset_and_targets(self):
+        configuration = ads_period_configuration({
+            "ads_goals": {
+                "instagram": [
+                    {"key": "reach", "target_monthly": "1000000", "budget_monthly": 4000000},
+                    {"key": "engagement", "target_monthly": 30000},
+                ],
+                "facebook": [{"key": "page_likes", "target_cost_per_result": 10000}],
+            },
+        }, ["instagram", "facebook"])
+
+        self.assertEqual(
+            [goal["key"] for goal in configuration["goals"]["instagram"]],
+            ["reach", "engagement"],
+        )
+        self.assertEqual(
+            configuration["goals"]["instagram"][0]["target_monthly"],
+            1000000,
+        )
+        self.assertEqual(
+            configuration["goals"]["facebook"][0]["key"],
+            "page_likes",
+        )
+
+    def test_a_month_can_skip_a_connected_platform(self):
+        configuration = ads_period_configuration({
+            "ads_goals": {
+                "instagram": [],
+                "facebook": [{"key": "reach"}],
+            }
+        }, ["instagram", "facebook"])
+        self.assertEqual(configuration["goals"]["instagram"], [])
+        self.assertEqual(configuration["goals"]["facebook"][0]["key"], "reach")
+
+    def test_a_month_requires_at_least_one_goal_overall(self):
+        with self.assertRaisesRegex(ValueError, "at least one Ads goal"):
+            ads_period_configuration({
+                "ads_goals": {"instagram": []},
+            }, ["instagram"])
+
+    def test_native_goals_are_exposed_in_platform_catalog(self):
+        rows = {row["key"]: row for row in ads_platform_catalog()}
+        self.assertEqual(
+            [goal["key"] for goal in rows["facebook"]["goals"]],
+            ["reach", "engagement", "page_likes"],
+        )
+        self.assertEqual(
+            [goal["key"] for goal in rows["youtube"]["goals"]],
+            ["impressions", "video_views"],
+        )
 
     def test_catalog_marks_unconfigured_platforms(self):
         rows = {
@@ -147,6 +262,17 @@ class AdsWorkspaceContractTests(unittest.TestCase):
         }
         self.assertTrue(rows["instagram"]["configured"])
         self.assertFalse(rows["youtube"]["configured"])
+
+    def test_catalog_marks_goals_active_for_the_selected_month(self):
+        rows = {
+            row["key"]: row
+            for row in ads_platform_catalog(
+                ["instagram", "facebook"],
+                {"ads_goals": {"instagram": [{"key": "reach"}], "facebook": []}},
+            )
+        }
+        self.assertEqual([goal["key"] for goal in rows["instagram"]["active_goals"]], ["reach"])
+        self.assertEqual(rows["facebook"]["active_goals"], [])
 
 
 class ClientProductSchemaTests(unittest.TestCase):
@@ -164,6 +290,14 @@ class ClientProductSchemaTests(unittest.TestCase):
         self.assertIn("WHERE NOT EXISTS (SELECT 1 FROM client_products)", sql)
         self.assertNotIn("REFERENCES report_periods(", sql)
         self.assertNotIn("etl_run_id", sql)
+
+        period_goal_sql = (
+            Path(__file__).resolve().parents[1]
+            / "db"
+            / "migrations"
+            / "008_ads_period_goals.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ADD COLUMN IF NOT EXISTS configuration JSONB", period_goal_sql)
 
 
 if __name__ == "__main__":

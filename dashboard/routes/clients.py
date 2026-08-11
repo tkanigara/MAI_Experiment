@@ -49,6 +49,40 @@ def handle_get(handler, parts: list[str], parsed=None) -> bool:
             handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
         return True
 
+    if (
+        len(parts) == 8
+        and parts[0] == "api"
+        and parts[1] == "ads"
+        and parts[2] == "clients"
+        and parts[4] == "periods"
+        and parts[6] == "platforms"
+    ):
+        try:
+            handler.send_json(
+                handler.meta_ads_repository.platform_detail(
+                    parts[3], parts[5], parts[7]
+                )
+            )
+        except ValueError as exc:
+            handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+        return True
+
+    if (
+        len(parts) == 7
+        and parts[0] == "api"
+        and parts[1] == "ads"
+        and parts[2] == "clients"
+        and parts[4] == "periods"
+        and parts[6] == "overview"
+    ):
+        try:
+            handler.send_json(
+                handler.meta_ads_repository.period_overview(parts[3], parts[5])
+            )
+        except ValueError as exc:
+            handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+        return True
+
     if len(parts) == 4 and parts[0] == "api" and parts[1] == "clients" and parts[3] == "platforms":
         try:
             handler.send_json(handler.repository.platforms(parts[2]))
@@ -116,6 +150,26 @@ def handle_post(handler, parts: list[str]) -> bool:
 
 
 def handle_put(handler, parts: list[str]) -> bool:
+    if (
+        len(parts) == 7
+        and parts[0] == "api"
+        and parts[1] == "ads"
+        and parts[2] == "clients"
+        and parts[4] == "periods"
+        and parts[6] == "configuration"
+    ):
+        length = int(handler.headers.get("Content-Length", "0"))
+        try:
+            payload = json.loads(handler.rfile.read(length) or b"{}")
+            handler.send_json(
+                handler.meta_ads_repository.update_period_configuration(
+                    parts[3], parts[5], payload
+                )
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
+            handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+        return True
+
     if len(parts) != 3 or parts[0] != "api" or parts[1] != "clients":
         return False
 

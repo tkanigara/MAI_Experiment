@@ -5,6 +5,7 @@ import AddReportModal from "./components/AddReportModal";
 import DeleteClientModal from "./components/DeleteClientModal";
 import DeleteReportMonthModal from "./components/DeleteReportMonthModal";
 import EditKpiModal from "./components/EditKpiModal";
+import EditAdsPeriodGoalsModal from "./components/EditAdsPeriodGoalsModal";
 import GenerateReportModal from "./components/GenerateReportModal";
 import Header from "./components/Header";
 import MetaAdsImportModal from "./components/MetaAdsImportModal";
@@ -62,6 +63,8 @@ export default function App() {
   const [reportMonths, setReportMonths] = useState([]);
   const [adsPeriods, setAdsPeriods] = useState([]);
   const [adsPlatformCatalog, setAdsPlatformCatalog] = useState([]);
+  const [adsPlatformDetail, setAdsPlatformDetail] = useState(null);
+  const [adsPeriodOverview, setAdsPeriodOverview] = useState(null);
   const [adsImportPeriod, setAdsImportPeriod] = useState(null);
   const [platformData, setPlatformData] = useState({});
   const [modal, setModal] = useState(null);
@@ -70,6 +73,7 @@ export default function App() {
   const [editKpi, setEditKpi] = useState(null);
   const [editClient, setEditClient] = useState(null);
   const [editAdsClient, setEditAdsClient] = useState(null);
+  const [editAdsPeriodGoals, setEditAdsPeriodGoals] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
   const [deleteReportMonthTarget, setDeleteReportMonthTarget] = useState(null);
@@ -692,6 +696,8 @@ export default function App() {
     setReportMonths([]);
     setAdsPeriods([]);
     setAdsPlatformCatalog([]);
+    setAdsPlatformDetail(null);
+    setAdsPeriodOverview(null);
     loadClients().catch((err) => setError(err.message));
     const first = pathParts()[0];
     if (["clients", "report-jobs"].includes(first)) {
@@ -699,6 +705,18 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace]);
+
+  useEffect(() => {
+    if (!isAdsWorkspace || !selectedClient?.id || !currentAdsPeriod?.id) {
+      setAdsPeriodOverview(null);
+      return;
+    }
+    setAdsPeriodOverview(null);
+    api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/overview`)
+      .then(setAdsPeriodOverview)
+      .catch((err) => setError(err.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClient?.id, currentAdsPeriod?.id, workspace]);
 
   useEffect(() => {
     if (!currentClient) return;
@@ -767,6 +785,23 @@ export default function App() {
     loadPlatformData(selectedClient).catch((err) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClient?.id, currentMonth?.slug, workspace]);
+
+  useEffect(() => {
+    if (
+      !isAdsWorkspace
+      || !selectedClient?.id
+      || !currentAdsPeriod?.id
+      || !currentAdsPlatform
+    ) {
+      setAdsPlatformDetail(null);
+      return;
+    }
+    setAdsPlatformDetail(null);
+    api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/platforms/${currentAdsPlatform}`)
+      .then(setAdsPlatformDetail)
+      .catch((err) => setError(err.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClient?.id, currentAdsPeriod?.id, currentAdsPlatform, workspace]);
 
   useEffect(() => {
     if (!isSocialWorkspace || !activeReportJobIdsKey) return undefined;
@@ -864,6 +899,7 @@ export default function App() {
           onNavigate={navigate}
           onOpenPeriod={(periodSlug) => navigate(`/ads/clients/${clientSlug(selectedClient)}/${periodSlug}`)}
           onEditClient={setEditAdsClient}
+          onEditGoals={setEditAdsPeriodGoals}
           onDeleteClient={setDeleteTarget}
           onDeletePeriod={setDeleteAdsPeriodTarget}
           onUpload={(period) => {
@@ -879,9 +915,11 @@ export default function App() {
           client={selectedClient}
           period={currentAdsPeriod}
           platformCatalog={adsPlatformCatalog}
+          overview={adsPeriodOverview}
           onNavigate={navigate}
           onOpenPlatform={(path) => navigate(`/ads/clients/${path}`)}
           onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
+          onEditGoals={setEditAdsPeriodGoals}
         />
       );
     }
@@ -891,8 +929,10 @@ export default function App() {
           client={selectedClient}
           period={currentAdsPeriod}
           platform={currentAdsPlatform}
+          detail={adsPlatformDetail}
           onNavigate={navigate}
           onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
+          onEditGoals={setEditAdsPeriodGoals}
         />
       );
     }
@@ -1230,6 +1270,22 @@ export default function App() {
             setModal(null);
             setAdsImportPeriod(null);
             showToast("Ads report data imported.");
+          }}
+        />
+      )}
+      {isAdsWorkspace && editAdsPeriodGoals && selectedClient && (
+        <EditAdsPeriodGoalsModal
+          client={selectedClient}
+          period={editAdsPeriodGoals}
+          onClose={() => setEditAdsPeriodGoals(null)}
+          onSave={async (payload) => {
+            await api(`/api/ads/clients/${selectedClient.id}/periods/${editAdsPeriodGoals.id}/configuration`, {
+              method: "PUT",
+              body: JSON.stringify(payload),
+            });
+            await loadAdsClient(selectedClient);
+            setEditAdsPeriodGoals(null);
+            showToast(`${editAdsPeriodGoals.period_label} goals and KPI updated.`);
           }}
         />
       )}

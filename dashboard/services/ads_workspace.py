@@ -3,6 +3,32 @@ from __future__ import annotations
 
 ADS_PLATFORM_KEYS = ("instagram", "facebook", "youtube", "tiktok")
 DEFAULT_ADS_PLATFORMS = ADS_PLATFORM_KEYS
+GOAL_TARGET_FIELDS = (
+    "target_monthly",
+    "budget_monthly",
+    "target_cost_per_result",
+)
+
+ADS_GOAL_DEFINITIONS = {
+    "instagram": (
+        {"key": "reach", "label": "Reach", "family": "awareness", "source_metric": "reach"},
+        {"key": "engagement", "label": "Engagement", "family": "engagement", "source_metric": "actions:post_interaction_gross"},
+        {"key": "profile_visits", "label": "Profile Visits", "family": "profile_growth", "source_metric": "profile_visit_view"},
+    ),
+    "facebook": (
+        {"key": "reach", "label": "Reach", "family": "awareness", "source_metric": "reach"},
+        {"key": "engagement", "label": "Engagement", "family": "engagement", "source_metric": "actions:post_interaction_gross"},
+        {"key": "page_likes", "label": "Page Likes", "family": "profile_growth", "source_metric": "page_like"},
+    ),
+    "youtube": (
+        {"key": "impressions", "label": "Impressions", "family": "awareness", "source_metric": "impressions"},
+        {"key": "video_views", "label": "Video Views", "family": "awareness", "source_metric": "video_views"},
+    ),
+    "tiktok": (
+        {"key": "video_views", "label": "Video Views", "family": "awareness", "source_metric": "video_views"},
+        {"key": "follows", "label": "Paid Follows", "family": "profile_growth", "source_metric": "paid_follows"},
+    ),
+}
 
 ADS_PLATFORM_DEFINITIONS = (
     {
@@ -42,7 +68,7 @@ ADS_PLATFORM_DEFINITIONS = (
 
 def normalize_ads_platforms(value, *, use_default: bool = True) -> list[str]:
     if isinstance(value, dict):
-        value = value.get("platforms")
+        value = value.get("platforms", value.get("ads_platforms"))
     if value is None:
         value = DEFAULT_ADS_PLATFORMS if use_default else ()
     if not isinstance(value, (list, tuple, set)):
@@ -57,13 +83,102 @@ def normalize_ads_platforms(value, *, use_default: bool = True) -> list[str]:
     return ordered
 
 
+def _number_or_none(value, field: str):
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a number.") from exc
+    if number < 0:
+        raise ValueError(f"{field} cannot be negative.")
+    return int(number) if number.is_integer() else number
+
+
+def normalize_ads_goals(
+    value,
+    platforms: list[str],
+    *,
+    use_default: bool = True,
+) -> dict[str, list[dict]]:
+    raw_goals = None
+    if isinstance(value, dict):
+        raw_goals = value.get("goals", value.get("ads_goals"))
+    result = {}
+    for platform in platforms:
+        definitions = ADS_GOAL_DEFINITIONS[platform]
+        allowed = {item["key"]: item for item in definitions}
+        selected = raw_goals.get(platform, []) if isinstance(raw_goals, dict) else None
+        if selected is None and use_default:
+            selected = [item["key"] for item in definitions]
+        elif selected is None:
+            selected = []
+        if not isinstance(selected, (list, tuple)):
+            raise ValueError(f"Ads goals for {platform} must be a list.")
+        normalized = []
+        seen = set()
+        for item in selected:
+            payload = item if isinstance(item, dict) else {"key": item}
+            key = str(payload.get("key") or "").strip().lower()
+            if key not in allowed:
+                raise ValueError(f"Unsupported {platform} Ads goal: {key or '(empty)'}")
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append({
+                "key": key,
+                **{
+                    field: _number_or_none(payload.get(field), field)
+                    for field in GOAL_TARGET_FIELDS
+                },
+            })
+        result[platform] = normalized
+    if not any(result.values()):
+        raise ValueError("Select at least one Ads goal for this report month.")
+    return result
+
+
 def ads_product_configuration(value=None) -> dict:
     return {"platforms": normalize_ads_platforms(value)}
 
 
-def ads_platform_catalog(configured_platforms=None) -> list[dict]:
-    configured = set(normalize_ads_platforms(configured_platforms))
+def ads_period_configuration(value=None, platforms=None) -> dict:
+    configured_platforms = normalize_ads_platforms(platforms)
+    return {
+        "goals": normalize_ads_goals(
+            value,
+            configured_platforms,
+            use_default=value is None or not value,
+        )
+    }
+
+
+def ads_platform_catalog(configured_platforms=None, period_configuration=None) -> list[dict]:
+    product_configuration = ads_product_configuration(configured_platforms)
+    configured = set(product_configuration["platforms"])
+    active_goals = (
+        ads_period_configuration(
+            period_configuration,
+            product_configuration["platforms"],
+        )["goals"]
+        if period_configuration is not None
+        else {}
+    )
     return [
-        {**definition, "configured": definition["key"] in configured}
+        {
+            **definition,
+            "configured": definition["key"] in configured,
+            "goals": [
+                {
+                    **goal,
+                    "active": any(
+                        item["key"] == goal["key"]
+                        for item in active_goals.get(definition["key"], [])
+                    ),
+                }
+                for goal in ADS_GOAL_DEFINITIONS[definition["key"]]
+            ],
+            "active_goals": active_goals.get(definition["key"], []),
+        }
         for definition in ADS_PLATFORM_DEFINITIONS
     ]

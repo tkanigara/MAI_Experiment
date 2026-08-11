@@ -937,7 +937,7 @@ class DashboardRepository:
             if not client:
                 raise ValueError("Client not found")
             configuration = (
-                ads_product_configuration((payload or {}).get("ads_platforms"))
+                ads_product_configuration(payload or {})
                 if product == "meta_ads"
                 else {}
             )
@@ -1024,7 +1024,7 @@ class DashboardRepository:
             raise ValueError("Unsupported client product.")
         base_code = client_code_base(client_name)
         product_configuration = (
-            ads_product_configuration(payload.get("ads_platforms"))
+            ads_product_configuration(payload)
             if product == "meta_ads"
             else {}
         )

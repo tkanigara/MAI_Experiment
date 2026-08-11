@@ -8,6 +8,27 @@ export const ADS_PLATFORM_SOURCES = {
   tiktok: { key: "tiktok_ads", label: "TikTok Ads", available: false },
 };
 
+export const ADS_GOALS = {
+  instagram: [
+    { key: "reach", label: "Reach", family: "Awareness" },
+    { key: "engagement", label: "Engagement", family: "Engagement" },
+    { key: "profile_visits", label: "Profile Visits", family: "Profile Growth" },
+  ],
+  facebook: [
+    { key: "reach", label: "Reach", family: "Awareness" },
+    { key: "engagement", label: "Engagement", family: "Engagement" },
+    { key: "page_likes", label: "Page Likes", family: "Profile Growth" },
+  ],
+  youtube: [
+    { key: "impressions", label: "Impressions", family: "Awareness" },
+    { key: "video_views", label: "Video Views", family: "Awareness" },
+  ],
+  tiktok: [
+    { key: "video_views", label: "Video Views", family: "Awareness" },
+    { key: "follows", label: "Paid Follows", family: "Profile Growth" },
+  ],
+};
+
 export const PLATFORM_LABELS = {
   instagram: "Instagram",
   facebook: "Facebook",

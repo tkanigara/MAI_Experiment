@@ -363,6 +363,36 @@ def get_ads_platforms():
     return json_response(ads_platform_catalog())
 
 
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/platforms/{platform}")
+def get_ads_platform_detail(client_id: str, period_id: str, platform: str):
+    try:
+        return json_response(
+            meta_ads_repository.platform_detail(client_id, period_id, platform)
+        )
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/overview")
+def get_ads_period_overview(client_id: str, period_id: str):
+    try:
+        return json_response(meta_ads_repository.period_overview(client_id, period_id))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.put("/api/ads/clients/{client_id}/periods/{period_id}/configuration")
+def update_ads_period_configuration(client_id: str, period_id: str, payload: dict):
+    try:
+        return json_response(
+            meta_ads_repository.update_period_configuration(
+                client_id, period_id, payload
+            )
+        )
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
 @app.delete("/api/ads/clients/{client_id}/periods/{period_id}")
 def delete_meta_ads_period(client_id: str, period_id: str):
     try:
