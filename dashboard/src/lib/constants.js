@@ -1,4 +1,12 @@
 export const PLATFORMS = ["instagram", "facebook", "tiktok", "youtube", "linkedin", "threads"];
+export const ADS_PLATFORMS = ["instagram", "facebook", "youtube", "tiktok"];
+
+export const ADS_PLATFORM_SOURCES = {
+  instagram: { key: "meta", label: "Meta Ads", available: true },
+  facebook: { key: "meta", label: "Meta Ads", available: true },
+  youtube: { key: "google_ads", label: "Google Ads", available: false },
+  tiktok: { key: "tiktok_ads", label: "TikTok Ads", available: false },
+};
 
 export const PLATFORM_LABELS = {
   instagram: "Instagram",

@@ -395,6 +395,57 @@ select {
 .ads-upload-field span { display: block; margin-bottom: 10px; font-weight: 800; }
 .ads-upload-field input { width: 100%; padding: 10px; }
 
+.ads-platform-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ads-platform-option {
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-1);
+  cursor: pointer;
+}
+
+.ads-platform-option input { width: 16px; min-height: 16px; margin: 0; accent-color: var(--accent); }
+.ads-platform-option > span:not(.platform-logo-badge):not(.status-label) { display: grid; gap: 3px; }
+.ads-platform-option small { color: var(--muted); font-size: 11px; }
+
+.ads-source-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ads-source-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.ads-source-card > div { display: grid; min-width: 0; gap: 2px; }
+.ads-source-card > div span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.ads-source-card .status-label { grid-column: 1 / -1; width: fit-content; }
+.ads-source-card.pending, .ads-platform-card.is-pending { background: var(--surface-soft); }
+
+.ads-platform-card.is-pending .platform-stat-grid { opacity: 0.55; }
+.ads-platform-metrics { margin-top: 38px; }
+.ads-coming-soon { display: grid; justify-items: center; gap: 14px; margin-top: 38px; padding: 54px 28px; text-align: center; }
+.ads-coming-soon p { max-width: 680px; font-size: 15px; }
+
 .card-main {
   min-height: 172px;
   padding: 28px;
@@ -2212,7 +2263,7 @@ label, .field-label {
   .upload-row, .kpi-target-row { grid-template-columns: 1fr; }
   .split-fields { grid-template-columns: 1fr; }
   .modal-context { grid-template-columns: 1fr; }
-  .ads-upload-grid, .ads-count-grid { grid-template-columns: 1fr; }
+  .ads-upload-grid, .ads-count-grid, .ads-platform-picker, .ads-source-grid { grid-template-columns: 1fr; }
   .report-toast {
     top: 16px;
     right: 16px;

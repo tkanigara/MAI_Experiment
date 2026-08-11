@@ -43,7 +43,7 @@ GitHub main
 Fitur utama:
 
 - kelola client, periode report, KPI, dan data tiap platform;
-- impor CSV Instagram, Facebook, TikTok, dan YouTube;
+- impor CSV organic social serta enam export Meta Ads;
 - edit data report dan menyimpan riwayat perubahan;
 - menghasilkan insight dengan Gemini;
 - membuat report dari template Google Slides.
@@ -97,6 +97,40 @@ Set-Location dashboard
 npm ci
 npm run build
 ```
+
+## Meta Ads CSV
+
+Dashboard sekarang dimulai dari pilihan workspace `Social Media` atau `Ads`,
+baru kemudian menampilkan client yang aktif untuk produk tersebut. Master client
+tetap dipakai bersama, tetapi keanggotaan produk disimpan di `client_products`.
+Periode, import, dan report Ads tidak memakai periode/report Social Media.
+
+Ads workspace menampilkan empat platform: Instagram Ads, Facebook Ads, YouTube
+Ads, dan TikTok Ads. Instagram/Facebook memakai satu snapshot sumber Meta Ads.
+YouTube dan TikTok sudah memiliki konfigurasi client, route UI, status, serta
+kontrak katalog backend, tetapi ingestion dan tabel performanya sengaja belum
+dibuat sampai contoh export aslinya tersedia. Kode produk internal `meta_ads`
+dipertahankan sementara untuk kompatibilitas data/migration yang sudah ada.
+
+Endpoint utama `POST /api/ads/imports` menerima multipart `client_id`, optional
+Ads `period_id`, dan enam file wajib dengan field `campaign`, `adset`, `ad`,
+`placement`, `demographic`, serta `region`. Alias lama
+`POST /api/import/meta-ads` masih tersedia sementara untuk kompatibilitas.
+Tanggal report dibaca dari CSV dan harus konsisten di keenam file. Import ulang
+periode yang sama mengganti snapshot secara atomik dan tidak menambah duplikat.
+
+Endpoint pendukung workspace:
+
+- `GET /api/clients?product=social_media|meta_ads`
+- `GET /api/client-products/summary`
+- `GET /api/ads/platforms`
+- `POST /api/clients/{client_id}/products/{product}`
+- `DELETE /api/clients/{client_id}/products/{product}`
+- `GET /api/ads/clients/{client_id}/periods`
+
+Database yang sudah ada harus menjalankan `db/migrations/007_meta_ads.sql`.
+Audit header, null, relationship, rekonsiliasi, serta keterbatasan export Bourbon
+ada di `docs/meta_ads_csv_audit.md`.
 
 ## Environment Variables Utama
 

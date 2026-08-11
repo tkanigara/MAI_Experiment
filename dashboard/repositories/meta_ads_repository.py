@@ -8,8 +8,13 @@ from sqlalchemy import text
 
 try:
     from dashboard.db import create_db_engine
+    from dashboard.services.ads_workspace import (
+        ads_platform_catalog,
+        ads_product_configuration,
+    )
 except ModuleNotFoundError:
     from db import create_db_engine
+    from services.ads_workspace import ads_platform_catalog, ads_product_configuration
 
 
 TABLES = {
@@ -294,7 +299,16 @@ class MetaAdsRepository:
             client = conn.execute(
                 text(
                     """
-                    SELECT c.id, c.client_code, c.client_name, c.industry
+                    SELECT
+                        c.id, c.client_code, c.client_name, c.industry,
+                        cp.configuration AS ads_configuration,
+                        ARRAY(
+                            SELECT active_product.product
+                            FROM client_products active_product
+                            WHERE active_product.client_id = c.id
+                              AND active_product.is_active
+                            ORDER BY active_product.product
+                        ) AS products
                     FROM clients c
                     JOIN client_products cp
                       ON cp.client_id = c.id
@@ -307,7 +321,13 @@ class MetaAdsRepository:
                 {"client_id": client_id},
             ).mappings().first()
             if not client:
-                raise ValueError("Meta Ads client was not found.")
+                raise ValueError("Ads client was not found.")
+            client = dict(client)
+            configuration = ads_product_configuration(
+                client.get("ads_configuration") or None
+            )
+            client["ads_configuration"] = configuration
+            client["ads_platforms"] = configuration["platforms"]
             rows = conn.execute(
                 text(
                     """
@@ -316,6 +336,7 @@ class MetaAdsRepository:
                         p.period_start,
                         p.period_end,
                         p.period_label,
+                        LOWER(REPLACE(p.period_label, ' ', '-')) AS slug,
                         p.status AS period_status,
                         i.id AS import_id,
                         i.status AS import_status,
@@ -339,7 +360,42 @@ class MetaAdsRepository:
                 ),
                 {"client_id": client_id},
             ).mappings()
-            return {"client": dict(client), "periods": [dict(row) for row in rows]}
+            periods = []
+            for row in rows:
+                period = dict(row)
+                period["label"] = period.get("period_label")
+                period["status"] = period.get("import_status") or "No import"
+                period["uploaded_files"] = len(period.get("filenames") or {})
+                period["platforms"] = configuration["platforms"]
+                periods.append(period)
+            return {
+                "client": client,
+                "platforms": ads_platform_catalog(configuration["platforms"]),
+                "periods": periods,
+            }
+
+    def delete_period(self, client_id: str, period_id: str) -> dict:
+        UUID(client_id)
+        UUID(period_id)
+        with self.engine.begin() as conn:
+            period = conn.execute(
+                text(
+                    """
+                    DELETE FROM meta_ads_report_periods
+                    WHERE id = CAST(:period_id AS UUID)
+                      AND client_id = CAST(:client_id AS UUID)
+                    RETURNING id, period_label
+                    """
+                ),
+                {"client_id": client_id, "period_id": period_id},
+            ).mappings().first()
+            if not period:
+                raise ValueError("Ads report period was not found.")
+            return {
+                "deleted": True,
+                "period_id": period["id"],
+                "period_label": period["period_label"],
+            }
 
     @staticmethod
     def _insert_rows(

@@ -9,8 +9,8 @@ export default function WorkspaceSelectorPage({ counts, onNavigate }) {
     },
     {
       key: "meta_ads",
-      title: "Meta Ads",
-      description: "Campaign, ad set, creative, placement, demographic, region, and paid media reports.",
+      title: "Ads",
+      description: "Paid media reporting for Instagram, Facebook, YouTube, and TikTok Ads.",
       path: "/ads/clients",
       accent: "ads",
     },
@@ -21,7 +21,7 @@ export default function WorkspaceSelectorPage({ counts, onNavigate }) {
       <div className="hero-copy workspace-hero">
         <div className="eyebrow">MAI Reporting</div>
         <h1>Choose a workspace</h1>
-        <p>Social Media and Meta Ads have separate clients, data periods, and report workflows.</p>
+        <p>Social Media and Ads have separate clients, data periods, and report workflows.</p>
       </div>
       <div className="workspace-grid">
         {workspaces.map((workspace) => (

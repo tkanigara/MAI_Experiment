@@ -10,10 +10,12 @@ import Header from "./components/Header";
 import MetaAdsImportModal from "./components/MetaAdsImportModal";
 import ReportDataLockedModal from "./components/ReportDataLockedModal";
 import { api } from "./lib/api";
-import { clientSlug, platformFlags } from "./lib/format";
+import { adsPeriodSlug, clientSlug, platformFlags } from "./lib/format";
 import ClientDetailPage from "./pages/ClientDetailPage";
 import AdsClientDetailPage from "./pages/AdsClientDetailPage";
 import AdsClientsPage from "./pages/AdsClientsPage";
+import AdsPeriodDetailPage from "./pages/AdsPeriodDetailPage";
+import AdsPlatformDetailPage from "./pages/AdsPlatformDetailPage";
 import ClientsPage from "./pages/ClientsPage";
 import MonthDetailPage from "./pages/MonthDetailPage";
 import PlatformDetailPage from "./pages/PlatformDetailPage";
@@ -59,6 +61,7 @@ export default function App() {
   const [profiles, setProfiles] = useState([]);
   const [reportMonths, setReportMonths] = useState([]);
   const [adsPeriods, setAdsPeriods] = useState([]);
+  const [adsPlatformCatalog, setAdsPlatformCatalog] = useState([]);
   const [adsImportPeriod, setAdsImportPeriod] = useState(null);
   const [platformData, setPlatformData] = useState({});
   const [modal, setModal] = useState(null);
@@ -66,10 +69,13 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [editKpi, setEditKpi] = useState(null);
   const [editClient, setEditClient] = useState(null);
+  const [editAdsClient, setEditAdsClient] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
   const [deleteReportMonthTarget, setDeleteReportMonthTarget] = useState(null);
   const [isDeletingReportMonth, setIsDeletingReportMonth] = useState(false);
+  const [deleteAdsPeriodTarget, setDeleteAdsPeriodTarget] = useState(null);
+  const [isDeletingAdsPeriod, setIsDeletingAdsPeriod] = useState(false);
   const [reportJobs, setReportJobs] = useState([]);
   const [reportJobsPagination, setReportJobsPagination] = useState({
     page: 1,
@@ -106,6 +112,10 @@ export default function App() {
     ? null
     : reportMonths.find((month) => month.slug === route[2]);
   const currentPlatform = route[3];
+  const currentAdsPeriod = isAdsWorkspace
+    ? adsPeriods.find((period) => adsPeriodSlug(period) === route[2] || String(period.id) === route[2])
+    : null;
+  const currentAdsPlatform = isAdsWorkspace ? route[3] : null;
   const isReportEditor = currentPlatform === "edit";
   const isLegacyPeriodReportJobs = currentPlatform === "jobs";
   const reportJob = reportJobs.find((job) => job.id === focusedReportJobId);
@@ -341,6 +351,7 @@ export default function App() {
     const payload = await api(`/api/ads/clients/${client.id}/periods`);
     setSelectedClient(payload.client);
     setAdsPeriods(payload.periods || []);
+    setAdsPlatformCatalog(payload.platforms || []);
   }
 
   async function loadClient(client) {
@@ -451,9 +462,12 @@ export default function App() {
     if (!client?.id) return;
     setIsDeletingClient(true);
     try {
-      const isSharedWithAds = (client.products || []).includes("meta_ads");
-      if (isSharedWithAds) {
-        await api(`/api/clients/${client.id}/products/social_media`, { method: "DELETE" });
+      const sharedWithOtherWorkspace = isAdsWorkspace
+        ? (client.products || []).includes("social_media")
+        : (client.products || []).includes("meta_ads");
+      if (sharedWithOtherWorkspace) {
+        const product = isAdsWorkspace ? "meta_ads" : "social_media";
+        await api(`/api/clients/${client.id}/products/${product}`, { method: "DELETE" });
       } else {
         await api(`/api/clients/${client.id}`, { method: "DELETE" });
       }
@@ -463,10 +477,12 @@ export default function App() {
         setProfiles([]);
         setReportMonths([]);
         setPlatformData({});
-        navigate("/clients");
+        navigate(isAdsWorkspace ? "/ads/clients" : "/clients");
       }
       setDeleteTarget(null);
-      showToast(isSharedWithAds ? "Client removed from Social Media." : "Client deleted.");
+      showToast(sharedWithOtherWorkspace
+        ? `Client removed from ${isAdsWorkspace ? "Ads" : "Social Media"}.`
+        : "Client deleted.");
     } catch (err) {
       if (handleReportDataLock(err, { client })) {
         setDeleteTarget(null);
@@ -475,6 +491,20 @@ export default function App() {
       throw err;
     } finally {
       setIsDeletingClient(false);
+    }
+  }
+
+  async function deleteAdsPeriod(period) {
+    if (!selectedClient?.id || !period?.id) return;
+    setIsDeletingAdsPeriod(true);
+    try {
+      await api(`/api/ads/clients/${selectedClient.id}/periods/${period.id}`, { method: "DELETE" });
+      await loadAdsClient(selectedClient);
+      if (currentAdsPeriod?.id === period.id) navigate(`/ads/clients/${clientSlug(selectedClient)}`);
+      setDeleteAdsPeriodTarget(null);
+      showToast(`${period.period_label} Ads report data deleted.`);
+    } finally {
+      setIsDeletingAdsPeriod(false);
     }
   }
 
@@ -661,6 +691,7 @@ export default function App() {
     setProfiles([]);
     setReportMonths([]);
     setAdsPeriods([]);
+    setAdsPlatformCatalog([]);
     loadClients().catch((err) => setError(err.message));
     const first = pathParts()[0];
     if (["clients", "report-jobs"].includes(first)) {
@@ -821,18 +852,47 @@ export default function App() {
           navigate(`/ads/clients/${clientSlug(client)}`);
         }}
         onOpenAddClient={() => setModal("add-ads-client")}
+        onEditClient={setEditAdsClient}
+        onDeleteClient={setDeleteTarget}
       />
     );
-    if (currentClient && selectedClient) {
+    if (currentClient && selectedClient && !currentAdsPeriod) {
       content = (
         <AdsClientDetailPage
           client={selectedClient}
           periods={adsPeriods}
           onNavigate={navigate}
+          onOpenPeriod={(periodSlug) => navigate(`/ads/clients/${clientSlug(selectedClient)}/${periodSlug}`)}
+          onEditClient={setEditAdsClient}
+          onDeleteClient={setDeleteTarget}
+          onDeletePeriod={setDeleteAdsPeriodTarget}
           onUpload={(period) => {
             setAdsImportPeriod(period);
             setModal("add-ads-import");
           }}
+        />
+      );
+    }
+    if (currentClient && selectedClient && currentAdsPeriod && !currentAdsPlatform) {
+      content = (
+        <AdsPeriodDetailPage
+          client={selectedClient}
+          period={currentAdsPeriod}
+          platformCatalog={adsPlatformCatalog}
+          onNavigate={navigate}
+          onOpenPlatform={(path) => navigate(`/ads/clients/${path}`)}
+          onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
+        />
+      );
+    }
+    if (currentClient && selectedClient && currentAdsPeriod && currentAdsPlatform) {
+      content = (
+        <AdsPlatformDetailPage
+          client={selectedClient}
+          period={currentAdsPeriod}
+          platform={currentAdsPlatform}
+          onNavigate={navigate}
+          onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
         />
       );
     }
@@ -1102,6 +1162,7 @@ export default function App() {
       {deleteTarget && (
         <DeleteClientModal
           client={deleteTarget}
+          workspace={workspace}
           isDeleting={isDeletingClient}
           onClose={() => setDeleteTarget(null)}
           onConfirm={() => {
@@ -1122,7 +1183,7 @@ export default function App() {
             if (payload.existing_client_id) {
               savedClient = await api(
                 `/api/clients/${payload.existing_client_id}/products/meta_ads`,
-                { method: "POST", body: JSON.stringify({}) },
+                { method: "POST", body: JSON.stringify({ ads_platforms: payload.ads_platforms }) },
               );
             } else {
               savedClient = await api("/api/clients", {
@@ -1134,6 +1195,24 @@ export default function App() {
             setModal(null);
             showToast("Ads client enabled.");
             navigate(`/ads/clients/${clientSlug(savedClient)}`);
+          }}
+        />
+      )}
+      {isAdsWorkspace && editAdsClient && (
+        <AddAdsClientModal
+          client={editAdsClient}
+          clients={[]}
+          industries={industries}
+          onClose={() => setEditAdsClient(null)}
+          onSave={async (payload) => {
+            const savedClient = await api(
+              `/api/clients/${editAdsClient.id}/products/meta_ads`,
+              { method: "POST", body: JSON.stringify({ ads_platforms: payload.ads_platforms }) },
+            );
+            await loadClients();
+            await loadAdsClient({ ...editAdsClient, ...savedClient });
+            setEditAdsClient(null);
+            showToast("Ads client updated.");
           }}
         />
       )}
@@ -1150,8 +1229,16 @@ export default function App() {
             await loadAdsClient(selectedClient);
             setModal(null);
             setAdsImportPeriod(null);
-            showToast("Meta Ads CSV snapshot imported.");
+            showToast("Ads report data imported.");
           }}
+        />
+      )}
+      {deleteAdsPeriodTarget && (
+        <DeleteReportMonthModal
+          month={{ ...deleteAdsPeriodTarget, label: deleteAdsPeriodTarget.period_label }}
+          isDeleting={isDeletingAdsPeriod}
+          onClose={() => setDeleteAdsPeriodTarget(null)}
+          onConfirm={() => deleteAdsPeriod(deleteAdsPeriodTarget).catch((err) => { setIsDeletingAdsPeriod(false); setError(err.message); })}
         />
       )}
       {deleteReportMonthTarget && (

@@ -1,14 +1,17 @@
 import Modal, { ModalHeader } from "./Modal";
 
-export default function DeleteClientModal({ client, isDeleting, onClose, onConfirm }) {
+export default function DeleteClientModal({ client, workspace = "social", isDeleting, onClose, onConfirm }) {
   const closeHandler = isDeleting ? () => {} : onClose;
-  const isSharedWithAds = (client?.products || []).includes("meta_ads");
+  const isAdsWorkspace = workspace === "ads";
+  const isShared = (client?.products || []).includes(isAdsWorkspace ? "social_media" : "meta_ads");
+  const workspaceLabel = isAdsWorkspace ? "Ads" : "Social Media";
+  const otherWorkspaceLabel = isAdsWorkspace ? "Social Media" : "Ads";
   return (
     <Modal onClose={closeHandler}>
       <ModalHeader
-        title={isSharedWithAds ? "Remove from Social Media" : "Delete Client"}
-        subtitle={isSharedWithAds
-          ? "The shared client and its Meta Ads data will remain available in the Ads workspace."
+        title={isShared ? `Remove from ${workspaceLabel}` : "Delete Client"}
+        subtitle={isShared
+          ? `The shared client and its ${otherWorkspaceLabel} data will remain available in the ${otherWorkspaceLabel} workspace.`
           : "This action will remove the client and all related dashboard data."}
         onClose={closeHandler}
       />
@@ -22,8 +25,8 @@ export default function DeleteClientModal({ client, isDeleting, onClose, onConfi
           </button>
           <button type="button" className="danger-button" onClick={onConfirm} disabled={isDeleting}>
             {isDeleting
-              ? (isSharedWithAds ? "Removing..." : "Deleting...")
-              : (isSharedWithAds ? "Remove from Social Media" : "Delete Client")}
+              ? (isShared ? "Removing..." : "Deleting...")
+              : (isShared ? `Remove from ${workspaceLabel}` : "Delete Client")}
           </button>
         </div>
       </div>

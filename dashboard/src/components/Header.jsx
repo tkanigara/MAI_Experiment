@@ -2,7 +2,7 @@ export default function Header({ activeSection, workspace, onNavigate }) {
   const isAds = workspace === "ads";
   const homePath = isAds ? "/ads/clients" : "/social/clients";
   const title = workspace
-    ? `MAI ${isAds ? "Meta Ads" : "Social Media"} Dashboard`
+    ? `MAI ${isAds ? "Ads" : "Social Media"} Dashboard`
     : "MAI Reporting";
   return (
     <header className="app-header">

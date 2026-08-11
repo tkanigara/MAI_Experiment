@@ -21,6 +21,7 @@ try:
         lock_existing_report_period,
         lock_report_period,
     )
+    from dashboard.services.ads_workspace import ads_product_configuration
 except ModuleNotFoundError:
     from db import create_db_engine
     from repositories.report_data_lock import (
@@ -29,6 +30,7 @@ except ModuleNotFoundError:
         lock_existing_report_period,
         lock_report_period,
     )
+    from services.ads_workspace import ads_product_configuration
 
 PLATFORM_TABLES = {
     "instagram": "instagram_reports",
@@ -867,7 +869,17 @@ class DashboardRepository:
                             ARRAY_AGG(DISTINCT cp.product)
                                 FILTER (WHERE cp.is_active),
                             ARRAY[]::TEXT[]
-                        ) AS products
+                        ) AS products,
+                        COALESCE(
+                            (
+                                SELECT ads_product.configuration
+                                FROM client_products ads_product
+                                WHERE ads_product.client_id = c.id
+                                  AND ads_product.product = 'meta_ads'
+                                  AND ads_product.is_active
+                            ),
+                            '{}'::JSONB
+                        ) AS ads_configuration
                     FROM clients c
                     LEFT JOIN client_social_profiles p ON p.client_id = c.id
                     LEFT JOIN client_products cp ON cp.client_id = c.id
@@ -907,7 +919,12 @@ class DashboardRepository:
             counts.update({row["product"]: row["clients"] for row in rows})
             return counts
 
-    def activate_client_product(self, client_id: str, product: str):
+    def activate_client_product(
+        self,
+        client_id: str,
+        product: str,
+        payload: dict | None = None,
+    ):
         if product not in {"social_media", "meta_ads"}:
             raise ValueError("Unsupported client product.")
         with self.engine.begin() as conn:
@@ -919,19 +936,36 @@ class DashboardRepository:
             ).mappings().first()
             if not client:
                 raise ValueError("Client not found")
+            configuration = (
+                ads_product_configuration((payload or {}).get("ads_platforms"))
+                if product == "meta_ads"
+                else {}
+            )
             conn.execute(
                 text(
                     """
-                    INSERT INTO client_products (client_id, product)
-                    VALUES (CAST(:client_id AS UUID), :product)
+                    INSERT INTO client_products (client_id, product, configuration)
+                    VALUES (
+                        CAST(:client_id AS UUID), :product,
+                        CAST(:configuration AS JSONB)
+                    )
                     ON CONFLICT (client_id, product)
-                    DO UPDATE SET is_active = TRUE, updated_at = now()
+                    DO UPDATE SET
+                        is_active = TRUE,
+                        configuration = EXCLUDED.configuration,
+                        updated_at = now()
                     """
                 ),
-                {"client_id": client_id, "product": product},
+                {
+                    "client_id": client_id,
+                    "product": product,
+                    "configuration": json.dumps(configuration),
+                },
             )
             result = row_dict(client)
             result["product"] = product
+            if product == "meta_ads":
+                result["ads_configuration"] = configuration
             return result
 
     def deactivate_client_product(self, client_id: str, product: str):
@@ -989,6 +1023,11 @@ class DashboardRepository:
         if product not in {"social_media", "meta_ads"}:
             raise ValueError("Unsupported client product.")
         base_code = client_code_base(client_name)
+        product_configuration = (
+            ads_product_configuration(payload.get("ads_platforms"))
+            if product == "meta_ads"
+            else {}
+        )
         with self.engine.begin() as conn:
             # Allocate readable client codes safely even when two requests for
             # the same client name arrive concurrently.
@@ -1045,16 +1084,25 @@ class DashboardRepository:
             conn.execute(
                 text(
                     """
-                    INSERT INTO client_products (client_id, product)
-                    VALUES (:client_id, :product)
+                    INSERT INTO client_products (client_id, product, configuration)
+                    VALUES (:client_id, :product, CAST(:configuration AS JSONB))
                     ON CONFLICT (client_id, product)
-                    DO UPDATE SET is_active = TRUE, updated_at = now()
+                    DO UPDATE SET
+                        is_active = TRUE,
+                        configuration = EXCLUDED.configuration,
+                        updated_at = now()
                     """
                 ),
-                {"client_id": row["id"], "product": product},
+                {
+                    "client_id": row["id"],
+                    "product": product,
+                    "configuration": json.dumps(product_configuration),
+                },
             )
             result = row_dict(row)
             result["products"] = [product]
+            if product == "meta_ads":
+                result["ads_configuration"] = product_configuration
             return result
 
     def update_client(self, client_id: str, payload: dict):

@@ -29,6 +29,7 @@ try:
     from dashboard.repositories.report_data_lock import ReportDataLockedError
     from dashboard.schemas import require_fields
     from dashboard.services.csv_import import import_report_csv
+    from dashboard.services.ads_workspace import ads_platform_catalog
     from dashboard.services.meta_ads_import import import_meta_ads_csv
     from dashboard.services.kpi_service import upsert_kpi_target
     from dashboard.services.agentic_report import generate_agentic_report
@@ -63,6 +64,7 @@ except ModuleNotFoundError:
     from repositories.report_data_lock import ReportDataLockedError
     from schemas import require_fields
     from services.csv_import import import_report_csv
+    from services.ads_workspace import ads_platform_catalog
     from services.meta_ads_import import import_meta_ads_csv
     from services.kpi_service import upsert_kpi_target
     from services.agentic_report import generate_agentic_report
@@ -162,10 +164,10 @@ def get_client_product_summary():
 
 
 @app.post("/api/clients/{client_id}/products/{product}")
-def activate_client_product(client_id: str, product: str):
+def activate_client_product(client_id: str, product: str, payload: Optional[dict] = None):
     try:
         return json_response(
-            repository.activate_client_product(client_id, product),
+            repository.activate_client_product(client_id, product, payload),
             status_code=201,
         )
     except ValueError as exc:
@@ -352,6 +354,19 @@ def import_meta_ads(
 def get_meta_ads_periods(client_id: str):
     try:
         return json_response(meta_ads_repository.client_periods(client_id))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/ads/platforms")
+def get_ads_platforms():
+    return json_response(ads_platform_catalog())
+
+
+@app.delete("/api/ads/clients/{client_id}/periods/{period_id}")
+def delete_meta_ads_period(client_id: str, period_id: str):
+    try:
+        return json_response(meta_ads_repository.delete_period(client_id, period_id))
     except ValueError as exc:
         raise bad_request(exc)
 

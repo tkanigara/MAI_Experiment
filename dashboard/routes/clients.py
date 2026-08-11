@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import json
 from http import HTTPStatus
+from urllib.parse import parse_qs
+
+try:
+    from dashboard.services.ads_workspace import ads_platform_catalog
+except ModuleNotFoundError:
+    from services.ads_workspace import ads_platform_catalog
 
 
 def _duplicate_client_message(exc: Exception) -> str:
@@ -11,9 +17,36 @@ def _duplicate_client_message(exc: Exception) -> str:
     return message
 
 
-def handle_get(handler, parts: list[str]) -> bool:
+def handle_get(handler, parts: list[str], parsed=None) -> bool:
     if parts == ["api", "clients"]:
-        handler.send_json(handler.repository.clients())
+        product = None
+        if parsed is not None:
+            product = parse_qs(parsed.query).get("product", [None])[0]
+        try:
+            handler.send_json(handler.repository.clients(product))
+        except ValueError as exc:
+            handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+        return True
+
+    if parts == ["api", "client-products", "summary"]:
+        handler.send_json(handler.repository.client_product_summary())
+        return True
+
+    if parts == ["api", "ads", "platforms"]:
+        handler.send_json(ads_platform_catalog())
+        return True
+
+    if (
+        len(parts) == 5
+        and parts[0] == "api"
+        and parts[1] == "ads"
+        and parts[2] == "clients"
+        and parts[4] == "periods"
+    ):
+        try:
+            handler.send_json(handler.meta_ads_repository.client_periods(parts[3]))
+        except ValueError as exc:
+            handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
         return True
 
     if len(parts) == 4 and parts[0] == "api" and parts[1] == "clients" and parts[3] == "platforms":
@@ -40,6 +73,23 @@ def handle_get(handler, parts: list[str]) -> bool:
 
 
 def handle_post(handler, parts: list[str]) -> bool:
+    if (
+        len(parts) == 5
+        and parts[0] == "api"
+        and parts[1] == "clients"
+        and parts[3] == "products"
+    ):
+        length = int(handler.headers.get("Content-Length", "0"))
+        try:
+            payload = json.loads(handler.rfile.read(length) or b"{}")
+            handler.send_json(
+                handler.repository.activate_client_product(parts[2], parts[4], payload),
+                HTTPStatus.CREATED,
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
+            handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+        return True
+
     if parts == ["api", "clients"]:
         length = int(handler.headers.get("Content-Length", "0"))
         try:
@@ -81,6 +131,31 @@ def handle_put(handler, parts: list[str]) -> bool:
 
 
 def handle_delete(handler, parts: list[str]) -> bool:
+    if (
+        len(parts) == 5
+        and parts[0] == "api"
+        and parts[1] == "clients"
+        and parts[3] == "products"
+    ):
+        try:
+            handler.send_json(handler.repository.deactivate_client_product(parts[2], parts[4]))
+        except ValueError as exc:
+            handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+        return True
+
+    if (
+        len(parts) == 6
+        and parts[0] == "api"
+        and parts[1] == "ads"
+        and parts[2] == "clients"
+        and parts[4] == "periods"
+    ):
+        try:
+            handler.send_json(handler.meta_ads_repository.delete_period(parts[3], parts[5]))
+        except ValueError as exc:
+            handler.send_error_json(str(exc), HTTPStatus.BAD_REQUEST)
+        return True
+
     if len(parts) == 2 and parts[0] == "api" and parts[1] == "clients":
         handler.send_error_json("Client id is required", HTTPStatus.BAD_REQUEST)
         return True
