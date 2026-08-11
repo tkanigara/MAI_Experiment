@@ -21,8 +21,9 @@ export default function ClientsPage({
   return (
     <section className="view active">
       <div className="hero-copy">
-        <h1>Clients</h1>
-        <p>Select a client to view connected social media platforms and report overview.</p>
+        <div className="eyebrow">Social Media workspace</div>
+        <h1>Social Media Clients</h1>
+        <p>Select a client to view organic social platforms, KPI, and report overview.</p>
       </div>
       <div className="toolbar">
         <div className="toolbar-controls">
@@ -34,7 +35,7 @@ export default function ClientsPage({
         </div>
         <button className="primary-button" onClick={onOpenAddClient}>+ Add New Client</button>
       </div>
-      <div className="list-count">{filtered.length} clients</div>
+      <div className="list-count">{filtered.length} Social Media clients</div>
       <div className="client-grid">
         {filtered.length
           ? filtered.map((client) => (

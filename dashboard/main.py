@@ -25,9 +25,11 @@ try:
         ReportJobRepository,
         ReportJobTransitionError,
     )
+    from dashboard.repositories.meta_ads_repository import MetaAdsRepository
     from dashboard.repositories.report_data_lock import ReportDataLockedError
     from dashboard.schemas import require_fields
     from dashboard.services.csv_import import import_report_csv
+    from dashboard.services.meta_ads_import import import_meta_ads_csv
     from dashboard.services.kpi_service import upsert_kpi_target
     from dashboard.services.agentic_report import generate_agentic_report
     from dashboard.services.report_editor import ReportEditorService
@@ -57,9 +59,11 @@ except ModuleNotFoundError:
         ReportJobRepository,
         ReportJobTransitionError,
     )
+    from repositories.meta_ads_repository import MetaAdsRepository
     from repositories.report_data_lock import ReportDataLockedError
     from schemas import require_fields
     from services.csv_import import import_report_csv
+    from services.meta_ads_import import import_meta_ads_csv
     from services.kpi_service import upsert_kpi_target
     from services.agentic_report import generate_agentic_report
     from services.report_editor import ReportEditorService
@@ -77,6 +81,7 @@ except ModuleNotFoundError:
 
 
 repository = DashboardRepository()
+meta_ads_repository = MetaAdsRepository(repository.engine)
 report_editor = ReportEditorService(repository.engine)
 report_job_repository = ReportJobRepository(repository.engine)
 report_job_worker = ReportJobWorker(
@@ -144,8 +149,35 @@ def duplicate_client_message(exc: Exception) -> str:
 
 
 @app.get("/api/clients")
-def get_clients():
-    return json_response(repository.clients())
+def get_clients(product: Optional[str] = None):
+    try:
+        return json_response(repository.clients(product))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/client-products/summary")
+def get_client_product_summary():
+    return json_response(repository.client_product_summary())
+
+
+@app.post("/api/clients/{client_id}/products/{product}")
+def activate_client_product(client_id: str, product: str):
+    try:
+        return json_response(
+            repository.activate_client_product(client_id, product),
+            status_code=201,
+        )
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.delete("/api/clients/{client_id}/products/{product}")
+def deactivate_client_product(client_id: str, product: str):
+    try:
+        return json_response(repository.deactivate_client_product(client_id, product))
+    except ValueError as exc:
+        raise bad_request(exc)
 
 
 @app.post("/api/clients")
@@ -274,6 +306,54 @@ def import_csv(
             file_item = files.get(slot)
             if file_item is not None:
                 file_item.file.close()
+
+
+@app.post("/api/import/meta-ads")
+@app.post("/api/ads/imports")
+def import_meta_ads(
+    client_id: str = Form(...),
+    period_id: Optional[str] = Form(None),
+    campaign: UploadFile = File(...),
+    adset: UploadFile = File(...),
+    ad: UploadFile = File(...),
+    placement: UploadFile = File(...),
+    demographic: UploadFile = File(...),
+    region: UploadFile = File(...),
+):
+    files = {
+        "campaign": campaign,
+        "adset": adset,
+        "ad": ad,
+        "placement": placement,
+        "demographic": demographic,
+        "region": region,
+    }
+    try:
+        return json_response(
+            import_meta_ads_csv(
+                repository,
+                {"client_id": client_id, "period_id": period_id},
+                files,
+            ),
+            status_code=201,
+        )
+    except ReportDataLockedError:
+        raise
+    except ValueError as exc:
+        raise bad_request(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        for file_item in files.values():
+            file_item.file.close()
+
+
+@app.get("/api/ads/clients/{client_id}/periods")
+def get_meta_ads_periods(client_id: str):
+    try:
+        return json_response(meta_ads_repository.client_periods(client_id))
+    except ValueError as exc:
+        raise bad_request(exc)
 
 
 @app.post("/api/kpi-targets")

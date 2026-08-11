@@ -844,7 +844,9 @@ class DashboardRepository:
     def __init__(self):
         self.engine = create_db_engine()
 
-    def clients(self):
+    def clients(self, product: str | None = None):
+        if product not in {None, "social_media", "meta_ads"}:
+            raise ValueError("Unsupported client product.")
         with self.engine.begin() as conn:
             rows = conn.execute(
                 text(
@@ -860,16 +862,122 @@ class DashboardRepository:
                         c.has_youtube,
                         c.has_linkedin,
                         c.has_threads,
-                        COUNT(p.id) FILTER (WHERE p.is_active) AS connected_profiles
+                        COUNT(DISTINCT p.id) FILTER (WHERE p.is_active) AS connected_profiles,
+                        COALESCE(
+                            ARRAY_AGG(DISTINCT cp.product)
+                                FILTER (WHERE cp.is_active),
+                            ARRAY[]::TEXT[]
+                        ) AS products
                     FROM clients c
                     LEFT JOIN client_social_profiles p ON p.client_id = c.id
+                    LEFT JOIN client_products cp ON cp.client_id = c.id
                     WHERE c.is_active
+                      AND (
+                          CAST(:product AS TEXT) IS NULL
+                          OR EXISTS (
+                              SELECT 1
+                              FROM client_products selected_product
+                              WHERE selected_product.client_id = c.id
+                                AND selected_product.product = CAST(:product AS TEXT)
+                                AND selected_product.is_active
+                          )
+                      )
                     GROUP BY c.id
                     ORDER BY c.client_name
                     """
-                )
+                ),
+                {"product": product},
             ).mappings()
             return [row_dict(row) for row in rows]
+
+    def client_product_summary(self):
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT cp.product, COUNT(*) AS clients
+                    FROM client_products cp
+                    JOIN clients c ON c.id = cp.client_id
+                    WHERE cp.is_active AND c.is_active
+                    GROUP BY cp.product
+                    """
+                )
+            ).mappings()
+            counts = {"social_media": 0, "meta_ads": 0}
+            counts.update({row["product"]: row["clients"] for row in rows})
+            return counts
+
+    def activate_client_product(self, client_id: str, product: str):
+        if product not in {"social_media", "meta_ads"}:
+            raise ValueError("Unsupported client product.")
+        with self.engine.begin() as conn:
+            client = conn.execute(
+                text(
+                    "SELECT id, client_code, client_name, industry FROM clients WHERE id = CAST(:client_id AS UUID) AND is_active"
+                ),
+                {"client_id": client_id},
+            ).mappings().first()
+            if not client:
+                raise ValueError("Client not found")
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO client_products (client_id, product)
+                    VALUES (CAST(:client_id AS UUID), :product)
+                    ON CONFLICT (client_id, product)
+                    DO UPDATE SET is_active = TRUE, updated_at = now()
+                    """
+                ),
+                {"client_id": client_id, "product": product},
+            )
+            result = row_dict(client)
+            result["product"] = product
+            return result
+
+    def deactivate_client_product(self, client_id: str, product: str):
+        if product not in {"social_media", "meta_ads"}:
+            raise ValueError("Unsupported client product.")
+        with self.engine.begin() as conn:
+            client = conn.execute(
+                text(
+                    "SELECT id, client_code, client_name FROM clients WHERE id = CAST(:client_id AS UUID) AND is_active"
+                ),
+                {"client_id": client_id},
+            ).mappings().first()
+            if not client:
+                raise ValueError("Client not found")
+            active_products = conn.execute(
+                text(
+                    """
+                    SELECT product
+                    FROM client_products
+                    WHERE client_id = CAST(:client_id AS UUID)
+                      AND is_active
+                    """
+                ),
+                {"client_id": client_id},
+            ).scalars().all()
+            if product not in active_products:
+                raise ValueError("Client product is not active.")
+            if len(active_products) == 1:
+                raise ValueError(
+                    "Cannot remove the client's only active product. Delete the client instead."
+                )
+            conn.execute(
+                text(
+                    """
+                    UPDATE client_products
+                    SET is_active = FALSE, updated_at = now()
+                    WHERE client_id = CAST(:client_id AS UUID)
+                      AND product = :product
+                    """
+                ),
+                {"client_id": client_id, "product": product},
+            )
+            result = row_dict(client)
+            result["product"] = product
+            result["is_active"] = False
+            return result
 
     def create_client(self, payload: dict):
         required = ["client_name"]
@@ -877,6 +985,9 @@ class DashboardRepository:
         if missing:
             raise ValueError(f"Missing fields: {', '.join(missing)}")
         client_name = str(payload["client_name"]).strip()
+        product = str(payload.get("product") or "social_media").strip()
+        if product not in {"social_media", "meta_ads"}:
+            raise ValueError("Unsupported client product.")
         base_code = client_code_base(client_name)
         with self.engine.begin() as conn:
             # Allocate readable client codes safely even when two requests for
@@ -931,7 +1042,20 @@ class DashboardRepository:
                     "has_threads": bool(payload.get("has_threads")),
                 },
             ).mappings().one()
-            return row_dict(row)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO client_products (client_id, product)
+                    VALUES (:client_id, :product)
+                    ON CONFLICT (client_id, product)
+                    DO UPDATE SET is_active = TRUE, updated_at = now()
+                    """
+                ),
+                {"client_id": row["id"], "product": product},
+            )
+            result = row_dict(row)
+            result["products"] = [product]
+            return result
 
     def update_client(self, client_id: str, payload: dict):
         required = ["client_name"]

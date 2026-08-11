@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import AddClientModal from "./components/AddClientModal";
+import AddAdsClientModal from "./components/AddAdsClientModal";
 import AddReportModal from "./components/AddReportModal";
 import DeleteClientModal from "./components/DeleteClientModal";
 import DeleteReportMonthModal from "./components/DeleteReportMonthModal";
 import EditKpiModal from "./components/EditKpiModal";
 import GenerateReportModal from "./components/GenerateReportModal";
 import Header from "./components/Header";
+import MetaAdsImportModal from "./components/MetaAdsImportModal";
 import ReportDataLockedModal from "./components/ReportDataLockedModal";
 import { api } from "./lib/api";
 import { clientSlug, platformFlags } from "./lib/format";
 import ClientDetailPage from "./pages/ClientDetailPage";
+import AdsClientDetailPage from "./pages/AdsClientDetailPage";
+import AdsClientsPage from "./pages/AdsClientsPage";
 import ClientsPage from "./pages/ClientsPage";
 import MonthDetailPage from "./pages/MonthDetailPage";
 import PlatformDetailPage from "./pages/PlatformDetailPage";
@@ -19,9 +23,22 @@ import ReportJobsPage, {
   reportJobStageLabel,
   reportJobStatusLabel,
 } from "./pages/ReportJobsPage";
+import WorkspaceSelectorPage from "./pages/WorkspaceSelectorPage";
+
+function pathParts() {
+  return window.location.pathname.split("/").filter(Boolean);
+}
+
+function workspaceFromPath() {
+  const first = pathParts()[0];
+  if (first === "ads") return "ads";
+  if (first === "social" || first === "clients" || first === "report-jobs") return "social";
+  return null;
+}
 
 function routeParts() {
-  return window.location.pathname.split("/").filter(Boolean);
+  const parts = pathParts();
+  return ["social", "ads"].includes(parts[0]) ? parts.slice(1) : parts;
 }
 
 const REPORT_HISTORY_PAGE_SIZE = 20;
@@ -33,12 +50,16 @@ function historyPageFromLocation() {
 
 export default function App() {
   const [clients, setClients] = useState([]);
+  const [allClients, setAllClients] = useState([]);
+  const [productSummary, setProductSummary] = useState({ social_media: 0, meta_ads: 0 });
   const [query, setQuery] = useState("");
   const [industry, setIndustry] = useState("");
   const [route, setRoute] = useState(routeParts());
   const [selectedClient, setSelectedClient] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [reportMonths, setReportMonths] = useState([]);
+  const [adsPeriods, setAdsPeriods] = useState([]);
+  const [adsImportPeriod, setAdsImportPeriod] = useState(null);
   const [platformData, setPlatformData] = useState({});
   const [modal, setModal] = useState(null);
   const [generateReportTarget, setGenerateReportTarget] = useState(null);
@@ -72,8 +93,12 @@ export default function App() {
     () => clients.find((client) => client.client_code === currentClientSlug || client.id === currentClientSlug),
     [clients, currentClientSlug],
   );
-  const isGlobalReportJobs = route[0] === "report-jobs";
-  const isClientReportJobs = route[0] === "clients" && route[2] === "report-jobs";
+
+  const workspace = workspaceFromPath();
+  const isAdsWorkspace = workspace === "ads";
+  const isSocialWorkspace = workspace === "social";
+  const isGlobalReportJobs = isSocialWorkspace && route[0] === "report-jobs";
+  const isClientReportJobs = isSocialWorkspace && route[0] === "clients" && route[2] === "report-jobs";
   const reportHistoryPage = (isGlobalReportJobs || isClientReportJobs)
     ? historyPageFromLocation()
     : 1;
@@ -156,9 +181,16 @@ export default function App() {
   }
 
   function navigate(path, replace = false) {
+    let targetPath = path;
+    if (
+      isSocialWorkspace
+      && (path === "/clients" || path.startsWith("/clients/") || path === "/report-jobs")
+    ) {
+      targetPath = `/social${path}`;
+    }
     const currentPath = `${window.location.pathname}${window.location.search}`;
-    if (currentPath !== path) {
-      window.history[replace ? "replaceState" : "pushState"]({}, "", path);
+    if (currentPath !== targetPath) {
+      window.history[replace ? "replaceState" : "pushState"]({}, "", targetPath);
     }
     setRoute(routeParts());
   }
@@ -277,9 +309,38 @@ export default function App() {
   }
 
   async function loadClients() {
-    const rows = await api("/api/clients");
-    setClients(rows);
-    if (!routeParts().length) navigate("/clients", true);
+    if (!workspace) {
+      const summary = await api("/api/client-products/summary");
+      setProductSummary(summary);
+      setClients([]);
+      setAllClients([]);
+      return;
+    }
+    if (isAdsWorkspace) {
+      const [adsRows, masterRows, summary] = await Promise.all([
+        api("/api/clients?product=meta_ads"),
+        api("/api/clients"),
+        api("/api/client-products/summary"),
+      ]);
+      setClients(adsRows);
+      setAllClients(masterRows);
+      setProductSummary(summary);
+      return;
+    }
+    const [socialRows, summary] = await Promise.all([
+      api("/api/clients?product=social_media"),
+      api("/api/client-products/summary"),
+    ]);
+    setClients(socialRows);
+    setAllClients(socialRows);
+    setProductSummary(summary);
+  }
+
+  async function loadAdsClient(client) {
+    if (!client?.id) return;
+    const payload = await api(`/api/ads/clients/${client.id}/periods`);
+    setSelectedClient(payload.client);
+    setAdsPeriods(payload.periods || []);
   }
 
   async function loadClient(client) {
@@ -390,7 +451,12 @@ export default function App() {
     if (!client?.id) return;
     setIsDeletingClient(true);
     try {
-      await api(`/api/clients/${client.id}`, { method: "DELETE" });
+      const isSharedWithAds = (client.products || []).includes("meta_ads");
+      if (isSharedWithAds) {
+        await api(`/api/clients/${client.id}/products/social_media`, { method: "DELETE" });
+      } else {
+        await api(`/api/clients/${client.id}`, { method: "DELETE" });
+      }
       await loadClients();
       if (selectedClient?.id === client.id || currentClient?.id === client.id) {
         setSelectedClient(null);
@@ -400,7 +466,7 @@ export default function App() {
         navigate("/clients");
       }
       setDeleteTarget(null);
-      showToast("Client deleted.");
+      showToast(isSharedWithAds ? "Client removed from Social Media." : "Client deleted.");
     } catch (err) {
       if (handleReportDataLock(err, { client })) {
         setDeleteTarget(null);
@@ -584,20 +650,36 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadClients().catch((err) => setError(err.message));
     const onPopState = () => setRoute(routeParts());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setError("");
+    setSelectedClient(null);
+    setProfiles([]);
+    setReportMonths([]);
+    setAdsPeriods([]);
+    loadClients().catch((err) => setError(err.message));
+    const first = pathParts()[0];
+    if (["clients", "report-jobs"].includes(first)) {
+      navigate(`/social${window.location.pathname}${window.location.search}`, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace]);
 
   useEffect(() => {
     if (!currentClient) return;
     setReportJobs([]);
     setFocusedReportJobId("");
-    loadClient(currentClient).catch((err) => setError(err.message));
+    if (isAdsWorkspace) {
+      loadAdsClient(currentClient).catch((err) => setError(err.message));
+    } else if (isSocialWorkspace) {
+      loadClient(currentClient).catch((err) => setError(err.message));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentClient?.id]);
+  }, [currentClient?.id, workspace]);
 
   useEffect(() => {
     if (!isGlobalReportJobs) return undefined;
@@ -620,6 +702,8 @@ export default function App() {
 
   useEffect(() => {
     if (
+      !isSocialWorkspace
+      ||
       !currentClient
       || !selectedClient
       || String(selectedClient.id) !== String(currentClient.id)
@@ -648,13 +732,13 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!currentClient || !selectedClient) return;
+    if (!isSocialWorkspace || !currentClient || !selectedClient) return;
     loadPlatformData(selectedClient).catch((err) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClient?.id, currentMonth?.slug]);
+  }, [selectedClient?.id, currentMonth?.slug, workspace]);
 
   useEffect(() => {
-    if (!activeReportJobIdsKey) return undefined;
+    if (!isSocialWorkspace || !activeReportJobIdsKey) return undefined;
     const jobIds = activeReportJobIdsKey.split(",");
     let stopped = false;
     const poll = async () => {
@@ -694,30 +778,67 @@ export default function App() {
   ]);
 
   let content = (
-    <ClientsPage
-      clients={clients}
-      industries={industries}
-      query={query}
-      industry={industry}
-      onQueryChange={setQuery}
-      onIndustryChange={setIndustry}
-      onOpenClient={(id) => {
-        const client = clients.find((item) => item.id === id);
-        navigate(`/clients/${clientSlug(client)}`);
-      }}
-      onOpenAddClient={() => setModal("add-client")}
-      onEditClient={(client) => runWhenClientUnlocked(
-        client,
-        () => setEditClient(client),
-      )}
-      onDeleteClient={(client) => runWhenClientUnlocked(
-        client,
-        () => setDeleteTarget(client),
-      )}
-    />
+    <WorkspaceSelectorPage counts={productSummary} onNavigate={navigate} />
   );
 
-  if (isGlobalReportJobs) {
+  if (isSocialWorkspace) {
+    content = (
+      <ClientsPage
+        clients={clients}
+        industries={industries}
+        query={query}
+        industry={industry}
+        onQueryChange={setQuery}
+        onIndustryChange={setIndustry}
+        onOpenClient={(id) => {
+          const client = clients.find((item) => item.id === id);
+          navigate(`/clients/${clientSlug(client)}`);
+        }}
+        onOpenAddClient={() => setModal("add-client")}
+        onEditClient={(client) => runWhenClientUnlocked(
+          client,
+          () => setEditClient(client),
+        )}
+        onDeleteClient={(client) => runWhenClientUnlocked(
+          client,
+          () => setDeleteTarget(client),
+        )}
+      />
+    );
+  }
+
+  if (isAdsWorkspace) {
+    content = (
+      <AdsClientsPage
+        clients={clients}
+        industries={industries}
+        query={query}
+        industry={industry}
+        onQueryChange={setQuery}
+        onIndustryChange={setIndustry}
+        onOpenClient={(id) => {
+          const client = clients.find((item) => item.id === id);
+          navigate(`/ads/clients/${clientSlug(client)}`);
+        }}
+        onOpenAddClient={() => setModal("add-ads-client")}
+      />
+    );
+    if (currentClient && selectedClient) {
+      content = (
+        <AdsClientDetailPage
+          client={selectedClient}
+          periods={adsPeriods}
+          onNavigate={navigate}
+          onUpload={(period) => {
+            setAdsImportPeriod(period);
+            setModal("add-ads-import");
+          }}
+        />
+      );
+    }
+  }
+
+  if (isSocialWorkspace && isGlobalReportJobs) {
     content = (
       <ReportJobsPage
         jobs={reportJobs}
@@ -738,6 +859,8 @@ export default function App() {
   }
 
   if (
+    isSocialWorkspace
+    &&
     currentClient
     && selectedClient
     && !currentMonth
@@ -770,7 +893,7 @@ export default function App() {
     );
   }
 
-  if (currentClient && selectedClient && currentMonth && !currentPlatform) {
+  if (isSocialWorkspace && currentClient && selectedClient && currentMonth && !currentPlatform) {
     content = (
       <MonthDetailPage
         client={selectedClient}
@@ -797,6 +920,8 @@ export default function App() {
   }
 
   if (
+    isSocialWorkspace
+    &&
     currentClient
     && selectedClient
     && (
@@ -824,7 +949,7 @@ export default function App() {
     );
   }
 
-  if (currentClient && selectedClient && currentMonth && isReportEditor) {
+  if (isSocialWorkspace && currentClient && selectedClient && currentMonth && isReportEditor) {
     content = (
       <ReportDataEditorPage
         client={selectedClient}
@@ -844,6 +969,8 @@ export default function App() {
   }
 
   if (
+    isSocialWorkspace
+    &&
     currentClient
     && selectedClient
     && currentMonth
@@ -878,12 +1005,13 @@ export default function App() {
     <>
       <Header
         activeSection={isGlobalReportJobs ? "report-jobs" : "clients"}
+        workspace={workspace}
         onNavigate={navigate}
       />
       <main className="page-shell">
         {error ? <div className="empty">{error}</div> : content}
       </main>
-      {modal === "add-client" && (
+      {isSocialWorkspace && modal === "add-client" && (
         <AddClientModal
           industries={industries}
           onClose={() => setModal(null)}
@@ -981,6 +1109,48 @@ export default function App() {
               setIsDeletingClient(false);
               setError(err.message);
             });
+          }}
+        />
+      )}
+      {isAdsWorkspace && modal === "add-ads-client" && (
+        <AddAdsClientModal
+          clients={allClients.filter((client) => !(client.products || []).includes("meta_ads"))}
+          industries={[...new Set(allClients.map((client) => client.industry).filter(Boolean))]}
+          onClose={() => setModal(null)}
+          onSave={async (payload) => {
+            let savedClient;
+            if (payload.existing_client_id) {
+              savedClient = await api(
+                `/api/clients/${payload.existing_client_id}/products/meta_ads`,
+                { method: "POST", body: JSON.stringify({}) },
+              );
+            } else {
+              savedClient = await api("/api/clients", {
+                method: "POST",
+                body: JSON.stringify({ ...payload, product: "meta_ads" }),
+              });
+            }
+            await loadClients();
+            setModal(null);
+            showToast("Ads client enabled.");
+            navigate(`/ads/clients/${clientSlug(savedClient)}`);
+          }}
+        />
+      )}
+      {isAdsWorkspace && modal === "add-ads-import" && selectedClient && (
+        <MetaAdsImportModal
+          client={selectedClient}
+          period={adsImportPeriod}
+          onClose={() => {
+            setModal(null);
+            setAdsImportPeriod(null);
+          }}
+          onImported={async () => {
+            await loadClients();
+            await loadAdsClient(selectedClient);
+            setModal(null);
+            setAdsImportPeriod(null);
+            showToast("Meta Ads CSV snapshot imported.");
           }}
         />
       )}

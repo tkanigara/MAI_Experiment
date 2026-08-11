@@ -115,6 +115,59 @@ p { color: var(--muted); font-size: 18px; line-height: 1.45; }
 .hero-copy { margin-bottom: 32px; }
 .hero-copy p, .page-title-row p, .section-row p { margin-top: 10px; }
 
+.eyebrow {
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.eyebrow.ads { color: var(--blue); }
+
+.workspace-view {
+  max-width: 980px;
+  margin: 0 auto;
+  padding-top: 34px;
+}
+
+.workspace-hero { text-align: center; }
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.workspace-card {
+  min-height: 330px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 34px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  box-shadow: var(--shadow);
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.workspace-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(49, 92, 85, 0.45);
+  box-shadow: 0 16px 34px rgba(32, 37, 45, 0.1);
+}
+
+.workspace-card.ads:hover { border-color: rgba(40, 95, 168, 0.45); }
+.workspace-card-kicker { color: var(--muted); font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.09em; }
+.workspace-card strong { margin-top: 22px; font-size: 30px; }
+.workspace-card-description { margin-top: 14px; color: var(--muted); font-size: 16px; line-height: 1.55; }
+.workspace-card-footer { width: 100%; display: flex; justify-content: space-between; margin-top: auto; padding-top: 34px; color: var(--accent); font-weight: 900; }
+.workspace-card.ads .workspace-card-footer { color: var(--blue); }
+
 .toolbar, .section-row, .page-title-row {
   display: flex;
   align-items: center;
@@ -272,6 +325,75 @@ select {
   box-shadow: var(--shadow);
   overflow: hidden;
 }
+
+.product-badge {
+  width: fit-content;
+  margin-top: 24px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.product-badge.ads { color: var(--blue); background: var(--bg-info); }
+.ads-client-card .card-footer { justify-content: flex-end; }
+.back-link { display: inline-block; margin-bottom: 24px; }
+.ads-detail-title { align-items: flex-end; }
+.ads-period-heading { margin-top: 52px; }
+.ads-period-card .card-main { min-height: 250px; }
+
+.ads-count-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 28px;
+}
+
+.ads-count-grid span {
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ads-count-grid strong { display: block; color: var(--text); font-size: 18px; }
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.segmented-control button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.segmented-control button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+.ads-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.ads-upload-field {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-1);
+}
+
+.ads-upload-field span { display: block; margin-bottom: 10px; font-weight: 800; }
+.ads-upload-field input { width: 100%; padding: 10px; }
 
 .card-main {
   min-height: 172px;
@@ -2060,7 +2182,7 @@ label, .field-label {
 }
 
 @media (max-width: 1100px) {
-  .client-grid, .month-grid, .platform-overview-grid, .two-column { grid-template-columns: 1fr; }
+  .client-grid, .month-grid, .platform-overview-grid, .two-column, .workspace-grid { grid-template-columns: 1fr; }
   .report-history-section .report-job-list { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .summary-strip { grid-template-columns: 1fr 1fr; }
@@ -2090,6 +2212,7 @@ label, .field-label {
   .upload-row, .kpi-target-row { grid-template-columns: 1fr; }
   .split-fields { grid-template-columns: 1fr; }
   .modal-context { grid-template-columns: 1fr; }
+  .ads-upload-grid, .ads-count-grid { grid-template-columns: 1fr; }
   .report-toast {
     top: 16px;
     right: 16px;

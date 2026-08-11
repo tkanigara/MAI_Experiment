@@ -19,6 +19,7 @@ export default function ClientDetailPage({
   onOpenReportJobs,
 }) {
   const platforms = platformFlags(client);
+  const isSharedWithAds = (client.products || []).includes("meta_ads");
   const profileCount = Math.max(profiles.length, platforms.length, client.connected_profiles || 0);
   const latestReport = reportMonths[0]?.label || "-";
   return (
@@ -41,7 +42,7 @@ export default function ClientDetailPage({
             Report history
           </button>
           <button className="danger-button" type="button" onClick={() => onDeleteClient(client)}>
-            Delete Client
+            {isSharedWithAds ? "Remove from Social Media" : "Delete Client"}
           </button>
         </div>
       </div>
