@@ -2,10 +2,33 @@ import { useEffect, useState } from "react";
 import Breadcrumb from "../components/Breadcrumb";
 import { PlatformBadge, StatusBadge } from "../components/Badges";
 import { ADS_PLATFORM_SOURCES, PLATFORM_LABELS } from "../lib/constants";
-import { adsPeriodSlug, clientSlug, formatCurrency, formatNumber } from "../lib/format";
+import { adsPeriodSlug, clientSlug, formatCurrency, formatDateTime, formatNumber } from "../lib/format";
 
 function percentage(value) {
   return value === null || value === undefined ? "-" : formatNumber(value, "%");
+}
+
+function sourceName(source) {
+  return source === "api" ? "Meta API" : source === "csv" ? "CSV Upload" : "Data Import";
+}
+
+function platformScopeLabel(platforms) {
+  const labels = (platforms || []).map((item) => PLATFORM_LABELS[item] || item);
+  return labels.length ? labels.join(" and ") : "Not specified";
+}
+
+function accountLabels(ids, client) {
+  const accounts = new Map((client?.meta_ad_accounts || []).map((account) => [String(account.id), account]));
+  return (ids || []).map((id) => {
+    const account = accounts.get(String(id));
+    return `${account?.name || "Meta Ad Account"} (${id})`;
+  });
+}
+
+function sourceOptionLabel(item, client) {
+  const names = accountLabels(item.selected_ad_account_ids, client).map((label) => label.replace(/ \(act_[^)]+\)$/, ""));
+  const accountPart = names.length ? ` · ${names.join(", ")}` : "";
+  return `${sourceName(item.source)}${accountPart} · ${formatDateTime(item.sync_completed_at || item.imported_at)}`;
 }
 
 function goalCards(goal) {
@@ -62,6 +85,9 @@ export default function AdsPlatformDetailPage({ client, period, platform, detail
   }, [goals, activeGoalKey]);
   const activeGoal = goals.find((goal) => goal.key === activeGoalKey) || goals[0];
   const configuredGoals = detail?.platform?.active_goals || period?.ads_configuration?.goals?.[platform] || [];
+  const activeSource = detail?.period?.active_source || "csv";
+  const activeAccountLabels = accountLabels(detail?.period?.selected_ad_account_ids, client);
+  const activeTimestamp = detail?.period?.sync_completed_at || detail?.period?.imported_at;
 
   return (
     <section className="view active">
@@ -71,7 +97,15 @@ export default function AdsPlatformDetailPage({ client, period, platform, detail
         {source?.available && <div className="page-actions"><button className="secondary-button" type="button" onClick={() => onUpdate(period)}>Import CSV</button><button className="primary-button" type="button" onClick={() => onSync(period)}>Sync from Meta</button></div>}
       </div>
 
-      {detail?.period?.import_status === "success" && <section className="upload-summary"><div><StatusBadge text={`Active source: ${(detail.period.active_source || "csv").toUpperCase()}`} state="success" /><span>Last synced: {detail.period.sync_completed_at || detail.period.imported_at || "-"}</span><span>Accounts: {(detail.period.selected_ad_account_ids || []).join(", ") || "CSV upload"}</span></div>{(detail.sources || []).length > 1 && <label>Data source<select value={detail.period.import_id || ""} onChange={(event) => onSelectSource(event.target.value)}>{detail.sources.filter((item) => item.status === "success").map((item) => <option value={item.id} key={item.id}>{item.source.toUpperCase()} · {item.sync_completed_at || item.imported_at}</option>)}</select></label>}</section>}
+      {detail?.period?.import_status === "success" && <section className="source-summary-card">
+        <div className="source-summary-heading"><div><span className="eyebrow">Current data source</span><h2>{sourceName(activeSource)}</h2></div><StatusBadge text="Active" state="success" /></div>
+        <div className="source-metadata-grid">
+          <div><span>{activeSource === "api" ? "Last synced" : "Last imported"}</span><strong>{formatDateTime(activeTimestamp)}</strong></div>
+          <div><span>Ad account{activeAccountLabels.length === 1 ? "" : "s"}</span><strong>{activeAccountLabels.length ? activeAccountLabels.join(", ") : "Not applicable for CSV upload"}</strong></div>
+          <div><span>Platform coverage</span><strong>{platformScopeLabel(detail.period.platform_scope)}</strong></div>
+        </div>
+        {(detail.sources || []).length > 1 && <label className="source-selector"><span>View data from</span><select value={detail.period.import_id || ""} onChange={(event) => onSelectSource(event.target.value)}>{detail.sources.filter((item) => item.status === "success").map((item) => <option value={item.id} key={item.id}>{sourceOptionLabel(item, client)}</option>)}</select><small>Changing this selection updates the data displayed for {PLATFORM_LABELS[platform]} only.</small></label>}
+      </section>}
 
       {!detail ? <div className="empty"><h2>Loading platform performance...</h2></div> : detail.data_status === "not_configured" ? (
         <div className="empty"><h2>No {PLATFORM_LABELS[platform]} goal selected for {period.period_label}</h2><p>This platform is connected to the client, but it is not part of this month's Ads plan.</p><button className="primary-button" type="button" onClick={() => onEditGoals(period)}>Edit Goals &amp; KPI</button></div>

@@ -31,8 +31,8 @@ export default function AdsMonthCard({ period, platforms, onOpen, onUpdate, onSy
       <div className="card-footer">
         <button className="danger-link" type="button" onClick={() => onDelete(period)}>Delete</button>
         <button className="text-link" type="button" onClick={() => onEditGoals(period)}>Edit Goals &amp; KPI</button>
-        <button className="text-link" type="button" onClick={() => onUpdate(period)}>Update Data</button>
-        <button className="text-link" type="button" onClick={() => onSync(period)}>Sync from Meta</button>
+        <button className="text-link" type="button" onClick={() => onUpdate(period)}>Import CSV</button>
+        <button className="text-link" type="button" onClick={() => onSync(period)}>Sync Meta</button>
       </div>
     </article>
   );

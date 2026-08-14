@@ -24,7 +24,7 @@ export default function AdsClientDetailPage({ client, periods, onNavigate, onUpl
       </section>
       <div className="section-row">
         <div><h2>Report Months</h2><p>Select a report month to view performance for each connected Ads platform.</p></div>
-        <div className="page-actions"><button className="secondary-button" type="button" onClick={() => onSync(null)}>Sync New Month</button><button className="primary-button" type="button" onClick={() => onUpload(null)}>Add Report Data</button></div>
+        <div className="page-actions"><button className="secondary-button" type="button" onClick={() => onSync(null)}>Sync New Month from Meta</button><button className="primary-button" type="button" onClick={() => onUpload(null)}>Import CSV for New Month</button></div>
       </div>
       <div className="month-grid">
         {periods.length ? periods.map((period) => (

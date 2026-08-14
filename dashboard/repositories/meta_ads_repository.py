@@ -331,7 +331,11 @@ class MetaAdsRepository:
             if not product:
                 raise ValueError("Ads client was not found.")
             configuration = ads_product_configuration(product.get("configuration") or None)
-            period_configuration = ads_period_configuration(payload, configuration["platforms"])
+            has_goal_configuration = "goals" in payload or "ads_goals" in payload
+            period_configuration = ads_period_configuration(
+                payload if has_goal_configuration else None,
+                configuration["platforms"],
+            )
             row = conn.execute(
                 text(
                     """

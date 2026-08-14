@@ -2,7 +2,6 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import { ADS_PLATFORMS, ADS_PLATFORM_SOURCES, PLATFORM_LABELS } from "../lib/constants";
 import { adsPlatformFlags } from "../lib/format";
-import AdsPeriodGoalFields, { initialAdsPeriodGoals, serializeAdsPeriodGoals } from "./AdsPeriodGoalFields";
 import { PlatformBadge, StatusBadge } from "./Badges";
 import Modal, { ModalHeader } from "./Modal";
 
@@ -20,7 +19,6 @@ export default function MetaAdsImportModal({ client, period, onClose, onImported
   const [error, setError] = useState("");
   const [files, setFiles] = useState({});
   const [draggingSlot, setDraggingSlot] = useState("");
-  const [goals, setGoals] = useState(() => initialAdsPeriodGoals(client, period));
   const selectedCount = FILES.filter(([slot]) => files[slot]).length;
   const configuredPlatforms = adsPlatformFlags(client);
 
@@ -43,24 +41,13 @@ export default function MetaAdsImportModal({ client, period, onClose, onImported
     event.preventDefault();
     setSaving(true);
     setError("");
-    const adsGoals = serializeAdsPeriodGoals(goals, client);
-    if (!Object.values(adsGoals).some((items) => items.length)) {
-      setError("Select at least one Ads goal for this report month.");
-      setSaving(false);
-      return;
-    }
     const body = new FormData();
     body.append("client_id", client.id);
     if (period?.id) body.append("period_id", period.id);
     FILES.forEach(([slot]) => body.append(slot, files[slot]));
     try {
       const result = await api("/api/ads/imports", { method: "POST", body });
-      const periodId = result.meta_ads_report_period_id || result.period_id || period?.id;
-      const configuration = await api(`/api/ads/clients/${client.id}/periods/${periodId}/configuration`, {
-        method: "PUT",
-        body: JSON.stringify({ ads_goals: adsGoals }),
-      });
-      await onImported({ ...result, ...configuration });
+      await onImported(result);
     } catch (err) {
       setError(err.message);
       setSaving(false);
@@ -70,7 +57,7 @@ export default function MetaAdsImportModal({ client, period, onClose, onImported
   return (
     <Modal onClose={onClose} wide>
       <ModalHeader
-        title={period ? `Update ${period.period_label} Report Data` : "Add Report Data"}
+        title={period ? `Import CSV for ${period.period_label}` : "Import CSV for New Report Month"}
         subtitle="Upload one complete Meta Ads snapshot for Instagram and Facebook."
         onClose={onClose}
       />
@@ -83,21 +70,19 @@ export default function MetaAdsImportModal({ client, period, onClose, onImported
           {ADS_PLATFORMS.map((platform) => {
             const source = ADS_PLATFORM_SOURCES[platform];
             const configured = configuredPlatforms.includes(platform);
-            const platformGoals = configured ? Object.values(goals[platform] || {}).filter((goal) => goal.enabled) : [];
             return (
               <div className={`ads-source-card ${source.available && configured ? "active" : "pending"}`} key={platform}>
                 <PlatformBadge platform={platform} />
                 <div><strong>{PLATFORM_LABELS[platform]} Ads</strong><span>{source.label}</span></div>
                 <StatusBadge text={!configured ? "Not connected" : source.available ? "CSV available" : "Coming soon"} state={!configured ? "neutral" : source.available ? "success" : "info"} />
-                {configured && <div className="goal-chip-row">{platformGoals.map((goal) => <span className="goal-chip" key={goal.key}>{goal.key.replaceAll("_", " ")}</span>)}</div>}
               </div>
             );
           })}
         </div>
-        <AdsPeriodGoalFields client={client} goals={goals} onChange={setGoals} />
+        <div className="import-alert info"><strong>Goals &amp; KPI are managed separately.</strong> This upload only updates the CSV data snapshot and will not change monthly targets.</div>
         <div className="csv-action-bar">
           <div><strong>{selectedCount} of {FILES.length} CSV files selected</strong><span>All six Meta exports are required and must cover the same period.</span></div>
-          <button type="submit" className="primary-button" disabled={saving || selectedCount !== FILES.length}>{saving ? "Saving..." : period ? "Save Changes" : "Save CSV Data"}</button>
+          <button type="submit" className="primary-button" disabled={saving || selectedCount !== FILES.length}>{saving ? "Importing..." : period ? "Import New CSV Snapshot" : "Import CSV Data"}</button>
         </div>
         <div className="upload-list">
           {FILES.map(([slot, label, description]) => {
