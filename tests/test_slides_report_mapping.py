@@ -32,6 +32,7 @@ from dashboard.slides_report import (
     replace_image_placeholders_safe,
     resolve_report_presentation,
     replace_text_placeholders_chunked,
+    should_replace_images,
     upload_chart_images,
 )
 
@@ -52,6 +53,13 @@ class FakeSlidesService:
 
 
 class SlidesReportMappingTests(unittest.TestCase):
+    def test_image_replacement_is_always_enabled(self):
+        with patch.dict(
+            "os.environ",
+            {"SLIDES_REPLACE_IMAGES": "false"},
+        ):
+            self.assertTrue(should_replace_images())
+
     @staticmethod
     def text_element(value):
         return {

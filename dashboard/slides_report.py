@@ -3426,7 +3426,11 @@ def replace_text_placeholders_chunked(
 
 
 def should_replace_images() -> bool:
-    return env_bool("SLIDES_REPLACE_IMAGES", False)
+    # Charts and evidence images are required report output, not an
+    # environment-specific feature flag. Keeping this always enabled prevents
+    # a missing or stale deployment variable from silently producing an
+    # incomplete deck.
+    return True
 
 
 def fast_mode_enabled() -> bool:
