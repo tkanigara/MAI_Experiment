@@ -9,6 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
+from starlette.concurrency import run_in_threadpool
 
 try:
     from dashboard.config import DASHBOARD_DIR, STATIC_DIR
@@ -40,7 +41,7 @@ try:
         ReportTaskDispatchError,
         RetryableReportJobError,
         build_report_task_dispatcher,
-        verify_cloud_tasks_oidc,
+        verify_report_task_request,
     )
 except ModuleNotFoundError:
     from config import DASHBOARD_DIR, STATIC_DIR
@@ -72,7 +73,7 @@ except ModuleNotFoundError:
         ReportTaskDispatchError,
         RetryableReportJobError,
         build_report_task_dispatcher,
-        verify_cloud_tasks_oidc,
+        verify_report_task_request,
     )
 
 
@@ -550,17 +551,32 @@ def cancel_report_job(job_id: str, payload: Optional[dict] = None):
 
 
 @app.post("/internal/report-jobs/{job_id}/execute")
-def execute_internal_report_job(job_id: str, request: Request):
+async def execute_internal_report_job(job_id: str, request: Request):
+    raw_body = await request.body()
+    worker_base_url = str(
+        os.getenv("REPORT_WORKER_BASE_URL") or ""
+    ).strip().rstrip("/")
+    worker_url = (
+        f"{worker_base_url}{request.url.path}"
+        if worker_base_url
+        else str(request.url)
+    )
     try:
-        verify_cloud_tasks_oidc(request.headers.get("Authorization"))
+        verify_report_task_request(
+            authorization=request.headers.get("Authorization"),
+            qstash_signature=request.headers.get("Upstash-Signature"),
+            body=raw_body,
+            url=worker_url,
+        )
     except ReportTaskAuthenticationError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
 
     try:
-        return json_response(report_job_worker.execute(job_id))
+        result = await run_in_threadpool(report_job_worker.execute, job_id)
+        return json_response(result)
     except ReportJobNotFoundError:
         # A task for a deleted job is a permanent no-op. A 2xx response stops
-        # Cloud Tasks from retrying an object that no longer exists.
+        # the queue provider from retrying an object that no longer exists.
         return json_response(
             {"job_id": job_id, "status": "ignored"},
         )

@@ -114,13 +114,13 @@ npm run build
 | `DB_POOL_RECYCLE`                    | tidak | default`1800` detik              |
 | `DB_CONNECT_TIMEOUT`                 | tidak | default`10` detik                |
 | `GCS_REPORT_ASSET_BUCKET`            | tidak | bucket untuk upload asset editor   |
-| `REPORT_QUEUE_BACKEND`               | tidak | isi`cloud_tasks` untuk queue     |
-| `CLOUD_TASKS_PROJECT`                | queue | project ID Cloud Tasks             |
-| `CLOUD_TASKS_LOCATION`               | queue | region queue                       |
-| `CLOUD_TASKS_QUEUE`                  | queue | nama queue                         |
-| `REPORT_WORKER_BASE_URL`             | queue | origin URL Cloud Run               |
-| `REPORT_TASK_CALLER_SERVICE_ACCOUNT` | queue | identity OIDC worker               |
-| `REPORT_TASK_OIDC_AUDIENCE`          | queue | audience OIDC, biasanya worker URL |
+| `REPORT_QUEUE_BACKEND`               | tidak | `local` atau `qstash`               |
+| `QSTASH_TOKEN`                       | queue | token publish/cancel QStash         |
+| `QSTASH_CURRENT_SIGNING_KEY`         | queue | verifikasi request worker           |
+| `QSTASH_NEXT_SIGNING_KEY`            | queue | key rotasi verifikasi worker        |
+| `QSTASH_QUEUE`                       | queue | nama FIFO queue                     |
+| `QSTASH_URL`                         | tidak | hanya untuk QStash CLI lokal        |
+| `REPORT_WORKER_BASE_URL`             | queue | origin HTTPS aplikasi/worker        |
 
 Daftar konfigurasi development yang lebih lengkap tersedia di `.env.example`.
 
@@ -296,35 +296,25 @@ Ganti semua placeholder huruf besar. Untuk staging sementara yang perlu dibuka
 publik, berikan `roles/run.invoker` kepada `allUsers`. Untuk production, gunakan
 IAP atau identity-aware access dengan Google Group/domain kantor.
 
-### 6. Cloud Tasks Report Queue
+### 6. QStash Report Queue
 
-Gunakan queue di region Cloud Run dengan konfigurasi awal konservatif:
+Backend staging di VPS menggunakan Upstash QStash. Pesan dimasukkan ke named
+queue sehingga report diproses FIFO dengan satu delivery aktif pada konfigurasi
+default queue. QStash memanggil endpoint
+`POST /internal/report-jobs/{job_id}/execute`; endpoint memverifikasi header
+`Upstash-Signature` terhadap raw request body dan URL publik worker.
 
-```text
-maxConcurrentDispatches: 1
-maxDispatchesPerSecond: 1
-maxAttempts: 3
-minBackoff: 30s
-maxBackoff: 300s
-```
-
-Cloud Tasks memanggil endpoint
-`POST /internal/report-jobs/{job_id}/execute` menggunakan OIDC task caller.
-Endpoint tetap memverifikasi audience dan email service account di level
-aplikasi. Database menjadi sumber status utama dan menyimpan queued, running,
-retrying, cancel, hasil Slides, error, serta Gemini token usage.
-
-Aktifkan queue hanya setelah image yang berisi worker sudah `Ready`. Set:
+Set environment berikut pada backend staging:
 
 ```text
-REPORT_QUEUE_BACKEND=cloud_tasks
-CLOUD_TASKS_PROJECT=PROJECT_ID
-CLOUD_TASKS_LOCATION=asia-southeast2
-CLOUD_TASKS_QUEUE=mai-report-generation-staging
-REPORT_WORKER_BASE_URL=https://SERVICE_URL
-REPORT_TASK_CALLER_SERVICE_ACCOUNT=TASK_CALLER_EMAIL
-REPORT_TASK_OIDC_AUDIENCE=https://SERVICE_URL
-REPORT_TASK_DISPATCH_DEADLINE_SECONDS=900
+REPORT_QUEUE_BACKEND=qstash
+QSTASH_TOKEN=...
+QSTASH_CURRENT_SIGNING_KEY=...
+QSTASH_NEXT_SIGNING_KEY=...
+QSTASH_QUEUE=mai-report-generation-staging
+QSTASH_RETRIES=2
+QSTASH_TIMEOUT=14m
+REPORT_WORKER_BASE_URL=https://ai-report.microads.co.id
 REPORT_JOB_LEASE_SECONDS=900
 REPORT_JOB_HARD_CANCEL=true
 REPORT_CANCEL_POLL_SECONDS=1
@@ -332,7 +322,19 @@ REPORT_CANCEL_GRACE_SECONDS=2
 REPORT_JOB_PROCESS_START_METHOD=spawn
 ```
 
-Task ID deterministik dan database lease mencegah eksekusi paralel. Jika worker
+`QSTASH_URL` tidak perlu diisi untuk Upstash Cloud. Nilainya hanya digunakan
+untuk local QStash CLI, misalnya `http://127.0.0.1:8070` bila backend berjalan
+langsung di host atau `http://host.docker.internal:8070` bila backend berjalan
+di Docker Desktop. Untuk local CLI, `REPORT_WORKER_BASE_URL` harus menunjuk ke
+dashboard lokal yang dapat dipanggil CLI, biasanya `http://127.0.0.1:8000`.
+
+Database menjadi sumber status utama dan menyimpan queued, running, retrying,
+cancel, hasil Slides, error, serta Gemini token usage. ID message QStash
+disimpan pada kolom queue ID yang sudah ada, sehingga migrasi database tambahan
+tidak diperlukan. Cancel menghapus message yang masih menunggu; job yang sudah
+berjalan berhenti melalui cancellation checkpoint aplikasi.
+
+Database lease mencegah eksekusi ganda. Jika worker
 gagal setelah deck dibuat, retry melanjutkan `presentation_id` yang sama.
 Worker menjalankan generator dalam child process terisolasi. Cancel diperiksa
 setiap satu detik, diberi cooperative grace period dua detik, lalu child process
@@ -340,6 +342,9 @@ diterminasi jika masih tertahan pada request Gemini/Google. Presentation parsial
 dipindahkan ke Drive Trash; jika izin Trash tidak tersedia, namanya diubah
 menjadi `[CANCELED] ...`. `cancel_latency_seconds` dan hasil cleanup tersimpan
 di `result_metadata` job.
+
+Adapter Cloud Tasks lama tetap tersedia sebagai rollback path dengan
+`REPORT_QUEUE_BACKEND=cloud_tasks`; variabel lengkapnya ada di `.env.example`.
 
 ### 7. Cloud Build dan GitHub
 

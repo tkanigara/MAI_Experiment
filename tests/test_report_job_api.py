@@ -225,7 +225,7 @@ class ReportJobApiTests(unittest.TestCase):
     def test_internal_worker_rejects_invalid_task_identity(self):
         with patch.object(
             main,
-            "verify_cloud_tasks_oidc",
+            "verify_report_task_request",
             side_effect=ReportTaskAuthenticationError("invalid task token"),
         ):
             response = self.client.post(
@@ -245,7 +245,7 @@ class ReportJobApiTests(unittest.TestCase):
 
         with (
             patch.object(main, "report_job_worker", worker),
-            patch.object(main, "verify_cloud_tasks_oidc") as verify,
+            patch.object(main, "verify_report_task_request") as verify,
         ):
             response = self.client.post(
                 "/internal/report-jobs/job-1/execute",
@@ -254,7 +254,16 @@ class ReportJobApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "completed")
-        verify.assert_called_once_with("Bearer valid")
+        verify.assert_called_once()
+        verification = verify.call_args.kwargs
+        self.assertEqual(verification["authorization"], "Bearer valid")
+        self.assertIsNone(verification["qstash_signature"])
+        self.assertEqual(verification["body"], b"")
+        self.assertTrue(
+            verification["url"].endswith(
+                "/internal/report-jobs/job-1/execute"
+            )
+        )
         worker.execute.assert_called_once_with("job-1")
 
 

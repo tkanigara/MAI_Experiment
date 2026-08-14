@@ -19,6 +19,7 @@ google-generativeai
 google-cloud-secret-manager
 google-cloud-storage
 google-cloud-tasks
+qstash>=3.4,<4
 gspread
 gspread_dataframe
 SQLAlchemy
