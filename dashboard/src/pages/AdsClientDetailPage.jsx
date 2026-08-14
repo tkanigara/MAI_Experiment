@@ -3,7 +3,7 @@ import Breadcrumb from "../components/Breadcrumb";
 import { PlatformBadges } from "../components/Badges";
 import { adsPeriodSlug, adsPlatformFlags } from "../lib/format";
 
-export default function AdsClientDetailPage({ client, periods, onNavigate, onUpload, onOpenPeriod, onEditClient, onEditGoals, onDeleteClient, onDeletePeriod }) {
+export default function AdsClientDetailPage({ client, periods, onNavigate, onUpload, onSync, onOpenPeriod, onEditClient, onEditGoals, onDeleteClient, onDeletePeriod }) {
   const platforms = adsPlatformFlags(client);
   const latestReport = periods[0]?.period_label || "-";
   return (
@@ -24,11 +24,11 @@ export default function AdsClientDetailPage({ client, periods, onNavigate, onUpl
       </section>
       <div className="section-row">
         <div><h2>Report Months</h2><p>Select a report month to view performance for each connected Ads platform.</p></div>
-        <button className="primary-button" type="button" onClick={() => onUpload(null)}>Add Report Data</button>
+        <div className="page-actions"><button className="secondary-button" type="button" onClick={() => onSync(null)}>Sync New Month</button><button className="primary-button" type="button" onClick={() => onUpload(null)}>Add Report Data</button></div>
       </div>
       <div className="month-grid">
         {periods.length ? periods.map((period) => (
-          <AdsMonthCard key={period.id} period={period} platforms={platforms} onOpen={() => onOpenPeriod(adsPeriodSlug(period))} onUpdate={onUpload} onEditGoals={onEditGoals} onDelete={onDeletePeriod} />
+          <AdsMonthCard key={period.id} period={period} platforms={platforms} onOpen={() => onOpenPeriod(adsPeriodSlug(period))} onUpdate={onUpload} onSync={onSync} onEditGoals={onEditGoals} onDelete={onDeletePeriod} />
         )) : <div className="empty report-empty">No Ads report data has been imported for this client yet. Add report data to create the first report month.</div>}
       </div>
     </section>

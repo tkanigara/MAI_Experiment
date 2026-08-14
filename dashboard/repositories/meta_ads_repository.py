@@ -39,7 +39,13 @@ META_GOAL_RESULT_TYPES = {
     "reach": ("reach",),
     "engagement": ("actions:post_interaction_gross", "post_engagement"),
     "profile_visits": ("profile_visit_view", "profile_visit"),
-    "page_likes": ("page_like", "page_likes", "actions:page_like"),
+    "page_likes": (
+        "page_like",
+        "page_likes",
+        "actions:page_like",
+        "profile_visit_view",
+        "profile_visit",
+    ),
 }
 
 COMMON_FIELDS = (
@@ -79,11 +85,13 @@ COMMON_FIELDS = (
 
 TABLE_FIELDS = {
     "campaign": (
+        "meta_ad_account_id",
         "campaign_external_id",
         "campaign_name",
         *COMMON_FIELDS,
     ),
     "adset": (
+        "meta_ad_account_id",
         "campaign_performance_id",
         "campaign_external_id",
         "campaign_name",
@@ -92,6 +100,7 @@ TABLE_FIELDS = {
         *COMMON_FIELDS,
     ),
     "ad": (
+        "meta_ad_account_id",
         "campaign_performance_id",
         "adset_performance_id",
         "campaign_external_id",
@@ -103,6 +112,7 @@ TABLE_FIELDS = {
         *COMMON_FIELDS,
     ),
     "placement": (
+        "meta_ad_account_id",
         "ad_performance_id",
         "campaign_external_id",
         "campaign_name",
@@ -116,6 +126,7 @@ TABLE_FIELDS = {
         *COMMON_FIELDS,
     ),
     "demographic": (
+        "meta_ad_account_id",
         "ad_performance_id",
         "campaign_external_id",
         "campaign_name",
@@ -128,6 +139,7 @@ TABLE_FIELDS = {
         *COMMON_FIELDS,
     ),
     "region": (
+        "meta_ad_account_id",
         "ad_performance_id",
         "campaign_external_id",
         "campaign_name",
@@ -242,17 +254,6 @@ class MetaAdsRepository:
                         CAST(:summary_totals AS JSONB),
                         CAST(:diagnostics AS JSONB), CAST(:warnings AS JSONB), now()
                     )
-                    ON CONFLICT (client_id, meta_ads_report_period_id, platform)
-                    DO UPDATE SET
-                        source = EXCLUDED.source,
-                        status = EXCLUDED.status,
-                        filenames = EXCLUDED.filenames,
-                        summary_totals = EXCLUDED.summary_totals,
-                        diagnostics = EXCLUDED.diagnostics,
-                        warnings = EXCLUDED.warnings,
-                        error_message = NULL,
-                        imported_at = EXCLUDED.imported_at,
-                        updated_at = now()
                     RETURNING id
                     """
                 ),
@@ -265,21 +266,6 @@ class MetaAdsRepository:
                     "warnings": _json(warnings),
                 },
             ).scalar_one()
-
-            # A period is a snapshot. Delete in dependency order and insert the
-            # six freshly validated files in the same transaction.
-            for file_type in (
-                "placement",
-                "demographic",
-                "region",
-                "ad",
-                "adset",
-                "campaign",
-            ):
-                conn.execute(
-                    text(f"DELETE FROM {TABLES[file_type]} WHERE import_id = :import_id"),
-                    {"import_id": import_id},
-                )
 
             counts = {}
             for file_type, parsed in files.items():
@@ -296,18 +282,160 @@ class MetaAdsRepository:
                 text(
                     """
                     UPDATE meta_ads_imports
-                    SET status = 'success', updated_at = now()
+                    SET status = 'success',
+                        platform_scope = '["instagram", "facebook"]'::jsonb,
+                        row_counts = CAST(:counts AS JSONB),
+                        sync_completed_at = now(), updated_at = now()
                     WHERE id = :import_id
                     """
                 ),
-                {"import_id": import_id},
+                {"import_id": import_id, "counts": _json(counts)},
             )
+            for platform in ("instagram", "facebook"):
+                self._activate_snapshot(conn, period_id, platform, import_id)
 
         return {
             "import_id": import_id,
             "meta_ads_report_period_id": period_id,
             "counts": counts,
         }
+
+    @staticmethod
+    def _activate_snapshot(conn, period_id, platform: str, import_id) -> None:
+        conn.execute(
+            text(
+                """
+                INSERT INTO meta_ads_active_snapshots (meta_ads_report_period_id, platform, import_id)
+                VALUES (:period_id, :platform, :import_id)
+                ON CONFLICT (meta_ads_report_period_id, platform)
+                DO UPDATE SET import_id = EXCLUDED.import_id, selected_at = now()
+                """
+            ),
+            {"period_id": period_id, "platform": platform, "import_id": import_id},
+        )
+
+    def create_period(self, client_id: str, payload: dict) -> dict:
+        UUID(client_id)
+        try:
+            period_start = date.fromisoformat(str(payload.get("period_start") or ""))
+            period_end = date.fromisoformat(str(payload.get("period_end") or ""))
+        except ValueError as exc:
+            raise ValueError("A valid period_start and period_end are required.") from exc
+        if period_end < period_start:
+            raise ValueError("Period end cannot be before period start.")
+        with self.engine.begin() as conn:
+            product = conn.execute(
+                text("SELECT configuration FROM client_products WHERE client_id=CAST(:client_id AS UUID) AND product='meta_ads' AND is_active"),
+                {"client_id": client_id},
+            ).mappings().first()
+            if not product:
+                raise ValueError("Ads client was not found.")
+            configuration = ads_product_configuration(product.get("configuration") or None)
+            period_configuration = ads_period_configuration(payload, configuration["platforms"])
+            row = conn.execute(
+                text(
+                    """
+                    INSERT INTO meta_ads_report_periods (client_id, period_start, period_end, period_label, configuration)
+                    VALUES (CAST(:client_id AS UUID), :period_start, :period_end,
+                            to_char(CAST(:period_start AS DATE), 'FMMonth YYYY'), CAST(:configuration AS JSONB))
+                    RETURNING id, period_start, period_end, period_label
+                    """
+                ),
+                {"client_id": client_id, "period_start": period_start, "period_end": period_end, "configuration": _json(period_configuration)},
+            ).mappings().one()
+            return {**dict(row), "ads_configuration": period_configuration}
+
+    def sync_context(self, client_id: str, period_id: str, account_ids: list[str], goals=None) -> dict:
+        UUID(client_id); UUID(period_id)
+        with self.engine.begin() as conn:
+            period = conn.execute(
+                text(
+                    """
+                    SELECT p.period_start, p.period_end, p.configuration, cp.configuration AS product_configuration
+                    FROM meta_ads_report_periods p JOIN client_products cp ON cp.client_id=p.client_id
+                    WHERE p.id=CAST(:period_id AS UUID) AND p.client_id=CAST(:client_id AS UUID)
+                      AND cp.product='meta_ads' AND cp.is_active FOR UPDATE OF p
+                    """
+                ), {"client_id": client_id, "period_id": period_id},
+            ).mappings().first()
+            if not period:
+                raise ValueError("Ads report period was not found.")
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT ad_account_id AS id, account_name AS name, account_status, currency, timezone_name, is_active
+                    FROM client_meta_ad_accounts
+                    WHERE client_id=CAST(:client_id AS UUID) AND ad_account_id = ANY(CAST(:account_ids AS TEXT[]))
+                    """
+                ), {"client_id": client_id, "account_ids": account_ids},
+            ).mappings().all()
+            found = {row["id"] for row in rows}
+            if found != set(account_ids):
+                raise ValueError("One or more Ad Accounts are not connected to this client.")
+            if any(not row["is_active"] or row["account_status"] != 1 for row in rows):
+                raise ValueError("Inactive Meta Ad Accounts cannot be synced.")
+            product_configuration = ads_product_configuration(period.get("product_configuration") or None)
+            period_configuration = ads_period_configuration({"goals": goals} if goals else period.get("configuration"), product_configuration["platforms"])
+            if goals:
+                conn.execute(text("UPDATE meta_ads_report_periods SET configuration=CAST(:configuration AS JSONB), updated_at=now() WHERE id=CAST(:period_id AS UUID)"), {"period_id": period_id, "configuration": _json(period_configuration)})
+            return {"period_start": period["period_start"], "period_end": period["period_end"], "accounts": [dict(row) for row in rows], "goals": period_configuration["goals"]}
+
+    def start_api_snapshot(self, client_id, period_id, account_ids, platforms, warnings) -> str:
+        with self.engine.begin() as conn:
+            return str(conn.execute(
+                text(
+                    """
+                    INSERT INTO meta_ads_imports (client_id, meta_ads_report_period_id, platform, source, status,
+                      selected_ad_account_ids, platform_scope, warnings, sync_started_at, imported_at)
+                    VALUES (CAST(:client_id AS UUID), CAST(:period_id AS UUID), 'meta', 'api', 'running',
+                      CAST(:accounts AS JSONB), CAST(:platforms AS JSONB), CAST(:warnings AS JSONB), now(), now()) RETURNING id
+                    """
+                ), {"client_id": client_id, "period_id": period_id, "accounts": _json(account_ids), "platforms": _json(platforms), "warnings": _json(warnings)},
+            ).scalar_one())
+
+    def complete_api_snapshot(self, import_id, client_id, period_id, platforms, datasets, creatives, warnings) -> dict:
+        UUID(str(import_id))
+        with self.engine.begin() as conn:
+            counts = {}
+            for file_type, rows in datasets.items():
+                counts[file_type] = self._insert_rows(conn, file_type=file_type, import_id=import_id, client_id=client_id, period_id=period_id, rows=rows)
+            if creatives:
+                fields = ("meta_ad_account_id", "campaign_external_id", "adset_external_id", "ad_external_id", "creative_external_id", "creative_name", "thumbnail_url", "image_url", "preview_url", "permalink_url", "effective_object_story_id", "page_id", "instagram_actor_id", "creative_fetched_at")
+                statement = text(f"INSERT INTO meta_ads_creatives (import_id, client_id, meta_ads_report_period_id, {', '.join(fields)}, raw_data) VALUES (:import_id, CAST(:client_id AS UUID), CAST(:period_id AS UUID), {', '.join(':'+f for f in fields)}, CAST(:raw_data AS JSONB))")
+                conn.execute(statement, [{"import_id": import_id, "client_id": client_id, "period_id": period_id, **{field: item.get(field) for field in fields}, "raw_data": _json(item.get("raw_data") or {})} for item in creatives])
+            conn.execute(text("UPDATE meta_ads_imports SET status='success', row_counts=CAST(:counts AS JSONB), warnings=CAST(:warnings AS JSONB), sync_completed_at=now(), updated_at=now() WHERE id=CAST(:import_id AS UUID)"), {"import_id": import_id, "counts": _json({**counts, "creatives": len(creatives)}), "warnings": _json(warnings)})
+            for platform in platforms:
+                self._activate_snapshot(conn, period_id, platform, import_id)
+        return {"import_id": import_id, "meta_ads_report_period_id": period_id, "platforms": platforms, "counts": {**counts, "creatives": len(creatives)}, "warnings": warnings, "status": "success"}
+
+    def fail_api_snapshot(self, import_id, error_message: str) -> None:
+        safe_error = str(error_message).replace("META_ADS_ACCESS_TOKEN=", "")[:1000]
+        with self.engine.begin() as conn:
+            conn.execute(text("UPDATE meta_ads_imports SET status='failed', error_message=:error, sync_completed_at=now(), updated_at=now() WHERE id=CAST(:import_id AS UUID)"), {"import_id": import_id, "error": safe_error})
+
+    def sources(self, client_id: str, period_id: str) -> dict:
+        UUID(client_id); UUID(period_id)
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT i.id, i.source, i.status, i.selected_ad_account_ids, i.platform_scope, i.row_counts,
+                       i.warnings, i.error_message, i.imported_at, i.sync_completed_at,
+                       ARRAY_REMOVE(ARRAY_AGG(a.platform), NULL) AS active_for
+                FROM meta_ads_imports i LEFT JOIN meta_ads_active_snapshots a ON a.import_id=i.id
+                WHERE i.client_id=CAST(:client_id AS UUID) AND i.meta_ads_report_period_id=CAST(:period_id AS UUID)
+                GROUP BY i.id ORDER BY COALESCE(i.sync_completed_at, i.imported_at, i.created_at) DESC
+            """), {"client_id": client_id, "period_id": period_id}).mappings().all()
+            return {"snapshots": [dict(row) for row in rows]}
+
+    def select_source(self, client_id: str, period_id: str, platform: str, import_id: str) -> dict:
+        platform = str(platform).lower()
+        if platform not in {"instagram", "facebook"}:
+            raise ValueError("Only Instagram and Facebook sources can be selected.")
+        with self.engine.begin() as conn:
+            snapshot = conn.execute(text("SELECT id, platform_scope FROM meta_ads_imports WHERE id=CAST(:import_id AS UUID) AND client_id=CAST(:client_id AS UUID) AND meta_ads_report_period_id=CAST(:period_id AS UUID) AND status='success'"), {"import_id": import_id, "client_id": client_id, "period_id": period_id}).mappings().first()
+            if not snapshot or platform not in (snapshot.get("platform_scope") or []):
+                raise ValueError("Snapshot is not available for this platform.")
+            self._activate_snapshot(conn, period_id, platform, import_id)
+            return {"platform": platform, "import_id": import_id, "active": True}
 
     def client_periods(self, client_id: str) -> dict:
         UUID(client_id)
@@ -318,6 +446,12 @@ class MetaAdsRepository:
                     SELECT
                         c.id, c.client_code, c.client_name, c.industry,
                         cp.configuration AS ads_configuration,
+                        COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                            'id', account.ad_account_id, 'name', account.account_name,
+                            'account_status', account.account_status, 'currency', account.currency,
+                            'timezone_name', account.timezone_name, 'is_active', account.is_active
+                        ) ORDER BY account.account_name) FROM client_meta_ad_accounts account
+                        WHERE account.client_id=c.id), '[]'::jsonb) AS meta_ad_accounts,
                         ARRAY(
                             SELECT active_product.product
                             FROM client_products active_product
@@ -376,9 +510,13 @@ class MetaAdsRepository:
                         (SELECT COUNT(*) FROM meta_ads_demographic_breakdown r WHERE r.import_id = i.id) AS demographics,
                         (SELECT COUNT(*) FROM meta_ads_region_breakdown r WHERE r.import_id = i.id) AS regions
                     FROM meta_ads_report_periods p
-                    LEFT JOIN meta_ads_imports i
-                      ON i.meta_ads_report_period_id = p.id
-                     AND i.platform = 'meta'
+                    LEFT JOIN LATERAL (
+                        SELECT selected_import.*
+                        FROM meta_ads_active_snapshots active
+                        JOIN meta_ads_imports selected_import ON selected_import.id = active.import_id
+                        WHERE active.meta_ads_report_period_id = p.id
+                        ORDER BY active.selected_at DESC LIMIT 1
+                    ) i ON TRUE
                     WHERE p.client_id = CAST(:client_id AS UUID)
                     ORDER BY p.period_start DESC, p.created_at DESC
                     """
@@ -431,7 +569,12 @@ class MetaAdsRepository:
                         p.period_end,
                         i.id AS import_id,
                         i.status AS import_status,
-                        i.imported_at
+                        i.imported_at,
+                        i.source AS active_source,
+                        i.selected_ad_account_ids,
+                        i.platform_scope,
+                        i.warnings AS sync_warnings,
+                        i.sync_completed_at
                     FROM clients c
                     JOIN client_products cp
                       ON cp.client_id = c.id
@@ -440,14 +583,15 @@ class MetaAdsRepository:
                     JOIN meta_ads_report_periods p
                       ON p.client_id = c.id
                      AND p.id = CAST(:period_id AS UUID)
-                    LEFT JOIN meta_ads_imports i
-                      ON i.meta_ads_report_period_id = p.id
-                     AND i.platform = 'meta'
+                    LEFT JOIN meta_ads_active_snapshots active
+                      ON active.meta_ads_report_period_id = p.id
+                     AND active.platform = :platform
+                    LEFT JOIN meta_ads_imports i ON i.id = active.import_id
                     WHERE c.id = CAST(:client_id AS UUID)
                       AND c.is_active
                     """
                 ),
-                {"client_id": client_id, "period_id": period_id},
+                {"client_id": client_id, "period_id": period_id, "platform": platform},
             ).mappings().first()
             if not context:
                 raise ValueError("Ads report period was not found.")
@@ -485,8 +629,14 @@ class MetaAdsRepository:
                         "period_label",
                         "period_start",
                         "period_end",
+                        "import_id",
                         "import_status",
                         "imported_at",
+                        "sync_completed_at",
+                        "active_source",
+                        "selected_ad_account_ids",
+                        "platform_scope",
+                        "sync_warnings",
                     )
                 },
                 "data_status": "not_configured"
@@ -569,8 +719,11 @@ class MetaAdsRepository:
                             COALESCE(SUM(r.{primary_metric}), 0) AS result_value,
                             COALESCE(SUM(r.spend), 0) AS spend
                         FROM meta_ads_placement_breakdown r
-                        JOIN meta_ads_report_periods p
-                          ON p.id = r.meta_ads_report_period_id
+                        JOIN meta_ads_report_periods p ON p.id = r.meta_ads_report_period_id
+                        JOIN meta_ads_active_snapshots active
+                          ON active.meta_ads_report_period_id = p.id
+                         AND active.platform = :platform
+                         AND active.import_id = r.import_id
                         WHERE r.client_id = CAST(:client_id AS UUID)
                           AND p.period_end <= CAST(:period_end AS DATE)
                           AND LOWER(COALESCE(r.publisher_platform, '')) = :platform
@@ -594,18 +747,25 @@ class MetaAdsRepository:
                     text(
                         f"""
                         SELECT
-                            COALESCE(NULLIF(ad_name, ''), 'Unnamed ad') AS label,
-                            COALESCE(SUM({primary_metric}), 0) AS result_value,
-                            COALESCE(SUM(reach), 0) AS reach,
-                            COALESCE(SUM(impressions), 0) AS impressions,
-                            COALESCE(SUM(post_engagements), 0) AS engagements,
-                            COALESCE(SUM(link_clicks), 0) AS link_clicks,
-                            COALESCE(SUM(spend), 0) AS spend
-                        FROM meta_ads_placement_breakdown
-                        WHERE import_id = CAST(:import_id AS UUID)
-                          AND LOWER(COALESCE(publisher_platform, '')) = :platform
-                          AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
-                        GROUP BY COALESCE(NULLIF(ad_name, ''), 'Unnamed ad')
+                            COALESCE(NULLIF(performance.ad_name, ''), 'Unnamed ad') AS label,
+                            MAX(creative.thumbnail_url) AS thumbnail_url,
+                            MAX(creative.image_url) AS image_url,
+                            MAX(creative.preview_url) AS preview_url,
+                            MAX(creative.permalink_url) AS permalink_url,
+                            COALESCE(SUM(performance.{primary_metric}), 0) AS result_value,
+                            COALESCE(SUM(performance.reach), 0) AS reach,
+                            COALESCE(SUM(performance.impressions), 0) AS impressions,
+                            COALESCE(SUM(performance.post_engagements), 0) AS engagements,
+                            COALESCE(SUM(performance.link_clicks), 0) AS link_clicks,
+                            COALESCE(SUM(performance.spend), 0) AS spend
+                        FROM meta_ads_placement_breakdown performance
+                        LEFT JOIN meta_ads_creatives creative
+                          ON creative.import_id = performance.import_id
+                         AND creative.ad_external_id = performance.ad_external_id
+                        WHERE performance.import_id = CAST(:import_id AS UUID)
+                          AND LOWER(COALESCE(performance.publisher_platform, '')) = :platform
+                          AND LOWER(COALESCE(performance.result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                        GROUP BY COALESCE(NULLIF(performance.ad_name, ''), 'Unnamed ad')
                         ORDER BY result_value DESC, spend DESC
                         LIMIT 10
                         """
@@ -708,15 +868,12 @@ class MetaAdsRepository:
                         p.configuration AS period_configuration,
                         p.period_label,
                         p.period_end,
-                        i.id AS import_id,
-                        i.status AS import_status
+                        NULL::UUID AS import_id,
+                        NULL::TEXT AS import_status
                     FROM client_products cp
                     JOIN meta_ads_report_periods p
                       ON p.client_id = cp.client_id
                      AND p.id = CAST(:period_id AS UUID)
-                    LEFT JOIN meta_ads_imports i
-                      ON i.meta_ads_report_period_id = p.id
-                     AND i.platform = 'meta'
                     WHERE cp.client_id = CAST(:client_id AS UUID)
                       AND cp.product = 'meta_ads'
                       AND cp.is_active
@@ -741,6 +898,19 @@ class MetaAdsRepository:
                 context.get("period_configuration") or legacy_goal_configuration,
                 configuration["platforms"],
             )
+            active_imports = {
+                row["platform"]: dict(row)
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT active.platform, i.id AS import_id, i.status AS import_status
+                        FROM meta_ads_active_snapshots active
+                        JOIN meta_ads_imports i ON i.id=active.import_id
+                        WHERE active.meta_ads_report_period_id=CAST(:period_id AS UUID)
+                        """
+                    ), {"period_id": period_id},
+                ).mappings()
+            }
             historical_periods = conn.execute(
                 text(
                     """
@@ -778,6 +948,7 @@ class MetaAdsRepository:
             }
             for platform in configuration["platforms"]:
                 definition = catalog[platform]
+                active_import = active_imports.get(platform, {})
                 for goal_config in period_configuration["goals"].get(platform, []):
                     goal_key = goal_config["key"]
                     goal_definition = next(
@@ -812,8 +983,8 @@ class MetaAdsRepository:
                     }
                     if (
                         definition["ingestion_status"] == "available"
-                        and context.get("import_id")
-                        and context.get("import_status") == "success"
+                        and active_import.get("import_id")
+                        and active_import.get("import_status") == "success"
                     ):
                         result_types = list(META_GOAL_RESULT_TYPES.get(goal_key, ()))
                         primary_metric = (
@@ -834,7 +1005,7 @@ class MetaAdsRepository:
                                 """
                             ),
                             {
-                                "import_id": context["import_id"],
+                                "import_id": active_import["import_id"],
                                 "platform": platform,
                                 "result_types": result_types,
                             },
@@ -846,8 +1017,11 @@ class MetaAdsRepository:
                                     COALESCE(SUM(r.{primary_metric}), 0) AS actual,
                                     COALESCE(SUM(r.spend), 0) AS spend
                                 FROM meta_ads_placement_breakdown r
-                                JOIN meta_ads_report_periods p
-                                  ON p.id = r.meta_ads_report_period_id
+                                JOIN meta_ads_report_periods p ON p.id = r.meta_ads_report_period_id
+                                JOIN meta_ads_active_snapshots active
+                                  ON active.meta_ads_report_period_id=p.id
+                                 AND active.platform=:platform
+                                 AND active.import_id=r.import_id
                                 WHERE r.client_id = CAST(:client_id AS UUID)
                                   AND p.period_end <= CAST(:period_end AS DATE)
                                   AND LOWER(COALESCE(r.publisher_platform, '')) = :platform

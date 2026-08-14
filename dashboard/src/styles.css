@@ -2360,3 +2360,16 @@ label, .field-label {
     margin-left: 0;
   }
 }
+.ads-account-list {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+  margin-top: 10px;
+}
+
+.ads-goal-toggle.is-disabled { opacity: .55; }
+.creative-cell { display: flex; align-items: center; gap: 10px; min-width: 220px; }
+.creative-cell img, .creative-placeholder { width: 58px; height: 58px; border-radius: 8px; object-fit: cover; flex: 0 0 auto; }
+.creative-placeholder { display: grid; place-items: center; background: #f0f0ed; color: #747474; font-size: 11px; }
+.creative-cell small { display: block; color: #777; margin-top: 3px; }

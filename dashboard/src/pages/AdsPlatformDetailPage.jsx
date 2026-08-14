@@ -37,11 +37,11 @@ function goalCards(goal) {
   ];
 }
 
-function PerformanceTable({ rows, resultLabel }) {
+function PerformanceTable({ rows, resultLabel, onSync }) {
   if (!rows.length) return <div className="empty compact-empty">No performance rows match this goal.</div>;
   return (
     <div className="table-scroll"><table className="ads-detail-table"><thead><tr><th>Creative</th><th>{resultLabel}</th><th>Reach</th><th>Impressions</th><th>Engagements</th><th>Link Clicks</th><th>Spend</th></tr></thead><tbody>
-      {rows.map((row) => <tr key={row.label}><td>{row.label}</td><td>{formatNumber(row.result_value)}</td><td>{formatNumber(row.reach)}</td><td>{formatNumber(row.impressions)}</td><td>{formatNumber(row.engagements)}</td><td>{formatNumber(row.link_clicks)}</td><td>{formatCurrency(row.spend)}</td></tr>)}
+      {rows.map((row) => <tr key={row.label}><td><div className="creative-cell">{row.thumbnail_url || row.image_url ? <img src={row.thumbnail_url || row.image_url} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <span className="creative-placeholder" title="Creative URL is missing or expired">No image</span>}<span>{row.label}{!(row.thumbnail_url || row.image_url) && <small> URL may be unavailable. <button type="button" className="text-link" onClick={onSync}>Sync again</button></small>}</span></div></td><td>{formatNumber(row.result_value)}</td><td>{formatNumber(row.reach)}</td><td>{formatNumber(row.impressions)}</td><td>{formatNumber(row.engagements)}</td><td>{formatNumber(row.link_clicks)}</td><td>{formatCurrency(row.spend)}</td></tr>)}
     </tbody></table></div>
   );
 }
@@ -52,7 +52,7 @@ function BreakdownList({ rows, valueLabel = "Results" }) {
   return <div className="ads-ranking-list">{rows.map((row) => <div className="ads-ranking-row" key={`${row.label}-${row.age}-${row.gender}`}><div><strong>{row.label || `${row.age} · ${row.gender}`}</strong><small>{valueLabel}</small></div><div className="ads-ranking-bar"><span style={{ width: `${Math.max(3, Number(row.result_value || 0) / maximum * 100)}%` }} /></div><b>{formatNumber(row.result_value)}</b></div>)}</div>;
 }
 
-export default function AdsPlatformDetailPage({ client, period, platform, detail, onNavigate, onUpdate, onEditGoals }) {
+export default function AdsPlatformDetailPage({ client, period, platform, detail, onNavigate, onUpdate, onSync, onSelectSource, onEditGoals }) {
   const [activeGoalKey, setActiveGoalKey] = useState("");
   const source = ADS_PLATFORM_SOURCES[platform];
   const available = detail?.data_status === "ready";
@@ -68,8 +68,10 @@ export default function AdsPlatformDetailPage({ client, period, platform, detail
       <Breadcrumb items={[{ label: "Clients", path: "/ads/clients" }, { label: client.client_name, path: `/ads/clients/${clientSlug(client)}` }, { label: period.period_label, path: `/ads/clients/${clientSlug(client)}/${adsPeriodSlug(period)}` }, { label: `${PLATFORM_LABELS[platform]} Ads` }]} onNavigate={onNavigate} />
       <div className="page-title-row">
         <div><div className="badge-row"><PlatformBadge platform={platform} /><StatusBadge text={available ? "Ready" : source?.available ? detail ? "Missing data" : "Loading" : "Coming soon"} state={available ? "success" : source?.available ? "warning" : "info"} /></div><h1>{PLATFORM_LABELS[platform]} Ads</h1><p>{period.period_label} · Source: {source?.label}</p></div>
-        {source?.available && <button className="secondary-button" type="button" onClick={() => onUpdate(period)}>Update Data</button>}
+        {source?.available && <div className="page-actions"><button className="secondary-button" type="button" onClick={() => onUpdate(period)}>Import CSV</button><button className="primary-button" type="button" onClick={() => onSync(period)}>Sync from Meta</button></div>}
       </div>
+
+      {detail?.period?.import_status === "success" && <section className="upload-summary"><div><StatusBadge text={`Active source: ${(detail.period.active_source || "csv").toUpperCase()}`} state="success" /><span>Last synced: {detail.period.sync_completed_at || detail.period.imported_at || "-"}</span><span>Accounts: {(detail.period.selected_ad_account_ids || []).join(", ") || "CSV upload"}</span></div>{(detail.sources || []).length > 1 && <label>Data source<select value={detail.period.import_id || ""} onChange={(event) => onSelectSource(event.target.value)}>{detail.sources.filter((item) => item.status === "success").map((item) => <option value={item.id} key={item.id}>{item.source.toUpperCase()} · {item.sync_completed_at || item.imported_at}</option>)}</select></label>}</section>}
 
       {!detail ? <div className="empty"><h2>Loading platform performance...</h2></div> : detail.data_status === "not_configured" ? (
         <div className="empty"><h2>No {PLATFORM_LABELS[platform]} goal selected for {period.period_label}</h2><p>This platform is connected to the client, but it is not part of this month's Ads plan.</p><button className="primary-button" type="button" onClick={() => onEditGoals(period)}>Edit Goals &amp; KPI</button></div>
@@ -82,7 +84,7 @@ export default function AdsPlatformDetailPage({ client, period, platform, detail
           <div className="ads-goal-tabs" role="tablist" aria-label="Ads performance goals">{goals.map((goal) => <button type="button" role="tab" aria-selected={goal.key === activeGoal?.key} className={goal.key === activeGoal?.key ? "active" : ""} key={goal.key} onClick={() => setActiveGoalKey(goal.key)}><span>{goal.label}</span><small>{goal.family.replaceAll("_", " ")}</small></button>)}</div>
           {activeGoal && <>
             <section className="metric-grid ads-goal-metrics">{goalCards(activeGoal).map(([label, value]) => <article className="metric-card-container" key={label}><div className="metric-card"><div className="metric-label">{label}</div><div className="metric-value">{value}</div></div></article>)}</section>
-            <section className="content-card ads-section-card"><div className="section-heading"><div><span className="eyebrow">Performance Overview</span><h2>{activeGoal.label} by Creative</h2></div><span className="source-note">Meta placement export</span></div><PerformanceTable rows={activeGoal.creatives || []} resultLabel={activeGoal.label} /></section>
+            <section className="content-card ads-section-card"><div className="section-heading"><div><span className="eyebrow">Performance Overview</span><h2>{activeGoal.label} by Creative</h2></div><span className="source-note">Meta placement export</span></div><PerformanceTable rows={activeGoal.creatives || []} resultLabel={activeGoal.label} onSync={() => onSync(period)} /></section>
             <div className="ads-analysis-grid">
               <section className="content-card ads-section-card"><div className="section-heading"><div><span className="eyebrow">Placement Analysis</span><h2>Top Placements</h2></div></div><BreakdownList rows={activeGoal.placements || []} valueLabel={activeGoal.label} /></section>
               <section className="content-card ads-section-card"><div className="section-heading"><div><span className="eyebrow">Audience Demographics</span><h2>Age and Gender</h2></div></div><BreakdownList rows={activeGoal.demographics || []} valueLabel={activeGoal.label} /><p className="data-caveat">Meta demographic exports do not include publisher platform, so this breakdown uses the shared Meta scope.</p></section>

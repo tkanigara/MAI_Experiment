@@ -9,6 +9,7 @@ import EditAdsPeriodGoalsModal from "./components/EditAdsPeriodGoalsModal";
 import GenerateReportModal from "./components/GenerateReportModal";
 import Header from "./components/Header";
 import MetaAdsImportModal from "./components/MetaAdsImportModal";
+import MetaAdsSyncModal from "./components/MetaAdsSyncModal";
 import ReportDataLockedModal from "./components/ReportDataLockedModal";
 import { api } from "./lib/api";
 import { adsPeriodSlug, clientSlug, platformFlags } from "./lib/format";
@@ -66,6 +67,7 @@ export default function App() {
   const [adsPlatformDetail, setAdsPlatformDetail] = useState(null);
   const [adsPeriodOverview, setAdsPeriodOverview] = useState(null);
   const [adsImportPeriod, setAdsImportPeriod] = useState(null);
+  const [adsSyncContext, setAdsSyncContext] = useState(null);
   const [platformData, setPlatformData] = useState({});
   const [modal, setModal] = useState(null);
   const [generateReportTarget, setGenerateReportTarget] = useState(null);
@@ -797,8 +799,11 @@ export default function App() {
       return;
     }
     setAdsPlatformDetail(null);
-    api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/platforms/${currentAdsPlatform}`)
-      .then(setAdsPlatformDetail)
+    Promise.all([
+      api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/platforms/${currentAdsPlatform}`),
+      api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/sources`),
+    ])
+      .then(([detail, sources]) => setAdsPlatformDetail({ ...detail, sources: (sources.snapshots || []).filter((item) => (item.platform_scope || []).includes(currentAdsPlatform)) }))
       .catch((err) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClient?.id, currentAdsPeriod?.id, currentAdsPlatform, workspace]);
@@ -906,6 +911,7 @@ export default function App() {
             setAdsImportPeriod(period);
             setModal("add-ads-import");
           }}
+          onSync={(period = null) => setAdsSyncContext({ period, platform: null })}
         />
       );
     }
@@ -919,6 +925,7 @@ export default function App() {
           onNavigate={navigate}
           onOpenPlatform={(path) => navigate(`/ads/clients/${path}`)}
           onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
+          onSync={(period) => setAdsSyncContext({ period, platform: null })}
           onEditGoals={setEditAdsPeriodGoals}
         />
       );
@@ -932,6 +939,18 @@ export default function App() {
           detail={adsPlatformDetail}
           onNavigate={navigate}
           onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
+          onSync={(period) => setAdsSyncContext({ period, platform: currentAdsPlatform })}
+          onSelectSource={async (importId) => {
+            await api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/active-source`, {
+              method: "PUT", body: JSON.stringify({ platform: currentAdsPlatform, import_id: importId }),
+            });
+            const [refreshed, sources] = await Promise.all([
+              api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/platforms/${currentAdsPlatform}`),
+              api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/sources`),
+            ]);
+            setAdsPlatformDetail({ ...refreshed, sources: (sources.snapshots || []).filter((item) => (item.platform_scope || []).includes(currentAdsPlatform)) });
+            showToast("Active data source updated.");
+          }}
           onEditGoals={setEditAdsPeriodGoals}
         />
       );
@@ -1223,7 +1242,7 @@ export default function App() {
             if (payload.existing_client_id) {
               savedClient = await api(
                 `/api/clients/${payload.existing_client_id}/products/meta_ads`,
-                { method: "POST", body: JSON.stringify({ ads_platforms: payload.ads_platforms }) },
+                { method: "POST", body: JSON.stringify({ ads_platforms: payload.ads_platforms, meta_ad_account_ids: payload.meta_ad_account_ids }) },
               );
             } else {
               savedClient = await api("/api/clients", {
@@ -1247,7 +1266,7 @@ export default function App() {
           onSave={async (payload) => {
             const savedClient = await api(
               `/api/clients/${editAdsClient.id}/products/meta_ads`,
-              { method: "POST", body: JSON.stringify({ ads_platforms: payload.ads_platforms }) },
+              { method: "POST", body: JSON.stringify({ ads_platforms: payload.ads_platforms, meta_ad_account_ids: payload.meta_ad_account_ids }) },
             );
             await loadClients();
             await loadAdsClient({ ...editAdsClient, ...savedClient });
@@ -1270,6 +1289,24 @@ export default function App() {
             setModal(null);
             setAdsImportPeriod(null);
             showToast("Ads report data imported.");
+          }}
+        />
+      )}
+      {isAdsWorkspace && adsSyncContext && selectedClient && (
+        <MetaAdsSyncModal
+          client={selectedClient}
+          period={adsSyncContext.period}
+          initialPlatform={adsSyncContext.platform}
+          onClose={() => setAdsSyncContext(null)}
+          onSynced={async (_result, syncedPeriod) => {
+            await loadClients();
+            await loadAdsClient(selectedClient);
+            if (adsSyncContext.platform && syncedPeriod?.id) {
+              const refreshed = await api(`/api/ads/clients/${selectedClient.id}/periods/${syncedPeriod.id}/platforms/${adsSyncContext.platform}`);
+              setAdsPlatformDetail(refreshed);
+            }
+            setAdsSyncContext(null);
+            showToast("Meta Ads sync completed.");
           }}
         />
       )}

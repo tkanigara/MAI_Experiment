@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../lib/api";
 import { ADS_PLATFORMS, ADS_PLATFORM_SOURCES, PLATFORM_LABELS } from "../lib/constants";
 import { adsPlatformFlags } from "../lib/format";
 import { PlatformBadge, StatusBadge } from "./Badges";
@@ -13,6 +14,14 @@ export default function AddAdsClientModal({ client = null, clients, industries, 
   const [selectedPlatforms, setSelectedPlatforms] = useState(() => (
     client ? adsPlatformFlags(client) : ADS_PLATFORMS
   ));
+  const [accounts, setAccounts] = useState([]);
+  const [accountSearch, setAccountSearch] = useState("");
+  const [selectedAccounts, setSelectedAccounts] = useState(() => (
+    (client?.meta_ad_accounts || []).map((item) => item.id)
+  ));
+  useEffect(() => {
+    api("/api/ads/meta/ad-accounts").then(setAccounts).catch((err) => setError(err.message));
+  }, []);
   const industryOptions = useMemo(
     () => [...new Set([...DEFAULT_INDUSTRIES, ...industries].filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [industries],
@@ -24,6 +33,10 @@ export default function AddAdsClientModal({ client = null, clients, industries, 
         ? current.filter((item) => item !== platform)
         : ADS_PLATFORMS.filter((item) => [...current, platform].includes(item))
     ));
+  }
+
+  function toggleAccount(accountId) {
+    setSelectedAccounts((current) => current.includes(accountId) ? current.filter((item) => item !== accountId) : [...current, accountId]);
   }
 
   async function submit(event) {
@@ -41,13 +54,14 @@ export default function AddAdsClientModal({ client = null, clients, industries, 
       : String(form.get("industry") || "").trim();
     try {
       await onSave(mode === "edit"
-        ? { existing_client_id: client.id, ads_platforms: selectedPlatforms }
+        ? { existing_client_id: client.id, ads_platforms: selectedPlatforms, meta_ad_account_ids: selectedAccounts }
         : mode === "existing"
-          ? { existing_client_id: form.get("existing_client_id"), ads_platforms: selectedPlatforms }
+          ? { existing_client_id: form.get("existing_client_id"), ads_platforms: selectedPlatforms, meta_ad_account_ids: selectedAccounts }
           : {
               client_name: String(form.get("client_name") || "").trim(),
               industry,
               ads_platforms: selectedPlatforms,
+              meta_ad_account_ids: selectedAccounts,
             });
     } catch (err) {
       setError(err.message);
@@ -115,6 +129,19 @@ export default function AddAdsClientModal({ client = null, clients, industries, 
             })}
           </div>
           <div className="field-note">Goals, monthly KPI, and budget are selected when creating each report month.</div>
+        </div>
+        <div>
+          <div className="field-label">Meta Ad Accounts</div>
+          <input type="search" value={accountSearch} onChange={(event) => setAccountSearch(event.target.value)} placeholder="Search account name or ID" />
+          <div className="ads-account-list">
+            {accounts.filter((account) => `${account.name} ${account.id}`.toLowerCase().includes(accountSearch.toLowerCase())).map((account) => (
+              <label className={`ads-goal-toggle ${!account.is_active ? "is-disabled" : ""}`} key={account.id}>
+                <input type="checkbox" disabled={!account.is_active} checked={selectedAccounts.includes(account.id)} onChange={() => toggleAccount(account.id)} />
+                <span><strong>{account.name}</strong><small>{account.id} · {account.currency || "-"} · {account.timezone_name || "-"}{!account.is_active ? " · Inactive" : ""}</small></span>
+              </label>
+            ))}
+          </div>
+          <div className="field-note">The token stays on the backend. Inactive accounts are visible but cannot be selected.</div>
         </div>
         {error && <div className="import-alert danger">{error}</div>}
         <div className="modal-actions">

@@ -846,6 +846,47 @@ class DashboardRepository:
     def __init__(self):
         self.engine = create_db_engine()
 
+    @staticmethod
+    def _sync_meta_ad_accounts(conn, client_id, configuration: dict, payload: dict) -> None:
+        selected = set(configuration.get("meta_ad_account_ids") or [])
+        metadata = {
+            str(item.get("id")): item
+            for item in (payload.get("_meta_ad_accounts") or [])
+            if item.get("id")
+        }
+        conn.execute(
+            text("DELETE FROM client_meta_ad_accounts WHERE client_id=CAST(:client_id AS UUID) AND NOT (ad_account_id = ANY(CAST(:selected AS TEXT[])))"),
+            {"client_id": str(client_id), "selected": list(selected)},
+        )
+        for account_id in selected:
+            account = metadata.get(account_id, {})
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO client_meta_ad_accounts (
+                        client_id, ad_account_id, account_name, account_status,
+                        currency, timezone_name, is_active
+                    ) VALUES (
+                        CAST(:client_id AS UUID), :account_id, :name, :status,
+                        :currency, :timezone, :is_active
+                    )
+                    ON CONFLICT (client_id, ad_account_id) DO UPDATE SET
+                        account_name=EXCLUDED.account_name,
+                        account_status=EXCLUDED.account_status,
+                        currency=EXCLUDED.currency,
+                        timezone_name=EXCLUDED.timezone_name,
+                        is_active=EXCLUDED.is_active,
+                        updated_at=now()
+                    """
+                ),
+                {
+                    "client_id": str(client_id), "account_id": account_id,
+                    "name": account.get("name"), "status": account.get("account_status"),
+                    "currency": account.get("currency"), "timezone": account.get("timezone_name"),
+                    "is_active": account.get("is_active", account.get("account_status") == 1),
+                },
+            )
+
     def clients(self, product: str | None = None):
         if product not in {None, "social_media", "meta_ads"}:
             raise ValueError("Unsupported client product.")
@@ -879,7 +920,19 @@ class DashboardRepository:
                                   AND ads_product.is_active
                             ),
                             '{}'::JSONB
-                        ) AS ads_configuration
+                        ) AS ads_configuration,
+                        COALESCE(
+                            (SELECT jsonb_agg(jsonb_build_object(
+                                'id', account.ad_account_id,
+                                'name', account.account_name,
+                                'account_status', account.account_status,
+                                'currency', account.currency,
+                                'timezone_name', account.timezone_name,
+                                'is_active', account.is_active
+                            ) ORDER BY account.account_name)
+                             FROM client_meta_ad_accounts account WHERE account.client_id=c.id),
+                            '[]'::jsonb
+                        ) AS meta_ad_accounts
                     FROM clients c
                     LEFT JOIN client_social_profiles p ON p.client_id = c.id
                     LEFT JOIN client_products cp ON cp.client_id = c.id
@@ -962,6 +1015,8 @@ class DashboardRepository:
                     "configuration": json.dumps(configuration),
                 },
             )
+            if product == "meta_ads" and "meta_ad_account_ids" in configuration:
+                self._sync_meta_ad_accounts(conn, client_id, configuration, payload or {})
             result = row_dict(client)
             result["product"] = product
             if product == "meta_ads":
@@ -1099,6 +1154,8 @@ class DashboardRepository:
                     "configuration": json.dumps(product_configuration),
                 },
             )
+            if product == "meta_ads" and "meta_ad_account_ids" in product_configuration:
+                self._sync_meta_ad_accounts(conn, row["id"], product_configuration, payload)
             result = row_dict(row)
             result["products"] = [product]
             if product == "meta_ads":

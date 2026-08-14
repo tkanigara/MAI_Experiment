@@ -3,7 +3,7 @@ import { formatDateTime } from "../lib/format";
 import { PLATFORM_LABELS } from "../lib/constants";
 import OpenIconButton from "./OpenIconButton";
 
-export default function AdsMonthCard({ period, platforms, onOpen, onUpdate, onEditGoals, onDelete }) {
+export default function AdsMonthCard({ period, platforms, onOpen, onUpdate, onSync, onEditGoals, onDelete }) {
   const ready = period.import_status === "success";
   const goals = Object.entries(period.ads_configuration?.goals || {}).flatMap(([platform, items]) => (
     (items || []).map((goal) => `${PLATFORM_LABELS[platform]} · ${goal.key.replaceAll("_", " ")}`)
@@ -32,6 +32,7 @@ export default function AdsMonthCard({ period, platforms, onOpen, onUpdate, onEd
         <button className="danger-link" type="button" onClick={() => onDelete(period)}>Delete</button>
         <button className="text-link" type="button" onClick={() => onEditGoals(period)}>Edit Goals &amp; KPI</button>
         <button className="text-link" type="button" onClick={() => onUpdate(period)}>Update Data</button>
+        <button className="text-link" type="button" onClick={() => onSync(period)}>Sync from Meta</button>
       </div>
     </article>
   );

@@ -14,7 +14,7 @@ function OverviewTable({ rows, cumulative = false }) {
   return <div className="table-scroll"><table className="ads-detail-table ads-overview-table"><thead><tr><th>Channel / Goal</th><th>Target</th><th>Actual</th><th>Achievement</th><th>Budget</th><th>Spend</th><th>Budget Use</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.platform}-${row.goal_key}`}><td><strong>{row.platform_label} · {row.goal_label}</strong><small>{row.status === "coming_soon" ? "Coming soon" : row.status === "missing_data" ? "Missing data" : "Ready"}</small></td><td>{formatNumber(row[targetKey])}</td><td>{formatNumber(row[actualKey])}</td><td>{row[achievementKey] === null ? "-" : formatNumber(row[achievementKey], "%")}</td><td>{formatCurrency(row[budgetKey])}</td><td>{formatCurrency(row[spendKey])}</td><td>{row[budgetUseKey] === null ? "-" : formatNumber(row[budgetUseKey], "%")}</td></tr>)}</tbody></table></div>;
 }
 
-export default function AdsPeriodDetailPage({ client, period, platformCatalog, overview, onNavigate, onOpenPlatform, onUpdate, onEditGoals }) {
+export default function AdsPeriodDetailPage({ client, period, platformCatalog, overview, onNavigate, onOpenPlatform, onUpdate, onSync, onEditGoals }) {
   const configured = new Set(client.ads_platforms || client.ads_configuration?.platforms || ADS_PLATFORMS);
   const monthlyCatalog = period.platform_catalog || platformCatalog;
   return (
@@ -26,7 +26,7 @@ export default function AdsPeriodDetailPage({ client, period, platformCatalog, o
       </div>
       <section className="upload-summary">
         <div><StatusBadge text={period.import_status === "success" ? "Report data imported" : "Missing data"} state={period.import_status === "success" ? "success" : "warning"} /><span>{period.uploaded_files || 0} Meta CSV files available</span></div>
-        <button className="secondary-button" type="button" onClick={() => onUpdate(period)}>Update Data</button>
+        <div className="page-actions"><button className="secondary-button" type="button" onClick={() => onUpdate(period)}>Import CSV</button><button className="primary-button" type="button" onClick={() => onSync(period)}>Sync from Meta</button></div>
       </section>
       <div className="ads-period-overviews">
         <section className="content-card ads-section-card"><div className="section-heading"><div><span className="eyebrow">Campaign Overview</span><h2>Campaign to Date</h2></div><span className="source-note">Through {period.period_label}</span></div>{overview ? <OverviewTable rows={overview.rows || []} cumulative /> : <div className="empty compact-empty">Loading campaign totals...</div>}</section>

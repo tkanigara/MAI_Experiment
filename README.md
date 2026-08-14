@@ -1,3 +1,4 @@
+
 # MAI Social Media Reporting
 
 Web dashboard untuk mengimpor data social media, mengelola KPI, menjalankan
@@ -116,19 +117,26 @@ Endpoint utama `POST /api/ads/imports` menerima multipart `client_id`, optional
 Ads `period_id`, dan enam file wajib dengan field `campaign`, `adset`, `ad`,
 `placement`, `demographic`, serta `region`. Alias lama
 `POST /api/import/meta-ads` masih tersedia sementara untuk kompatibilitas.
-Tanggal report dibaca dari CSV dan harus konsisten di keenam file. Import ulang
-periode yang sama mengganti snapshot secara atomik dan tidak menambah duplikat.
+Tanggal report dibaca dari CSV dan harus konsisten di keenam file. Setiap import
+disimpan sebagai snapshot append-only. Snapshot CSV dan API dapat hidup
+bersamaan, sedangkan sumber aktif dipilih terpisah untuk Instagram dan Facebook.
 
 Endpoint pendukung workspace:
 
 - `GET /api/clients?product=social_media|meta_ads`
 - `GET /api/client-products/summary`
 - `GET /api/ads/platforms`
+- `GET /api/ads/meta/status`
+- `GET /api/ads/meta/ad-accounts`
 - `POST /api/clients/{client_id}/products/{product}`
 - `DELETE /api/clients/{client_id}/products/{product}`
 - `GET /api/ads/clients/{client_id}/periods`
+- `POST /api/ads/clients/{client_id}/periods/{period_id}/sync`
+- `GET /api/ads/clients/{client_id}/periods/{period_id}/sources`
+- `PUT /api/ads/clients/{client_id}/periods/{period_id}/active-source`
 
-Database yang sudah ada harus menjalankan `db/migrations/007_meta_ads.sql`.
+Database yang sudah ada harus menjalankan migration secara berurutan sampai
+`db/migrations/009_meta_ads_api.sql`.
 Audit header, null, relationship, rekonsiliasi, serta keterbatasan export Bourbon
 ada di `docs/meta_ads_csv_audit.md`.
 
@@ -137,6 +145,9 @@ ada di `docs/meta_ads_csv_audit.md`.
 | Variable                               | Wajib | Keterangan                         |
 | -------------------------------------- | ----: | ---------------------------------- |
 | `DATABASE_URL`                       |    ya | SQLAlchemy URL ke PostgreSQL       |
+| `META_ADS_ACCESS_TOKEN`              |    ya | token backend untuk Meta Ads sync  |
+| `META_API_VERSION`                   | tidak | versi Graph API Meta               |
+| `META_ADS_API_TIMEOUT`               | tidak | timeout request Meta (detik)       |
 | `GEMINI_API_KEY`                     |    ya | credential Gemini                  |
 | `GEMINI_MODEL`                       | tidak | default`gemini-3.1-flash-lite`   |
 | `SLIDES_TEMPLATE_ID`                 |    ya | ID template Google Slides          |

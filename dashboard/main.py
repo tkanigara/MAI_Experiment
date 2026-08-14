@@ -31,6 +31,7 @@ try:
     from dashboard.services.csv_import import import_report_csv
     from dashboard.services.ads_workspace import ads_platform_catalog
     from dashboard.services.meta_ads_import import import_meta_ads_csv
+    from dashboard.services.meta_ads_api import MetaAdsApiClient, MetaAdsApiError, MetaAdsSyncService
     from dashboard.services.kpi_service import upsert_kpi_target
     from dashboard.services.agentic_report import generate_agentic_report
     from dashboard.services.report_editor import ReportEditorService
@@ -66,6 +67,7 @@ except ModuleNotFoundError:
     from services.csv_import import import_report_csv
     from services.ads_workspace import ads_platform_catalog
     from services.meta_ads_import import import_meta_ads_csv
+    from services.meta_ads_api import MetaAdsApiClient, MetaAdsApiError, MetaAdsSyncService
     from services.kpi_service import upsert_kpi_target
     from services.agentic_report import generate_agentic_report
     from services.report_editor import ReportEditorService
@@ -84,6 +86,8 @@ except ModuleNotFoundError:
 
 repository = DashboardRepository()
 meta_ads_repository = MetaAdsRepository(repository.engine)
+meta_ads_api = MetaAdsApiClient()
+meta_ads_sync = MetaAdsSyncService(meta_ads_repository, meta_ads_api)
 report_editor = ReportEditorService(repository.engine)
 report_job_repository = ReportJobRepository(repository.engine)
 report_job_worker = ReportJobWorker(
@@ -150,6 +154,26 @@ def duplicate_client_message(exc: Exception) -> str:
     return message
 
 
+def hydrate_meta_account_payload(payload: dict | None) -> dict:
+    result = dict(payload or {})
+    if "meta_ad_account_ids" not in result:
+        return result
+    selected = {str(item) for item in result.get("meta_ad_account_ids") or []}
+    if not selected:
+        result["_meta_ad_accounts"] = []
+        return result
+    accounts = meta_ads_api.ad_accounts()
+    indexed = {account["id"]: account for account in accounts}
+    missing = selected.difference(indexed)
+    if missing:
+        raise ValueError("One or more selected Meta Ad Accounts are not accessible.")
+    inactive = [indexed[item]["name"] for item in selected if not indexed[item]["is_active"]]
+    if inactive:
+        raise ValueError("Inactive Meta Ad Accounts cannot be selected: " + ", ".join(inactive))
+    result["_meta_ad_accounts"] = [indexed[item] for item in selected]
+    return result
+
+
 @app.get("/api/clients")
 def get_clients(product: Optional[str] = None):
     try:
@@ -166,12 +190,16 @@ def get_client_product_summary():
 @app.post("/api/clients/{client_id}/products/{product}")
 def activate_client_product(client_id: str, product: str, payload: Optional[dict] = None):
     try:
+        if product == "meta_ads":
+            payload = hydrate_meta_account_payload(payload)
         return json_response(
             repository.activate_client_product(client_id, product, payload),
             status_code=201,
         )
     except ValueError as exc:
         raise bad_request(exc)
+    except MetaAdsApiError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
 
 
 @app.delete("/api/clients/{client_id}/products/{product}")
@@ -185,6 +213,8 @@ def deactivate_client_product(client_id: str, product: str):
 @app.post("/api/clients")
 def create_client(payload: dict):
     try:
+        if str(payload.get("product") or "social_media") == "meta_ads":
+            payload = hydrate_meta_account_payload(payload)
         return json_response(repository.create_client(payload), status_code=201)
     except ValueError as exc:
         raise bad_request(exc)
@@ -242,8 +272,14 @@ def update_report_period(client_id: str, period_id: str, payload: dict):
         )
     except (ReportDataLockedError, ReportPeriodAlreadyExistsError):
         raise
+    except MetaAdsApiError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    except MetaAdsApiError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
     except ValueError as exc:
         raise bad_request(exc)
+    except MetaAdsApiError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -361,6 +397,53 @@ def get_meta_ads_periods(client_id: str):
 @app.get("/api/ads/platforms")
 def get_ads_platforms():
     return json_response(ads_platform_catalog())
+
+
+@app.get("/api/ads/meta/status")
+def get_meta_ads_status():
+    return json_response(meta_ads_api.status())
+
+
+@app.get("/api/ads/meta/ad-accounts")
+def get_meta_ad_accounts():
+    try:
+        return json_response(meta_ads_api.ad_accounts())
+    except MetaAdsApiError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+
+
+@app.post("/api/ads/clients/{client_id}/periods")
+def create_ads_period(client_id: str, payload: dict):
+    try:
+        return json_response(meta_ads_repository.create_period(client_id, payload), status_code=201)
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.post("/api/ads/clients/{client_id}/periods/{period_id}/sync")
+def sync_meta_ads(client_id: str, period_id: str, payload: dict):
+    try:
+        return json_response(meta_ads_sync.sync(client_id, period_id, payload), status_code=201)
+    except MetaAdsApiError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/sources")
+def get_ads_sources(client_id: str, period_id: str):
+    try:
+        return json_response(meta_ads_repository.sources(client_id, period_id))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.put("/api/ads/clients/{client_id}/periods/{period_id}/active-source")
+def select_ads_source(client_id: str, period_id: str, payload: dict):
+    try:
+        return json_response(meta_ads_repository.select_source(client_id, period_id, payload.get("platform"), payload.get("import_id")))
+    except (TypeError, ValueError) as exc:
+        raise bad_request(exc)
 
 
 @app.get("/api/ads/clients/{client_id}/periods/{period_id}/platforms/{platform}")

@@ -18,7 +18,7 @@ ADS_GOAL_DEFINITIONS = {
     "facebook": (
         {"key": "reach", "label": "Reach", "family": "awareness", "source_metric": "reach"},
         {"key": "engagement", "label": "Engagement", "family": "engagement", "source_metric": "actions:post_interaction_gross"},
-        {"key": "page_likes", "label": "Page Likes", "family": "profile_growth", "source_metric": "page_like"},
+        {"key": "page_likes", "label": "Page Likes", "family": "profile_growth", "source_metric": "page_like|profile_visit_view"},
     ),
     "youtube": (
         {"key": "impressions", "label": "Impressions", "family": "awareness", "source_metric": "impressions"},
@@ -83,6 +83,25 @@ def normalize_ads_platforms(value, *, use_default: bool = True) -> list[str]:
     return ordered
 
 
+def normalize_meta_ad_account_ids(value) -> list[str]:
+    if isinstance(value, dict):
+        value = value.get("meta_ad_account_ids", [])
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple, set)):
+        raise ValueError("Meta Ad Accounts must be a list.")
+    result = []
+    for item in value:
+        account_id = str(item or "").strip()
+        if not account_id:
+            continue
+        if not account_id.startswith("act_"):
+            account_id = f"act_{account_id}"
+        if account_id not in result:
+            result.append(account_id)
+    return result
+
+
 def _number_or_none(value, field: str):
     if value is None or value == "":
         return None
@@ -139,7 +158,10 @@ def normalize_ads_goals(
 
 
 def ads_product_configuration(value=None) -> dict:
-    return {"platforms": normalize_ads_platforms(value)}
+    configuration = {"platforms": normalize_ads_platforms(value)}
+    if isinstance(value, dict) and "meta_ad_account_ids" in value:
+        configuration["meta_ad_account_ids"] = normalize_meta_ad_account_ids(value)
+    return configuration
 
 
 def ads_period_configuration(value=None, platforms=None) -> dict:
