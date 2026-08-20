@@ -66,6 +66,8 @@ def test_profile_growth_metrics_use_platform_specific_meta_values():
     assert _instagram_profile_visits({}, {"profile_visit_view": 12}) == 12
     assert _facebook_page_likes({"page_like": 7}) == 7
     assert _facebook_page_likes({"profile_visit_view": 53}) == 53
+    assert _instagram_profile_visits({}, {}) is None
+    assert _facebook_page_likes({}) is None
 
 
 class FakeRepository:
@@ -76,6 +78,9 @@ class FakeRepository:
 
     def sync_context(self, _client, _period, _accounts, _goals):
         return {"accounts": self.accounts, "period_start": date(2026, 7, 1), "period_end": date(2026, 7, 31), "goals": {"instagram": [{"key": "reach"}]}}
+
+    def resolve_sync_range(self, period_start, date_range):
+        return {"preset": "month_to_date", "start": period_start, "end": date(2026, 7, 31)}
 
     def start_api_snapshot(self, *_args):
         return "11111111-1111-1111-1111-111111111111"

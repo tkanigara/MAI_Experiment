@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-ADS_PLATFORM_KEYS = ("instagram", "facebook", "youtube", "tiktok")
+ADS_PLATFORM_KEYS = ("instagram", "facebook", "google_sem", "google_gdn", "youtube", "tiktok")
 DEFAULT_ADS_PLATFORMS = ADS_PLATFORM_KEYS
 GOAL_TARGET_FIELDS = (
     "target_monthly",
@@ -13,20 +13,41 @@ ADS_GOAL_DEFINITIONS = {
     "instagram": (
         {"key": "reach", "label": "Reach", "family": "awareness", "source_metric": "reach"},
         {"key": "engagement", "label": "Engagement", "family": "engagement", "source_metric": "actions:post_interaction_gross"},
-        {"key": "profile_visits", "label": "Profile Visits", "family": "profile_growth", "source_metric": "profile_visit_view"},
+        {"key": "views", "label": "Views", "family": "awareness", "source_metric": "video_views"},
+        {"key": "link_clicks", "label": "Link Clicks", "family": "traffic", "source_metric": "link_clicks"},
+        {"key": "leads", "label": "Leads", "family": "conversion", "source_metric": "leads"},
     ),
     "facebook": (
         {"key": "reach", "label": "Reach", "family": "awareness", "source_metric": "reach"},
         {"key": "engagement", "label": "Engagement", "family": "engagement", "source_metric": "actions:post_interaction_gross"},
-        {"key": "page_likes", "label": "Page Likes", "family": "profile_growth", "source_metric": "page_like|profile_visit_view"},
+        {"key": "views", "label": "Views", "family": "awareness", "source_metric": "video_views"},
+        {"key": "link_clicks", "label": "Link Clicks", "family": "traffic", "source_metric": "link_clicks"},
+        {"key": "leads", "label": "Leads", "family": "conversion", "source_metric": "leads"},
+    ),
+    "google_sem": (
+        {"key": "performance", "label": "Performance", "family": "traffic", "source_metric": "clicks"},
+    ),
+    "google_gdn": (
+        {"key": "performance", "label": "Performance", "family": "traffic", "source_metric": "clicks"},
     ),
     "youtube": (
-        {"key": "impressions", "label": "Impressions", "family": "awareness", "source_metric": "impressions"},
         {"key": "video_views", "label": "Video Views", "family": "awareness", "source_metric": "video_views"},
     ),
     "tiktok": (
-        {"key": "video_views", "label": "Video Views", "family": "awareness", "source_metric": "video_views"},
-        {"key": "follows", "label": "Paid Follows", "family": "profile_growth", "source_metric": "paid_follows"},
+        {"key": "reach", "label": "Reach", "family": "awareness", "source_metric": "reach"},
+        {"key": "views", "label": "Views", "family": "awareness", "source_metric": "video_views"},
+        {"key": "traffic", "label": "Traffic", "family": "traffic", "source_metric": "destination_clicks"},
+        {"key": "community_interaction", "label": "Community Interaction", "family": "community", "source_metric": "paid_follows"},
+        {"key": "leads", "label": "Leads", "family": "conversion", "source_metric": "leads"},
+    ),
+}
+
+LEGACY_ADS_GOAL_DEFINITIONS = {
+    "instagram": (
+        {"key": "profile_visits", "label": "Profile Visits", "family": "profile_growth", "source_metric": "profile_visit_view"},
+    ),
+    "facebook": (
+        {"key": "page_likes", "label": "Page Likes", "family": "profile_growth", "source_metric": "page_like|profile_visit_view"},
     ),
 }
 
@@ -46,6 +67,22 @@ ADS_PLATFORM_DEFINITIONS = (
         "source_label": "Meta Ads",
         "ingestion_status": "available",
         "storage_status": "available",
+    },
+    {
+        "key": "google_sem",
+        "label": "Google SEM",
+        "source": "google_ads",
+        "source_label": "Google Ads",
+        "ingestion_status": "coming_soon",
+        "storage_status": "not_created",
+    },
+    {
+        "key": "google_gdn",
+        "label": "Google Display Network",
+        "source": "google_ads",
+        "source_label": "Google Ads",
+        "ingestion_status": "coming_soon",
+        "storage_status": "not_created",
     },
     {
         "key": "youtube",
@@ -126,7 +163,8 @@ def normalize_ads_goals(
     result = {}
     for platform in platforms:
         definitions = ADS_GOAL_DEFINITIONS[platform]
-        allowed = {item["key"]: item for item in definitions}
+        legacy_definitions = LEGACY_ADS_GOAL_DEFINITIONS.get(platform, ())
+        allowed = {item["key"]: item for item in (*definitions, *legacy_definitions)}
         selected = raw_goals.get(platform, []) if isinstance(raw_goals, dict) else None
         if selected is None and use_default:
             selected = [item["key"] for item in definitions]
@@ -198,7 +236,10 @@ def ads_platform_catalog(configured_platforms=None, period_configuration=None) -
                         for item in active_goals.get(definition["key"], [])
                     ),
                 }
-                for goal in ADS_GOAL_DEFINITIONS[definition["key"]]
+                for goal in (
+                    *ADS_GOAL_DEFINITIONS[definition["key"]],
+                    *LEGACY_ADS_GOAL_DEFINITIONS.get(definition["key"], ()),
+                )
             ],
             "active_goals": active_goals.get(definition["key"], []),
         }

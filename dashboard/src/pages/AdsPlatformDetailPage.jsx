@@ -31,6 +31,20 @@ function sourceOptionLabel(item, client) {
   return `${sourceName(item.source)}${accountPart} · ${formatDateTime(item.sync_completed_at || item.imported_at)}`;
 }
 
+function sourceRangeLabel(item) {
+  if (!item?.data_start || !item?.data_end) return "Date range unavailable";
+  const format = (value) => new Date(`${value}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const preset = item.date_preset === "month_to_date" ? "Month to date"
+    : item.date_preset === "last_7_days" ? "Last 7 days"
+      : item.date_preset === "full_month" ? "Full month"
+        : item.date_preset === "custom" ? "Custom" : "Imported range";
+  return `${preset}: ${format(item.data_start)} – ${format(item.data_end)}`;
+}
+
+function sourceOptionLabelWithRange(item, client) {
+  return `${sourceOptionLabel(item, client)} · ${sourceRangeLabel(item)}`;
+}
+
 function goalCards(goal) {
   const common = [
     [goal.label, formatNumber(goal.metrics.result_value)],
@@ -103,8 +117,9 @@ export default function AdsPlatformDetailPage({ client, period, platform, detail
           <div><span>{activeSource === "api" ? "Last synced" : "Last imported"}</span><strong>{formatDateTime(activeTimestamp)}</strong></div>
           <div><span>Ad account{activeAccountLabels.length === 1 ? "" : "s"}</span><strong>{activeAccountLabels.length ? activeAccountLabels.join(", ") : "Not applicable for CSV upload"}</strong></div>
           <div><span>Platform coverage</span><strong>{platformScopeLabel(detail.period.platform_scope)}</strong></div>
+          <div><span>Data range</span><strong>{sourceRangeLabel(detail.period)}</strong></div>
         </div>
-        {(detail.sources || []).length > 1 && <label className="source-selector"><span>View data from</span><select value={detail.period.import_id || ""} onChange={(event) => onSelectSource(event.target.value)}>{detail.sources.filter((item) => item.status === "success").map((item) => <option value={item.id} key={item.id}>{sourceOptionLabel(item, client)}</option>)}</select><small>Changing this selection updates the data displayed for {PLATFORM_LABELS[platform]} only.</small></label>}
+        {(detail.sources || []).length > 1 && <label className="source-selector"><span>View data from</span><select value={detail.period.import_id || ""} onChange={(event) => onSelectSource(event.target.value)}>{detail.sources.filter((item) => item.status === "success").map((item) => <option value={item.id} key={item.id}>{sourceOptionLabelWithRange(item, client)}</option>)}</select><small>Changing this selection updates the data displayed for {PLATFORM_LABELS[platform]} only.</small></label>}
       </section>}
 
       {!detail ? <div className="empty"><h2>Loading platform performance...</h2></div> : detail.data_status === "not_configured" ? (

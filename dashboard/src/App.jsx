@@ -5,7 +5,9 @@ import AddReportModal from "./components/AddReportModal";
 import DeleteClientModal from "./components/DeleteClientModal";
 import DeleteReportMonthModal from "./components/DeleteReportMonthModal";
 import EditKpiModal from "./components/EditKpiModal";
-import EditAdsPeriodGoalsModal from "./components/EditAdsPeriodGoalsModal";
+import ObjectiveKpiModal from "./components/ObjectiveKpiModal";
+import CampaignObjectiveModal from "./components/CampaignObjectiveModal";
+import MetricDisplaySettingsModal from "./components/MetricDisplaySettingsModal";
 import GenerateReportModal from "./components/GenerateReportModal";
 import Header from "./components/Header";
 import MetaAdsImportModal from "./components/MetaAdsImportModal";
@@ -18,6 +20,8 @@ import AdsClientDetailPage from "./pages/AdsClientDetailPage";
 import AdsClientsPage from "./pages/AdsClientsPage";
 import AdsPeriodDetailPage from "./pages/AdsPeriodDetailPage";
 import AdsPlatformDetailPage from "./pages/AdsPlatformDetailPage";
+import AdsAnalysisPage from "./pages/AdsAnalysisPage";
+import AdsDataEditorPage from "./pages/AdsDataEditorPage";
 import ClientsPage from "./pages/ClientsPage";
 import MonthDetailPage from "./pages/MonthDetailPage";
 import PlatformDetailPage from "./pages/PlatformDetailPage";
@@ -34,9 +38,14 @@ function pathParts() {
 }
 
 function workspaceFromPath() {
-  const first = pathParts()[0];
+  const parts = pathParts();
+  const first = parts[0];
   if (first === "ads") return "ads";
-  if (first === "social" || first === "clients" || first === "report-jobs") return "social";
+  if (first === "social" || first === "report-jobs") return "social";
+  // `/clients` was the old landing page before workspace selection existed.
+  // Preserve legacy client/month deep links, but let the old bare landing URL
+  // fall back to the new workspace selector.
+  if (first === "clients" && parts.length > 1) return "social";
   return null;
 }
 
@@ -76,6 +85,9 @@ export default function App() {
   const [editClient, setEditClient] = useState(null);
   const [editAdsClient, setEditAdsClient] = useState(null);
   const [editAdsPeriodGoals, setEditAdsPeriodGoals] = useState(null);
+  const [campaignObjectivePeriod, setCampaignObjectivePeriod] = useState(null);
+  const [showMetricSettings, setShowMetricSettings] = useState(false);
+  const [metricSettingsVersion, setMetricSettingsVersion] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
   const [deleteReportMonthTarget, setDeleteReportMonthTarget] = useState(null);
@@ -702,7 +714,9 @@ export default function App() {
     setAdsPeriodOverview(null);
     loadClients().catch((err) => setError(err.message));
     const first = pathParts()[0];
-    if (["clients", "report-jobs"].includes(first)) {
+    if (first === "clients" && pathParts().length === 1) {
+      navigate("/", true);
+    } else if (["clients", "report-jobs"].includes(first)) {
       navigate(`/social${window.location.pathname}${window.location.search}`, true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -794,6 +808,7 @@ export default function App() {
       || !selectedClient?.id
       || !currentAdsPeriod?.id
       || !currentAdsPlatform
+      || ["creative", "adsets", "edit"].includes(currentAdsPlatform)
     ) {
       setAdsPlatformDetail(null);
       return;
@@ -916,6 +931,7 @@ export default function App() {
       );
     }
     if (currentClient && selectedClient && currentAdsPeriod && !currentAdsPlatform) {
+      const sourcePath = `/ads/clients/${clientSlug(selectedClient)}/${adsPeriodSlug(currentAdsPeriod)}/instagram`;
       content = (
         <AdsPeriodDetailPage
           client={selectedClient}
@@ -927,10 +943,46 @@ export default function App() {
           onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
           onSync={(period) => setAdsSyncContext({ period, platform: null })}
           onEditGoals={setEditAdsPeriodGoals}
+          onReviewObjectives={() => setCampaignObjectivePeriod(currentAdsPeriod)}
+          onMetricSettings={() => setShowMetricSettings(true)}
+          onSources={() => navigate(sourcePath)}
         />
       );
     }
-    if (currentClient && selectedClient && currentAdsPeriod && currentAdsPlatform) {
+    if (currentClient && selectedClient && currentAdsPeriod && ["creative", "adsets"].includes(currentAdsPlatform)) {
+      const sourcePath = `/ads/clients/${clientSlug(selectedClient)}/${adsPeriodSlug(currentAdsPeriod)}/instagram`;
+      content = <AdsAnalysisPage
+        client={selectedClient}
+        period={currentAdsPeriod}
+        dimension={currentAdsPlatform === "creative" ? "creative" : "adset"}
+        refreshKey={metricSettingsVersion}
+        onNavigate={navigate}
+        onReviewObjectives={() => setCampaignObjectivePeriod(currentAdsPeriod)}
+        onGoals={() => setEditAdsPeriodGoals(currentAdsPeriod)}
+        onMetrics={() => setShowMetricSettings(true)}
+        onSync={() => setAdsSyncContext({ period: currentAdsPeriod, platform: null })}
+        onImport={() => { setAdsImportPeriod(currentAdsPeriod); setModal("add-ads-import"); }}
+        onSources={() => navigate(sourcePath)}
+      />;
+    }
+    if (currentClient && selectedClient && currentAdsPeriod && currentAdsPlatform === "edit") {
+      const sourcePath = `/ads/clients/${clientSlug(selectedClient)}/${adsPeriodSlug(currentAdsPeriod)}/instagram`;
+      content = <AdsDataEditorPage
+        client={selectedClient}
+        period={currentAdsPeriod}
+        onNavigate={navigate}
+        onSaved={() => { setMetricSettingsVersion((value) => value + 1); showToast("Ads data updated."); }}
+        navigationActions={{
+          onReviewObjectives: () => setCampaignObjectivePeriod(currentAdsPeriod),
+          onGoals: () => setEditAdsPeriodGoals(currentAdsPeriod),
+          onMetrics: () => setShowMetricSettings(true),
+          onSync: () => setAdsSyncContext({ period: currentAdsPeriod, platform: null }),
+          onImport: () => { setAdsImportPeriod(currentAdsPeriod); setModal("add-ads-import"); },
+          onSources: () => navigate(sourcePath),
+        }}
+      />;
+    }
+    if (currentClient && selectedClient && currentAdsPeriod && currentAdsPlatform && !["creative", "adsets", "edit"].includes(currentAdsPlatform)) {
       content = (
         <AdsPlatformDetailPage
           client={selectedClient}
@@ -1125,7 +1177,9 @@ export default function App() {
       <Header
         activeSection={isGlobalReportJobs ? "report-jobs" : "clients"}
         workspace={workspace}
+        currentClient={selectedClient}
         onNavigate={navigate}
+        onOpenMetricSettings={() => setShowMetricSettings(true)}
       />
       <main className="page-shell">
         {error ? <div className="empty">{error}</div> : content}
@@ -1311,10 +1365,14 @@ export default function App() {
         />
       )}
       {isAdsWorkspace && editAdsPeriodGoals && selectedClient && (
-        <EditAdsPeriodGoalsModal
+        <ObjectiveKpiModal
           client={selectedClient}
           period={editAdsPeriodGoals}
           onClose={() => setEditAdsPeriodGoals(null)}
+          onReviewObjectives={() => {
+            setCampaignObjectivePeriod(editAdsPeriodGoals);
+            setEditAdsPeriodGoals(null);
+          }}
           onSave={async (payload) => {
             await api(`/api/ads/clients/${selectedClient.id}/periods/${editAdsPeriodGoals.id}/configuration`, {
               method: "PUT",
@@ -1323,6 +1381,28 @@ export default function App() {
             await loadAdsClient(selectedClient);
             setEditAdsPeriodGoals(null);
             showToast(`${editAdsPeriodGoals.period_label} goals and KPI updated.`);
+          }}
+        />
+      )}
+      {isAdsWorkspace && campaignObjectivePeriod && selectedClient && (
+        <CampaignObjectiveModal
+          client={selectedClient}
+          period={campaignObjectivePeriod}
+          onClose={() => setCampaignObjectivePeriod(null)}
+          onSaved={async () => {
+            await loadAdsClient(selectedClient);
+            showToast("Campaign objectives confirmed.");
+          }}
+        />
+      )}
+      {isAdsWorkspace && showMetricSettings && selectedClient && (
+        <MetricDisplaySettingsModal
+          client={selectedClient}
+          onClose={() => setShowMetricSettings(false)}
+          onSaved={() => {
+            setShowMetricSettings(false);
+            setMetricSettingsVersion((version) => version + 1);
+            showToast("Metric display settings updated.");
           }}
         />
       )}

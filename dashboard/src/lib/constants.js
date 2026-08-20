@@ -1,9 +1,11 @@
 export const PLATFORMS = ["instagram", "facebook", "tiktok", "youtube", "linkedin", "threads"];
-export const ADS_PLATFORMS = ["instagram", "facebook", "youtube", "tiktok"];
+export const ADS_PLATFORMS = ["instagram", "facebook", "google_sem", "google_gdn", "youtube", "tiktok"];
 
 export const ADS_PLATFORM_SOURCES = {
   instagram: { key: "meta", label: "Meta Ads", available: true },
   facebook: { key: "meta", label: "Meta Ads", available: true },
+  google_sem: { key: "google_sem", label: "Google Ads", available: false },
+  google_gdn: { key: "google_gdn", label: "Google Ads", available: false },
   youtube: { key: "google_ads", label: "Google Ads", available: false },
   tiktok: { key: "tiktok_ads", label: "TikTok Ads", available: false },
 };
@@ -12,20 +14,29 @@ export const ADS_GOALS = {
   instagram: [
     { key: "reach", label: "Reach", family: "Awareness" },
     { key: "engagement", label: "Engagement", family: "Engagement" },
-    { key: "profile_visits", label: "Profile Visits", family: "Profile Growth" },
+    { key: "views", label: "Views", family: "Awareness" },
+    { key: "link_clicks", label: "Link Clicks", family: "Traffic" },
+    { key: "leads", label: "Leads", family: "Conversion" },
   ],
   facebook: [
     { key: "reach", label: "Reach", family: "Awareness" },
     { key: "engagement", label: "Engagement", family: "Engagement" },
-    { key: "page_likes", label: "Page Likes", family: "Profile Growth" },
+    { key: "views", label: "Views", family: "Awareness" },
+    { key: "link_clicks", label: "Link Clicks", family: "Traffic" },
+    { key: "leads", label: "Leads", family: "Conversion" },
   ],
+  google_sem: [{ key: "performance", label: "Performance", family: "Traffic" }],
+  google_gdn: [{ key: "performance", label: "Performance", family: "Traffic" }],
   youtube: [
     { key: "impressions", label: "Impressions", family: "Awareness" },
     { key: "video_views", label: "Video Views", family: "Awareness" },
   ],
   tiktok: [
-    { key: "video_views", label: "Video Views", family: "Awareness" },
-    { key: "follows", label: "Paid Follows", family: "Profile Growth" },
+    { key: "reach", label: "Reach", family: "Awareness" },
+    { key: "views", label: "Views", family: "Awareness" },
+    { key: "traffic", label: "Traffic", family: "Traffic" },
+    { key: "community_interaction", label: "Community Interaction", family: "Community" },
+    { key: "leads", label: "Leads", family: "Conversion" },
   ],
 };
 
@@ -34,6 +45,8 @@ export const PLATFORM_LABELS = {
   facebook: "Facebook",
   tiktok: "TikTok",
   youtube: "YouTube",
+  google_sem: "Google SEM",
+  google_gdn: "Google Display Network",
   linkedin: "LinkedIn",
   threads: "Threads",
 };

@@ -19,11 +19,13 @@ class MetaAdsApiError(RuntimeError):
         self.status = status
 
 
-def _number(value: Any) -> float:
+def _number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
     try:
-        return float(value or 0)
+        return float(value)
     except (TypeError, ValueError):
-        return 0.0
+        return None
 
 
 def _actions(row: dict) -> dict[str, float]:
@@ -31,12 +33,13 @@ def _actions(row: dict) -> dict[str, float]:
     for item in row.get("actions") or []:
         key = str(item.get("action_type") or "").lower()
         if key:
-            result[key] = result.get(key, 0) + _number(item.get("value"))
+            result[key] = result.get(key, 0) + (_number(item.get("value")) or 0)
     return result
 
 
-def _action_value(actions: dict[str, float], aliases: tuple[str, ...]) -> float:
-    return sum(actions.get(alias, 0) for alias in aliases)
+def _action_value(actions: dict[str, float], aliases: tuple[str, ...]) -> float | None:
+    values = [actions[alias] for alias in aliases if alias in actions]
+    return sum(values) if values else None
 
 
 def _instagram_profile_visits(row: dict, actions: dict[str, float]) -> float:
@@ -209,7 +212,7 @@ class MetaAdsApiClient:
             params["breakdowns"] = ",".join(breakdowns)
         return self._all(f"{account_id}/insights", params)
 
-    def fetch_account_snapshot(self, account: dict, start: date, end: date, platforms: list[str], goals: dict) -> dict:
+    def fetch_account_snapshot(self, account: dict, start: date, end: date, platforms: list[str], goals: dict | None = None) -> dict:
         account_id = account["id"]
         campaign_meta, adset_meta, ad_meta, raw_ads = self._entities(account_id)
         level_rows = {level: self._insights(account_id, start, end, level=level) for level in ("campaign", "adset", "ad")}
@@ -217,7 +220,7 @@ class MetaAdsApiClient:
         demographic_rows = self._insights(account_id, start, end, breakdowns=["age", "gender"])
         region_rows = self._insights(account_id, start, end, breakdowns=["region"])
 
-        def normalized(row: dict, row_number: int, result_type: str, result_value: float, scope_platform: str) -> dict:
+        def normalized(row: dict, row_number: int, scope_platform: str) -> dict:
             actions = _actions(row)
             campaign = campaign_meta.get(str(row.get("campaign_id"))) or {}
             adset = adset_meta.get(str(row.get("adset_id"))) or {}
@@ -226,57 +229,65 @@ class MetaAdsApiClient:
             impressions = _number(row.get("impressions"))
             spend = _number(row.get("spend"))
             engagements = _action_value(actions, ("post_engagement", "post_interaction_gross"))
-            link_clicks = _number(row.get("inline_link_clicks")) or _action_value(actions, ("link_click", "outbound_click"))
+            direct_link_clicks = _number(row.get("inline_link_clicks"))
+            link_clicks = direct_link_clicks if direct_link_clicks is not None else _action_value(actions, ("link_click", "outbound_click"))
+            interactions = _action_value(actions, ("post_interaction_gross", "post_engagement"))
+            post_shares = _action_value(actions, ("post", "post_share", "share"))
+            post_saves = _action_value(actions, ("post_save", "save"))
+            post_reactions = _action_value(actions, ("post_reaction", "like", "onsite_conversion.post_reaction"))
+            post_comments = _action_value(actions, ("comment", "post_comment"))
+            video_views = _action_value(actions, ("video_view",))
+            thruplay = _action_value(actions, ("video_thruplay_watched_actions", "thruplay"))
+            leads = _action_value(actions, ("lead", "onsite_conversion.lead_grouped", "offsite_conversion.fb_pixel_lead"))
+            profile_visits = _instagram_profile_visits(row, actions)
+            page_likes = _facebook_page_likes(actions)
+            campaign_objective = campaign.get("objective")
+            optimization_goal = adset.get("optimization_goal")
+            signals = f"{campaign_objective or ''} {optimization_goal or ''}".upper()
+            if "LEAD" in signals:
+                result_type, result_value = "lead", leads
+            elif "VIDEO" in signals or "THRUPLAY" in signals:
+                result_type, result_value = "video_view", thruplay or video_views
+            elif "LINK_CLICK" in signals or "TRAFFIC" in signals or "LANDING_PAGE" in signals:
+                result_type, result_value = "link_click", link_clicks
+            elif "POST_ENGAGEMENT" in signals or "ENGAGEMENT" in signals:
+                result_type, result_value = "post_engagement", engagements
+            else:
+                result_type, result_value = "reach", reach
             return {
                 "meta_ad_account_id": account_id,
                 "campaign_external_id": row.get("campaign_id"), "campaign_name": row.get("campaign_name") or campaign.get("name") or "Unnamed campaign",
                 "adset_external_id": row.get("adset_id"), "adset_name": row.get("adset_name") or adset.get("name") or "Unnamed ad set",
                 "ad_external_id": row.get("ad_id"), "ad_name": row.get("ad_name") or ad.get("name") or "Unnamed ad",
-                "source_row_key": _hash_key(account_id, scope_platform, row.get("campaign_id"), row.get("adset_id"), row.get("ad_id"), row.get("publisher_platform"), row.get("platform_position"), row.get("impression_device"), row.get("age"), row.get("gender"), row.get("region"), result_type),
+                "source_row_key": _hash_key(account_id, scope_platform, row.get("campaign_id"), row.get("adset_id"), row.get("ad_id"), row.get("publisher_platform"), row.get("platform_position"), row.get("impression_device"), row.get("age"), row.get("gender"), row.get("region")),
                 "source_row_number": row_number, "reporting_start": row.get("date_start") or start, "reporting_end": row.get("date_stop") or end,
                 "delivery_status": ad.get("effective_status") or adset.get("effective_status") or campaign.get("effective_status"),
-                "result_value": result_value, "result_type": result_type, "cost_per_result": spend / result_value if result_value else None,
-                "spend": spend, "impressions": impressions, "reach": reach, "frequency": _number(row.get("frequency")) or (impressions / reach if reach else None),
-                "post_engagements": engagements, "link_clicks": link_clicks, "link_ctr": link_clicks / impressions * 100 if impressions else None,
-                "instagram_follows": _number(row.get("instagram_profile_follow")) or _action_value(actions, ("follow", "instagram_profile_follow")),
+                "result_value": result_value, "result_type": result_type, "cost_per_result": spend / result_value if spend is not None and result_value else None,
+                "spend": spend, "impressions": impressions, "reach": reach, "frequency": _number(row.get("frequency")) if _number(row.get("frequency")) is not None else (impressions / reach if impressions is not None and reach else None),
+                "post_engagements": engagements, "link_clicks": link_clicks, "link_ctr": link_clicks / impressions * 100 if link_clicks is not None and impressions else None,
+                "campaign_objective": campaign_objective, "optimization_goal": optimization_goal,
+                "interactions": interactions, "post_shares": post_shares, "post_saves": post_saves,
+                "post_reactions": post_reactions, "post_comments": post_comments,
+                "video_views": video_views, "thruplay": thruplay, "leads": leads,
+                "destination_clicks": link_clicks,
+                "profile_visits": profile_visits, "page_likes": page_likes,
+                "instagram_follows": _number(row.get("instagram_profile_follow")) if _number(row.get("instagram_profile_follow")) is not None else _action_value(actions, ("follow", "instagram_profile_follow")),
                 "page_engagements": _action_value(actions, ("page_engagement",)),
                 "publisher_platform": row.get("publisher_platform"), "placement": row.get("platform_position"), "device_platform": row.get("impression_device"),
                 "age": row.get("age"), "gender": row.get("gender"), "region": row.get("region"),
                 "raw_data": {**row, "campaign_objective": campaign.get("objective"), "optimization_goal": adset.get("optimization_goal")},
             }
 
-        goal_specs = []
-        for platform in platforms:
-            for goal in goals.get(platform, []):
-                key = goal.get("key") if isinstance(goal, dict) else goal
-                goal_specs.append((platform, key))
-
-        def result_for(row: dict, platform: str, goal: str) -> tuple[str, float]:
-            actions = _actions(row)
-            if goal == "reach": return "reach", _number(row.get("reach"))
-            if goal == "engagement": return "post_engagement", _action_value(actions, ("post_engagement", "post_interaction_gross"))
-            if goal == "profile_visits": return "profile_visit", _instagram_profile_visits(row, actions)
-            if goal == "page_likes": return "page_like", _facebook_page_likes(actions)
-            return str(goal), 0
-
         datasets: dict[str, list[dict]] = {key: [] for key in ("campaign", "adset", "ad", "placement", "demographic", "region")}
         for kind, rows in level_rows.items():
             for index, row in enumerate(rows, 1):
-                for platform, goal in goal_specs:
-                    result_type, value = result_for(row, platform, goal)
-                    datasets[kind].append(normalized(row, index, result_type, value, platform))
+                datasets[kind].append(normalized(row, index, "meta"))
         for kind, rows in (("placement", placement_rows), ("demographic", demographic_rows), ("region", region_rows)):
             for index, row in enumerate(rows, 1):
                 publisher = str(row.get("publisher_platform") or "").lower()
-                breakdown_goals = goal_specs if kind == "placement" else [("shared", goal) for goal in dict.fromkeys(goal for _platform, goal in goal_specs)]
-                for platform, goal in breakdown_goals:
-                    if kind == "placement" and publisher and publisher != platform:
-                        continue
-                    result_type, value = result_for(row, platform, goal)
-                    item = normalized(row, index, result_type, value, platform)
-                    if kind != "placement":
-                        item["publisher_platform"] = platform
-                    datasets[kind].append(item)
+                if kind == "placement" and publisher not in platforms:
+                    continue
+                datasets[kind].append(normalized(row, index, publisher or "meta"))
 
         fetched_at = datetime.now(timezone.utc)
         creatives = []
@@ -309,6 +320,7 @@ class MetaAdsSyncService:
         if not account_ids:
             raise ValueError("Select at least one Meta Ad Account.")
         context = self.repository.sync_context(client_id, period_id, account_ids, payload.get("goals"))
+        sync_range = self.repository.resolve_sync_range(context["period_start"], payload.get("date_range"))
         currencies = {account.get("currency") for account in context["accounts"] if account.get("currency")}
         if len(currencies) > 1:
             raise ValueError("Selected Ad Accounts use different currencies and cannot be aggregated.")
@@ -316,12 +328,12 @@ class MetaAdsSyncService:
         warnings = []
         if len(timezones) > 1:
             warnings.append("Selected accounts use different timezones: " + ", ".join(timezones))
-        import_id = self.repository.start_api_snapshot(client_id, period_id, account_ids, platforms, warnings)
+        import_id = self.repository.start_api_snapshot(client_id, period_id, account_ids, platforms, warnings, sync_range)
         datasets = {key: [] for key in ("campaign", "adset", "ad", "placement", "demographic", "region")}
         creatives = []
         try:
             for account in context["accounts"]:
-                fetched = self.api.fetch_account_snapshot(account, context["period_start"], context["period_end"], platforms, context["goals"])
+                fetched = self.api.fetch_account_snapshot(account, sync_range["start"], sync_range["end"], platforms)
                 for key in datasets:
                     datasets[key].extend(fetched["datasets"][key])
                 creatives.extend(fetched["creatives"])

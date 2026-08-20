@@ -109,11 +109,13 @@ class ClientProductApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         rows = {row["key"]: row for row in response.json()}
-        self.assertEqual(set(rows), {"instagram", "facebook", "youtube", "tiktok"})
+        self.assertEqual(set(rows), {"instagram", "facebook", "google_sem", "google_gdn", "youtube", "tiktok"})
         self.assertEqual(rows["instagram"]["ingestion_status"], "available")
         self.assertEqual(rows["facebook"]["source"], "meta")
         self.assertEqual(rows["youtube"]["storage_status"], "not_created")
         self.assertEqual(rows["tiktok"]["ingestion_status"], "coming_soon")
+        self.assertEqual(rows["google_sem"]["ingestion_status"], "coming_soon")
+        self.assertEqual(rows["google_gdn"]["source"], "google_ads")
 
     def test_ads_period_can_be_deleted_independently(self):
         repository = Mock()
@@ -248,11 +250,11 @@ class AdsWorkspaceContractTests(unittest.TestCase):
         rows = {row["key"]: row for row in ads_platform_catalog()}
         self.assertEqual(
             [goal["key"] for goal in rows["facebook"]["goals"]],
-            ["reach", "engagement", "page_likes"],
+            ["reach", "engagement", "views", "link_clicks", "leads", "page_likes"],
         )
         self.assertEqual(
             [goal["key"] for goal in rows["youtube"]["goals"]],
-            ["impressions", "video_views"],
+            ["video_views"],
         )
 
     def test_catalog_marks_unconfigured_platforms(self):

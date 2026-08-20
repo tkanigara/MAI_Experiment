@@ -30,6 +30,7 @@ try:
     from dashboard.schemas import require_fields
     from dashboard.services.csv_import import import_report_csv
     from dashboard.services.ads_workspace import ads_platform_catalog
+    from dashboard.services.ads_objectives import objective_catalog
     from dashboard.services.meta_ads_import import import_meta_ads_csv
     from dashboard.services.meta_ads_api import MetaAdsApiClient, MetaAdsApiError, MetaAdsSyncService
     from dashboard.services.kpi_service import upsert_kpi_target
@@ -66,6 +67,7 @@ except ModuleNotFoundError:
     from schemas import require_fields
     from services.csv_import import import_report_csv
     from services.ads_workspace import ads_platform_catalog
+    from services.ads_objectives import objective_catalog
     from services.meta_ads_import import import_meta_ads_csv
     from services.meta_ads_api import MetaAdsApiClient, MetaAdsApiError, MetaAdsSyncService
     from services.kpi_service import upsert_kpi_target
@@ -399,6 +401,35 @@ def get_ads_platforms():
     return json_response(ads_platform_catalog())
 
 
+@app.get("/api/ads/objective-catalog")
+def get_ads_objective_catalog():
+    return json_response(objective_catalog())
+
+
+@app.get("/api/ads/clients/{client_id}/metric-configurations")
+def get_ads_metric_configurations(client_id: str):
+    try:
+        return json_response(meta_ads_repository.metric_configurations(client_id))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.put("/api/ads/clients/{client_id}/metric-configurations/{scope}/{objective}")
+def save_ads_metric_configuration(client_id: str, scope: str, objective: str, payload: dict):
+    try:
+        return json_response(meta_ads_repository.save_metric_configuration(client_id, scope, objective, payload))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.delete("/api/ads/clients/{client_id}/metric-configurations/{scope}/{objective}")
+def reset_ads_metric_configuration(client_id: str, scope: str, objective: str):
+    try:
+        return json_response(meta_ads_repository.reset_metric_configuration(client_id, scope, objective))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
 @app.get("/api/ads/meta/status")
 def get_meta_ads_status():
     return json_response(meta_ads_api.status())
@@ -434,6 +465,97 @@ def sync_meta_ads(client_id: str, period_id: str, payload: dict):
 def get_ads_sources(client_id: str, period_id: str):
     try:
         return json_response(meta_ads_repository.sources(client_id, period_id))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/editor")
+def get_ads_data_editor(client_id: str, period_id: str):
+    try:
+        return json_response(meta_ads_repository.data_editor(client_id, period_id))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.patch("/api/ads/clients/{client_id}/periods/{period_id}/editor/{entity_type}")
+def save_ads_data_editor(client_id: str, period_id: str, entity_type: str, payload: dict):
+    try:
+        return json_response(meta_ads_repository.save_data_editor(client_id, period_id, entity_type, payload))
+    except RuntimeError as exc:
+        if str(exc).startswith("VERSION_CONFLICT:"):
+            raise HTTPException(status_code=409, detail=str(exc).split(":", 1)[1].strip())
+        raise HTTPException(status_code=500, detail=str(exc))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.post("/api/ads/clients/{client_id}/periods/{period_id}/editor/overrides/{override_id}/restore")
+def restore_ads_data_override(client_id: str, period_id: str, override_id: str, payload: dict):
+    try:
+        return json_response(meta_ads_repository.restore_data_override(
+            client_id, period_id, override_id, payload.get("actor"),
+        ))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/campaign-mappings")
+def get_ads_campaign_mappings(client_id: str, period_id: str):
+    try:
+        return json_response(meta_ads_repository.campaign_mappings(client_id, period_id))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.put("/api/ads/clients/{client_id}/periods/{period_id}/campaign-mappings")
+def save_ads_campaign_mappings(client_id: str, period_id: str, payload: dict):
+    try:
+        return json_response(meta_ads_repository.save_campaign_mappings(client_id, period_id, payload))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+def _analysis_filters(request: Request) -> dict:
+    query = request.query_params
+    split = lambda key: [item for item in query.get(key, "").split(",") if item]
+    return {
+        "platform_scope": query.get("platform_scope", "meta"),
+        "objective": query.get("objective", ""),
+        "campaign_ids": split("campaign_ids"),
+        "adset_ids": split("adset_ids"),
+    }
+
+
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/creative-performance")
+def get_ads_creative_performance(client_id: str, period_id: str, request: Request):
+    try:
+        return json_response(meta_ads_repository.analysis(client_id, period_id, "creative", _analysis_filters(request)))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/adset-performance")
+def get_ads_adset_performance(client_id: str, period_id: str, request: Request):
+    try:
+        return json_response(meta_ads_repository.analysis(client_id, period_id, "adset", _analysis_filters(request)))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/adsets/{adset_id}/creatives")
+def get_ads_adset_creatives(client_id: str, period_id: str, adset_id: str, request: Request):
+    try:
+        filters = _analysis_filters(request)
+        filters["adset_ids"] = [adset_id]
+        return json_response(meta_ads_repository.analysis(client_id, period_id, "creative", filters))
+    except ValueError as exc:
+        raise bad_request(exc)
+
+
+@app.get("/api/ads/clients/{client_id}/periods/{period_id}/creatives/{creative_id}")
+def get_ads_creative_detail(client_id: str, period_id: str, creative_id: str, platform_scope: str = "meta"):
+    try:
+        return json_response(meta_ads_repository.creative_detail(client_id, period_id, creative_id, platform_scope))
     except ValueError as exc:
         raise bad_request(exc)
 
