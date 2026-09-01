@@ -24,6 +24,11 @@ from agentic.agents.ads_agent.ads_agent_creative.ig_runner_node import (
 from agentic.agents.ads_agent.ads_agent_creative.ig_engagement_agent import ig_engagement_agent
 from agentic.agents.ads_agent.ads_agent_creative.ig_reach_agent import ig_reach_agent
 from agentic.agents.ads_agent.ads_agent_creative.ig_profilevisit_agent import ig_profilevisit_agent
+from agentic.agents.ads_agent.ads_agent_creative.generic_objective_agents import (
+    ig_generic_objective_agent,
+    fb_generic_objective_agent,
+)
+from agentic.agents.ads_agent.ads_agent_creative.meta_runner_node import meta_runner_node
 
 
 # ============================================================
@@ -137,6 +142,16 @@ workflow.add_node(
     ig_profilevisit_agent
 )
 
+workflow.add_node(
+    "instagram_generic_objective_agent",
+    ig_generic_objective_agent
+)
+
+workflow.add_node(
+    "meta_runner_node",
+    meta_runner_node
+)
+
 
 # ============================================================
 # FACEBOOK NODES
@@ -165,6 +180,11 @@ workflow.add_node(
 workflow.add_node(
     "facebook_pagelike_agent",
     fb_pagelike_agent
+)
+
+workflow.add_node(
+    "facebook_generic_objective_agent",
+    fb_generic_objective_agent
 )
 
 
@@ -297,6 +317,16 @@ workflow.add_edge(
     "summary"
 )
 
+workflow.add_edge(
+    "instagram_generic_objective_agent",
+    "summary"
+)
+
+workflow.add_edge(
+    "meta_runner_node",
+    "summary"
+)
+
 
 # ============================================================
 # FACEBOOK AGENTS → SUMMARY
@@ -319,6 +349,11 @@ workflow.add_edge(
 
 workflow.add_edge(
     "facebook_pagelike_agent",
+    "summary"
+)
+
+workflow.add_edge(
+    "facebook_generic_objective_agent",
     "summary"
 )
 

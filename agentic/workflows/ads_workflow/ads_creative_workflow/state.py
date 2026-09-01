@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Any
 from pydantic import BaseModel, Field
 
 class Request(BaseModel):
@@ -11,6 +12,9 @@ class Request(BaseModel):
 
     campaign_ids: list[str] = Field(default_factory=list)
     adset_ids: list[str] = Field(default_factory=list)
+    # Breakdowns are intentionally opt-in because a creative detail call can
+    # fan out into many placement/demographic/region requests.
+    include_breakdowns: bool = False
 
     generate_slides: bool = False
     slides_dry_run: bool = False
@@ -30,8 +34,39 @@ class MetaData(BaseModel):
     youtube: bool = False
     linkedin: bool = False
     threads: bool = False
+    ads_platforms: list[str] = Field(default_factory=list)
+    meta_ad_accounts: list[dict[str, Any]] = Field(default_factory=list)
+    source: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
     loaded: bool = False
     error: str | None = None
+
+
+class AdsRetrievalData(BaseModel):
+    """Canonical retrieval payload shared by Ads analysis agents.
+
+    This is transient workflow state, not a second database.  The dashboard
+    API remains responsible for active snapshot selection, objective mapping,
+    metric configuration, and editor overrides.
+    """
+
+    status: str = "not_loaded"
+    success: bool = False
+    error: str | None = None
+    client: dict[str, Any] = Field(default_factory=dict)
+    period: dict[str, Any] = Field(default_factory=dict)
+    analysis_type: str | None = None
+    platform_scope: str | None = None
+    objective: str | None = None
+    objectives: list[str] = Field(default_factory=list)
+    source: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    display_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    available_filters: dict[str, Any] = Field(default_factory=dict)
+    breakdowns: dict[str, Any] = Field(default_factory=dict)
+    unconfirmed_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
 
 class TaskDelegation(BaseModel):
     client_code: str | None = None
@@ -39,6 +74,17 @@ class TaskDelegation(BaseModel):
 
 class InstagramMetricAnalysis(BaseModel):
     client_code: str | None = None
+    objective: str | None = None
+
+    # Generic fields are used for canonical objectives such as Leads, Views,
+    # and Link Clicks.  The legacy objective-specific fields below remain for
+    # compatibility with existing report prompts.
+    performance_overview: str | None = None
+    content_analysis: str | None = None
+    placement_analysis: str | None = None
+    audience_demographic_analysis: str | None = None
+    region_analysis: str | None = None
+    optimisation_action: str | None = None
 
     performance_overview_reach: str | None = None
     performance_overview_engagement: str | None = None
@@ -66,6 +112,14 @@ class InstagramMetricAnalysis(BaseModel):
 
 class FacebookMetricAnalysis(BaseModel):
     client_code: str | None = None
+    objective: str | None = None
+
+    performance_overview: str | None = None
+    content_analysis: str | None = None
+    placement_analysis: str | None = None
+    audience_demographic_analysis: str | None = None
+    region_analysis: str | None = None
+    optimisation_action: str | None = None
 
     performance_overview_reach: str | None = None
     performance_overview_engagement: str | None = None
@@ -142,6 +196,10 @@ class State(BaseModel):
 
     #metadata
     Metadata: MetaData = Field(default_factory=MetaData)
+
+    # One canonical dashboard response.  Analysis agents read this field;
+    # they should not issue their own SQL/API queries.
+    ads_data: AdsRetrievalData = Field(default_factory=AdsRetrievalData)
 
     #delegation
     Task_delegation: list[TaskDelegation]= Field(default_factory=list)

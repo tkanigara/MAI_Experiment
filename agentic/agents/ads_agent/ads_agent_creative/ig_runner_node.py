@@ -8,8 +8,13 @@ def instagram_runner_node(state: State):
 
 
 def instagram_router(state: State):
-    return [
-        Send("instagram_reach_agent", state),
-        Send("instagram_engagement_agent", state),
-        Send("instagram_profilevisit_agent", state),
-    ]
+    objective = str(state.request.objective or "").lower().strip().replace(" ", "_")
+    routes = {
+        "reach": "instagram_reach_agent",
+        "engagement": "instagram_engagement_agent",
+        "profile_visit": "instagram_profilevisit_agent",
+        "profile_visits": "instagram_profilevisit_agent",
+        "profilevisit": "instagram_profilevisit_agent",
+    }
+    route = routes.get(objective, "instagram_generic_objective_agent")
+    return [Send(route, state)] if route else []

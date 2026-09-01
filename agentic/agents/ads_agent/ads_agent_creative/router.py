@@ -6,6 +6,7 @@ console = Console()
 
 
 AGENT_NAME = {
+    "meta_runner_node": "All Meta Selected",
     "ig_runner_node": "Instagram Selected",
     "fb_runner_node": "Facebook Selected",
     "tt_runner_node": "TikTok Selected",
@@ -16,6 +17,7 @@ AGENT_NAME = {
 
 
 RUNNER_TO_ROUTE = {
+    "MetaRunner": "meta_runner_node",
     "InstagramRunner": "ig_runner_node",
     "FacebookRunner": "fb_runner_node",
     "TikTokRunner": "tt_runner_node",

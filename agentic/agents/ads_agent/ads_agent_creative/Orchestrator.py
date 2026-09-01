@@ -1,42 +1,33 @@
 from agentic.workflows.ads_workflow.ads_creative_workflow.state import State, TaskDelegation
-from agentic.models.gemini import llm
-from langchain_core.messages import HumanMessage, SystemMessage
-from agentic.prompts.ads_prompts_list.orchestrator import SYSTEM_PROMPT
-from agentic.utils.llm_output import get_llm_text
-import json
+
+
+PLATFORM_RUNNERS = {
+    "meta": "MetaRunner",
+    "instagram": "InstagramRunner",
+    "facebook": "FacebookRunner",
+    "youtube": "YoutubeRunner",
+    "tiktok": "TikTokRunner",
+}
+
+
+def _selected_platforms(scope: str) -> list[str]:
+    scope = str(scope or "meta").strip().lower().replace("all_meta", "meta")
+    if scope == "meta":
+        return ["meta"]
+    if scope in PLATFORM_RUNNERS:
+        return [scope]
+    return []
 
 
 def orchestrator_agent(state: State):
-
-    metadata = state.Metadata
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(
-            content=metadata.model_dump_json()
-        )
-    ]
-
-    response = llm.invoke(messages)
-    text = get_llm_text(response)
-
-    print("\n" + "=" * 60)
-    print("[DEBUG] ORCHESTRATOR RAW OUTPUT")
-    print("=" * 60)
-    print(repr(text))
-    print("=" * 60)
-
-    result = json.loads(text)
-
+    # Platform and objective are explicit in the request.  Letting an LLM
+    # infer the platform from metadata made the old Ads graph fan out to every
+    # objective and was especially error-prone for a single-platform run.
     task_delegation = [
-        TaskDelegation(**task)
-        for task in result["task_delegation"]
+        TaskDelegation(
+            client_code=state.request.client_code,
+            runner=PLATFORM_RUNNERS[platform],
+        )
+        for platform in _selected_platforms(state.request.platform_scope)
     ]
-
-    print("\n[DEBUG] TASK DELEGATION")
-    print(
-        [task.model_dump() for task in task_delegation]
-    )
-
-    return {
-        "Task_delegation": task_delegation
-    }
+    return {"Task_delegation": task_delegation}

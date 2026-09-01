@@ -36,13 +36,17 @@ def run(request):
         print("\n[DEBUG] INITIAL STATE")
         print(initial_state.model_dump())
 
+        # LangGraph returns a mapping even when the graph state schema is a
+        # Pydantic model.  Normalise it here so callers of ``run`` can use the
+        # same State contract as the individual agents.
         result = creative_architecture.invoke(initial_state)
+        result_state = CreativeState.model_validate(result)
 
         print("\n" + "=" * 60)
         print("[DEBUG] METADATA")
         print("=" * 60)
 
-        metadata = result.Metadata
+        metadata = result_state.Metadata
 
         print(metadata.model_dump())
 
@@ -50,9 +54,9 @@ def run(request):
         print("[DEBUG] FINAL STATE")
         print("=" * 60)
 
-        print(result.model_dump())
+        print(result_state.model_dump())
 
-        return result
+        return result_state
 
     elif route == "adset":
         pass

@@ -8,7 +8,6 @@ def tiktok_runner_node(state: State):
 
 
 def tiktok_router(state: State):
-    return [
-        Send("tiktok_views", state),
-        Send("tiktok_follow", state),
-    ]
+    objective = str(state.request.objective or "").lower().strip().replace(" ", "_")
+    route = "tiktok_follow" if objective in {"community_interaction", "paid_follow", "follow", "paid_follows"} else "tiktok_views"
+    return [Send(route, state)]

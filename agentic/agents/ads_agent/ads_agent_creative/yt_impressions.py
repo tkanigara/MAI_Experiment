@@ -1,57 +1,23 @@
-from agentic.models.gemini import llm
-from agentic.workflows.ads_workflow.ads_creative_workflow.state import State, YoutubeMetricAnalysis
-from langchain_core.messages import HumanMessage, SystemMessage
+from agentic.agents.ads_agent.ads_agent_creative.analysis_helpers import run_ads_analysis_agent
 from agentic.prompts.ads_prompts_list.yt_impressions import SYSTEM_PROMPT
 from agentic.utils.logger import node
-import json
-import re
-from typing import Any
+from agentic.workflows.ads_workflow.ads_creative_workflow.state import State, YoutubeMetricAnalysis
 
 
-def yt_impressions_agent(state: State) -> State:
+def yt_impressions_agent(state: State) -> dict:
     with node("Youtube Ads Impressions Analysis running"):
-        #tools data declaration
-
-        data = {}
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=json.dump(data, indent=2, default=str))
-        ]
-        analysis = llm.invoke(messages)
-        content = analysis.content
-
-        if isinstance(content, list):
-            text = "".join(
-                part["text"]
-                for part in content
-                if part.get("type") == "text"
-            )
-        else:
-            text = content
-        text = text.strip()
-
-        text = re.sub(r"^```json\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"^```\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-        text = re.sub(r",(\s*[}\]])", r"\1", text)
-
-        try:
-            result = json.loads(text)
-        except json.JSONDecodeError as e:
-            print("JSON ERROR:", e)
-            print(text)
-            raise
-
-        youtube_result = YoutubeMetricAnalysis(
-            client_code=state.Metadata.client_code,
-            performance_overview_impressions = result["performance_overview_impressions"],
-            audience_demographic_impressions= result["audience_demographic_impressions"],
-            region_breakdown_impressions=result["region_breakdown_impressions"],
-            testing_optimization_impressions=result[" testing_optimization_impressions"],
-            bidding_optimisation_impressions=result["bidding_optimisation_impressions"]
-
+        return run_ads_analysis_agent(
+            state,
+            system_prompt=SYSTEM_PROMPT,
+            result_model=YoutubeMetricAnalysis,
+            result_field="youtube_result",
+            output_fields=[
+                "performance_overview_impressions",
+                "audience_demographics_impressions",
+                "region_breakdown_impressions",
+                "testing_optimization_impressions",
+                "bidding_optimisation_impressions",
+            ],
+            label="YouTube Ads Impressions",
         )
 
-    return {
-        "youtube_result":youtube_result
-    }
