@@ -31,6 +31,7 @@ ADS_GOAL_DEFINITIONS = {
         {"key": "performance", "label": "Performance", "family": "traffic", "source_metric": "clicks"},
     ),
     "youtube": (
+        {"key": "impressions", "label": "Impressions", "family": "awareness", "source_metric": "impressions"},
         {"key": "video_views", "label": "Video Views", "family": "awareness", "source_metric": "video_views"},
     ),
     "tiktok": (

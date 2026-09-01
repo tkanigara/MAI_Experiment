@@ -1,4 +1,4 @@
-
+python -m agentic.workflows.ads_workflow.app
 # MAI Social Media Reporting
 
 Web dashboard untuk mengimpor data social media, mengelola KPI, menjalankan

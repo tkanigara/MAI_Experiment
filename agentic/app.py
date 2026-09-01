@@ -1,5 +1,5 @@
-from CentralArch.graph import app
-from CentralArch.state import (
+from workflows.socmed_workflow.graph import app
+from workflows.socmed_workflow.state import (
     State,
     Request, 
     instagram_result_analysis, facebook_result_analysis, tiktok_result_analysis, youtube_result_analysis, 
