@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from agentic.tools.tools_list_ads_creative.dashboard_retrieval import retrieve_ads_data
+from agentic.tools.tools_list_ads_creative.dashboard_retrieval import (
+    retrieve_ads_data,
+    retrieve_ads_sections,
+)
 from agentic.agents.ads_agent.ads_agent_creative import analysis_helpers
 from agentic.agents.ads_agent.ads_agent_creative.ig_reach_agent import ig_reach_agent
 from agentic.workflows.ads_workflow.ads_creative_workflow.state import (
@@ -72,6 +75,29 @@ def test_retrieval_returns_canonical_payload_and_preserves_nulls():
     assert api.analysis_calls[0]["campaign_ids"] == ["campaign-1"]
 
 
+def test_retrieval_sections_split_dashboard_payload_by_analysis_area():
+    payload = {
+        "summary": {"result": 12, "spend": 100},
+        "rows": [{"id": "ad-1", "name": "Top ad"}],
+        "breakdowns": {
+            "ad-1": {
+                "creative": {"ad_name": "Top ad"},
+                "placements": [{"placement": "Feed", "impressions": 10}],
+                "demographics": [{"age": "25-34", "gender": "female", "reach": 8}],
+                "regions": [{"region": "Jakarta", "reach": 5}],
+            }
+        },
+    }
+
+    sections = retrieve_ads_sections(payload)
+
+    assert sections["performance_overview"] == {"result": 12, "spend": 100}
+    assert sections["content_analysis"] == [{"id": "ad-1", "name": "Top ad"}]
+    assert sections["placement_analysis"][0]["entity_name"] == "Top ad"
+    assert sections["audience_demographic_analysis"][0]["gender"] == "female"
+    assert sections["region_analysis"][0]["region"] == "Jakarta"
+
+
 def test_state_has_typed_ads_data_contract():
     state = State(
         request=Request(
@@ -138,6 +164,7 @@ def test_objective_agent_consumes_state_as_json_context(monkeypatch):
     assert result.performance_overview_reach == "ok"
     assert '"rows": [' in captured["content"]
     assert '"id": "ad-1"' in captured["content"]
+    assert '"analysis_sections": {' in captured["content"]
 
 
 def test_retrieval_rejects_dashboard_objective_fallback():

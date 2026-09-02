@@ -16,7 +16,10 @@ request = {
     "platform_scope": "meta",
     "objective": "leads",
     "campaign_ids": [],
-    "adset_ids": []
+    "adset_ids": [],
+    # Creative analysis needs the placement, age/gender, and region detail
+    # rows. Retrieval remains opt-in for callers that only need totals.
+    "include_breakdowns": True,
 }
 
 

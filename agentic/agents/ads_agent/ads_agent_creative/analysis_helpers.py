@@ -11,6 +11,9 @@ import re
 from typing import Any, Type
 
 from agentic.models.gemini import llm
+from agentic.tools.tools_list_ads_creative.dashboard_retrieval import (
+    retrieve_ads_sections,
+)
 from agentic.workflows.ads_workflow.ads_creative_workflow.state import State
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -19,6 +22,17 @@ DEFAULT_SYSTEM_PROMPT = """
 You are an Ads performance analyst. Analyse only the supplied dashboard data.
 Return valid JSON with exactly the requested keys. Keep unavailable values
 explicitly null and do not invent metrics, campaigns, or conclusions.
+
+Use the supplied analysis_sections as the source for each output field:
+- performance_overview(_<objective>) uses performance_overview;
+- content_analysis(_<objective>) uses content_analysis;
+- placement_analysis(_<objective>) uses placement_analysis;
+- audience_demographic_analysis(_<objective>) uses audience_demographic_analysis;
+- region_analysis(_<objective>) uses region_analysis.
+The optimisation_action(_<objective>) must be grounded in those sections and
+the objective metrics. If a section is empty or the needed metric is absent,
+return null for that field instead of guessing. Do not treat an empty
+breakdown as zero performance.
 """.strip()
 
 
@@ -62,10 +76,18 @@ def run_ads_analysis_agent(
         return {result_field: result_model(**base)}
 
     payload = state.ads_data.model_dump(mode="json")
+    sections = payload.get("sections") or retrieve_ads_sections(payload)
+    # ``sections`` is the agent-facing projection. Avoid sending the nested
+    # entity-keyed breakdowns twice, which can unnecessarily inflate Gemini's
+    # context when a report has many creatives.
+    dashboard_context = dict(payload)
+    dashboard_context.pop("breakdowns", None)
+    dashboard_context.pop("sections", None)
     context = {
         "analysis": label,
         "request": state.request.model_dump(mode="json"),
-        "ads_data": payload,
+        "ads_data": dashboard_context,
+        "analysis_sections": sections,
         "required_output_keys": output_fields,
     }
     messages = [

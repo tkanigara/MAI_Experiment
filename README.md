@@ -140,6 +140,40 @@ Database yang sudah ada harus menjalankan migration secara berurutan sampai
 Audit header, null, relationship, rekonsiliasi, serta keterbatasan export Bourbon
 ada di `docs/meta_ads_csv_audit.md`.
 
+### Ads agent retrieval
+
+`retrieve_ads_data()` melakukan satu request analisis ke dashboard. Untuk
+analisis creative yang membutuhkan placement, age/gender, dan region, panggil
+dengan `include_breakdowns=True`. Payload yang sama kemudian dapat diproyeksikan
+ke bagian analisis melalui helper di
+`agentic/tools/tools_list_ads_creative/dashboard_retrieval.py`:
+
+```python
+from agentic.tools.tools_list_ads_creative.dashboard_retrieval import (
+    retrieve_ads_data,
+    retrieve_ads_sections,
+)
+
+payload = retrieve_ads_data(
+    client_code="jba",
+    period_id="2026-07-01",
+    analysis_type="creative",
+    platform_scope="meta",
+    objective="leads",
+    include_breakdowns=True,
+)
+sections = retrieve_ads_sections(payload)
+overview = sections["performance_overview"]
+content = sections["content_analysis"]
+placements = sections["placement_analysis"]
+demographics = sections["audience_demographic_analysis"]
+regions = sections["region_analysis"]
+```
+
+Helper tersebut hanya memisahkan payload yang sudah diambil; helper tidak
+mengirim request dashboard tambahan. Nilai metric yang memang tidak tersedia
+tetap `null`, bukan diubah menjadi nol.
+
 ## Environment Variables Utama
 
 | Variable                               | Wajib | Keterangan                         |

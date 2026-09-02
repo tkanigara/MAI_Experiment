@@ -1,4 +1,7 @@
 from agentic.models.gemini import llm
+from agentic.tools.tools_list_ads_creative.dashboard_retrieval import (
+    retrieve_ads_sections,
+)
 from langchain_core.messages import HumanMessage, SystemMessage
 from agentic.workflows.ads_workflow.ads_creative_workflow.state import State, SummaryAll
 from agentic.prompts.ads_prompts_list.summary import SYSTEM_PROMPT
@@ -10,9 +13,14 @@ from typing import Any
 
 def summary_agent(state: State) -> State:
     with node("Summarizing ads analysis"):
-        
+        ads_data = state.ads_data.model_dump(mode="json")
+        sections = ads_data.get("sections") or retrieve_ads_sections(ads_data)
+        dashboard_context = dict(ads_data)
+        dashboard_context.pop("breakdowns", None)
+        dashboard_context.pop("sections", None)
         data = {
-            "ads_data": state.ads_data.model_dump(mode="json"),
+            "ads_data": dashboard_context,
+            "analysis_sections": sections,
             "analysis_results": [
                 state.instagram_result.model_dump(mode="json"),
                 state.facebook_result.model_dump(mode="json"),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.tools import tool
@@ -20,6 +21,91 @@ def _normalise_list(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(item) for item in value if str(item).strip()]
     return []
+
+
+def _breakdown_rows(
+    payload: Mapping[str, Any] | None,
+    key: str,
+) -> list[dict[str, Any]]:
+    """Flatten per-entity dashboard details into analysis-ready rows.
+
+    The dashboard creative-detail endpoint returns breakdowns keyed by
+    creative/ad-set id.  Keeping the entity id and name on every row makes
+    the result useful to an agent without asking it to reconstruct that
+    relationship from nested JSON.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for entity_id, detail in ((payload or {}).get("breakdowns") or {}).items():
+        if not isinstance(detail, Mapping):
+            continue
+        creative = detail.get("creative") or {}
+        if not isinstance(creative, Mapping):
+            creative = {}
+        entity_name = (
+            creative.get("ad_name")
+            or creative.get("name")
+            or str(entity_id)
+        )
+        for item in detail.get(key) or []:
+            if not isinstance(item, Mapping):
+                continue
+            rows.append(
+                {
+                    "entity_id": str(entity_id),
+                    "entity_name": entity_name,
+                    **dict(item),
+                }
+            )
+    return rows
+
+
+def retrieve_performance_overview(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return the report-level performance metrics from a dashboard payload."""
+
+    return dict((payload or {}).get("summary") or {})
+
+
+def retrieve_content_analysis(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return creative/ad-set rows used for content analysis."""
+
+    return [dict(row) for row in ((payload or {}).get("rows") or []) if isinstance(row, Mapping)]
+
+
+def retrieve_placement_analysis(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return placement rows, annotated with their creative/ad-set owner."""
+
+    return _breakdown_rows(payload, "placements")
+
+
+def retrieve_audience_demographic_analysis(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return age/gender rows, annotated with their creative/ad-set owner."""
+
+    return _breakdown_rows(payload, "demographics")
+
+
+def retrieve_region_analysis(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return region rows, annotated with their creative/ad-set owner."""
+
+    return _breakdown_rows(payload, "regions")
+
+
+def retrieve_ads_sections(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Split one canonical dashboard response into the LLM analysis sections.
+
+    This is deliberately a pure local projection: it does not make additional
+    dashboard requests.  Call :func:`retrieve_ads_data` once, with
+    ``include_breakdowns=True`` when placement, audience, or region analysis
+    is required, then pass its result here.
+    """
+
+    return {
+        "performance_overview": retrieve_performance_overview(payload),
+        "content_analysis": retrieve_content_analysis(payload),
+        "placement_analysis": retrieve_placement_analysis(payload),
+        "audience_demographic_analysis": retrieve_audience_demographic_analysis(payload),
+        "region_analysis": retrieve_region_analysis(payload),
+    }
 
 
 def retrieve_ads_data(
@@ -163,7 +249,7 @@ def retrieve_ads_data(
             except AdsDashboardClientError as exc:
                 warnings.append(f"Breakdown unavailable for {entity_id}: {exc}")
 
-    return {
+    payload = {
         "status": response.get("data_status", "ready"),
         "success": response.get("data_status") == "ready",
         "client": {
@@ -201,6 +287,8 @@ def retrieve_ads_data(
         "breakdowns": breakdowns,
         "warnings": warnings,
     }
+    payload["sections"] = retrieve_ads_sections(payload)
+    return payload
 
 
 @tool

@@ -65,6 +65,10 @@ class AdsRetrievalData(BaseModel):
     display_metrics: list[dict[str, Any]] = Field(default_factory=list)
     available_filters: dict[str, Any] = Field(default_factory=dict)
     breakdowns: dict[str, Any] = Field(default_factory=dict)
+    # Stable projections used by the objective agents.  ``breakdowns`` keeps
+    # the dashboard's entity-keyed response for compatibility; ``sections``
+    # gives each analysis area its own bounded input.
+    sections: dict[str, Any] = Field(default_factory=dict)
     unconfirmed_count: int = 0
     warnings: list[str] = Field(default_factory=list)
 
