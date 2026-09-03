@@ -5,22 +5,22 @@ from pydantic import BaseModel, Field
 class Request(BaseModel):
     client_code: str
     period_id: str
-
     analysis_type: str
     platform_scope: str
-    objective: str
 
-    campaign_ids: list[str] = Field(default_factory=list)
-    adset_ids: list[str] = Field(default_factory=list)
-    # Breakdowns are intentionally opt-in because a creative detail call can
-    # fan out into many placement/demographic/region requests.
+    objectives: list[str] = Field(
+        default_factory=list
+    )
+
+    campaign_ids: list[str] = Field(
+        default_factory=list
+    )
+
+    adset_ids: list[str] = Field(
+        default_factory=list
+    )
+
     include_breakdowns: bool = False
-
-    generate_slides: bool = False
-    slides_dry_run: bool = False
-    persist_insights: bool = True
-    reuse_cached_insights: bool = True
-    
 class MetaData(BaseModel):
     client_id: str | None = None
     client_code:str | None = None
@@ -43,35 +43,57 @@ class MetaData(BaseModel):
 
 
 class AdsRetrievalData(BaseModel):
-    """Canonical retrieval payload shared by Ads analysis agents.
-
-    This is transient workflow state, not a second database.  The dashboard
-    API remains responsible for active snapshot selection, objective mapping,
-    metric configuration, and editor overrides.
-    """
-
     status: str = "not_loaded"
     success: bool = False
     error: str | None = None
+
     client: dict[str, Any] = Field(default_factory=dict)
     period: dict[str, Any] = Field(default_factory=dict)
+
     analysis_type: str | None = None
     platform_scope: str | None = None
-    objective: str | None = None
-    objectives: list[str] = Field(default_factory=list)
-    source: dict[str, Any] = Field(default_factory=dict)
-    summary: dict[str, Any] = Field(default_factory=dict)
-    rows: list[dict[str, Any]] = Field(default_factory=list)
-    display_metrics: list[dict[str, Any]] = Field(default_factory=list)
-    available_filters: dict[str, Any] = Field(default_factory=dict)
-    breakdowns: dict[str, Any] = Field(default_factory=dict)
-    # Stable projections used by the objective agents.  ``breakdowns`` keeps
-    # the dashboard's entity-keyed response for compatibility; ``sections``
-    # gives each analysis area its own bounded input.
-    sections: dict[str, Any] = Field(default_factory=dict)
-    unconfirmed_count: int = 0
-    warnings: list[str] = Field(default_factory=list)
 
+    objectives: list[str] = Field(
+        default_factory=list
+    )
+
+    objective_data: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    source: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    summary: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    rows: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
+
+    display_metrics: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
+
+    available_filters: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    breakdowns: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    sections: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    unconfirmed_count: int = 0
+
+    warnings: list[str] = Field(
+        default_factory=list
+    )
 class TaskDelegation(BaseModel):
     client_code: str | None = None
     runner: str | None = None
@@ -80,9 +102,6 @@ class InstagramMetricAnalysis(BaseModel):
     client_code: str | None = None
     objective: str | None = None
 
-    # Generic fields are used for canonical objectives such as Leads, Views,
-    # and Link Clicks.  The legacy objective-specific fields below remain for
-    # compatibility with existing report prompts.
     performance_overview: str | None = None
     content_analysis: str | None = None
     placement_analysis: str | None = None

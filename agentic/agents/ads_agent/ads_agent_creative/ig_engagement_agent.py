@@ -8,6 +8,7 @@ def ig_engagement_agent(state: State) -> dict:
         return run_ads_analysis_agent(
             state,
             system_prompt=SYSTEM_PROMPT,
+            objective="engagement",
             result_model=InstagramMetricAnalysis,
             result_field="instagram_result",
             output_fields=[

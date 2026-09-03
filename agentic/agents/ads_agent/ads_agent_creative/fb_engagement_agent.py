@@ -12,6 +12,7 @@ def fb_engagement_agent(state: State) -> dict:
         return run_ads_analysis_agent(
             state,
             system_prompt=SYSTEM_PROMPT,
+            objective="engagement",
             result_model=FacebookMetricAnalysis,
             result_field="facebook_result",
             output_fields=[

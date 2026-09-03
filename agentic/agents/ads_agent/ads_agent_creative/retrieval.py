@@ -59,7 +59,7 @@ def retrieval_agent(state: State) -> dict:
                 period_id=state.request.period_id,
                 analysis_type=state.request.analysis_type,
                 platform_scope=state.request.platform_scope,
-                objective=state.request.objective,
+                objectives=state.request.objectives,
                 campaign_ids=state.request.campaign_ids,
                 adset_ids=state.request.adset_ids,
                 include_breakdowns=state.request.include_breakdowns,

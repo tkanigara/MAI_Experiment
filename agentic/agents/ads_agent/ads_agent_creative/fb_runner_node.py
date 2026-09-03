@@ -8,16 +8,38 @@ def facebook_runner_node(state: State):
 
 
 def facebook_router(state: State):
-    objective = str(state.request.objective or "").lower().strip().replace(" ", "_")
+
+    objectives = [
+        str(objective)
+        .lower()
+        .strip()
+        .replace(" ", "_")
+        for objective in state.request.objectives
+    ]
+
     routes = {
         "reach": "facebook_reach_agent",
+
         "engagement": "facebook_engagement_agent",
+
         "profile_visit": "facebook_profilevisit_agent",
         "profile_visits": "facebook_profilevisit_agent",
         "profilevisit": "facebook_profilevisit_agent",
+
         "page_like": "facebook_pagelike_agent",
         "page_likes": "facebook_pagelike_agent",
         "pagelike": "facebook_pagelike_agent",
     }
-    route = routes.get(objective, "facebook_generic_objective_agent")
-    return [Send(route, state)] if route else []
+
+    sends = []
+
+    for objective in objectives:
+
+        route = routes.get(objective)
+
+        if route:
+            sends.append(
+                Send(route, state)
+            )
+
+    return sends
