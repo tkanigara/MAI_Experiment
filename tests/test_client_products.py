@@ -276,6 +276,49 @@ class AdsWorkspaceContractTests(unittest.TestCase):
         self.assertEqual([goal["key"] for goal in rows["instagram"]["active_goals"]], ["reach"])
         self.assertEqual(rows["facebook"]["active_goals"], [])
 
+    def test_catalog_accepts_canonical_objective_configuration(self):
+        rows = {
+            row["key"]: row
+            for row in ads_platform_catalog(
+                ["instagram", "facebook"],
+                {
+                    "objective_model": "canonical",
+                    "objective_configs": {
+                        "meta": {
+                            "reach": {
+                                "target_monthly": 1250000,
+                                "budget_monthly": 2500000,
+                                "target_cost_per_result": 2,
+                            }
+                        }
+                    },
+                },
+            )
+        }
+        self.assertEqual(rows["instagram"]["active_goals"][0]["key"], "reach")
+        self.assertEqual(rows["facebook"]["active_goals"][0]["target_monthly"], 1250000)
+        self.assertTrue(next(goal for goal in rows["instagram"]["goals"] if goal["key"] == "reach")["active"])
+
+    def test_period_configuration_accepts_canonical_objectives(self):
+        configuration = ads_period_configuration(
+            {
+                "objective_model": "canonical",
+                "objective_configs": {
+                    "meta": {
+                        "leads": {
+                            "target_monthly": 5000,
+                            "budget_monthly": 20000000,
+                            "target_cost_per_result": 4000,
+                        }
+                    }
+                },
+            },
+            ["instagram", "facebook"],
+        )
+        self.assertEqual(configuration["objective_model"], "canonical")
+        self.assertEqual(configuration["goals"]["instagram"][0]["key"], "leads")
+        self.assertEqual(configuration["goals"]["facebook"][0]["budget_monthly"], 20000000)
+
 
 class ClientProductSchemaTests(unittest.TestCase):
     def test_ads_periods_do_not_reference_social_periods_or_etl_runs(self):

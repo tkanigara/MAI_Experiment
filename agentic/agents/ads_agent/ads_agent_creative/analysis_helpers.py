@@ -13,6 +13,10 @@ from typing import Any, Type
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agentic.models.gemini import llm
+from agentic.utils.llm_retry import (
+    invoke_with_rate_limit_retry,
+    transient_error_message,
+)
 from agentic.tools.tools_list_ads_creative.dashboard_retrieval import (
     retrieve_ads_sections,
 )
@@ -23,6 +27,10 @@ DEFAULT_SYSTEM_PROMPT = """
 You are an Ads performance analyst. Analyse only the supplied dashboard data.
 Return valid JSON with exactly the requested keys. Keep unavailable values
 explicitly null and do not invent metrics, campaigns, or conclusions.
+
+Every requested key must contain either one analysis STRING or null. Never
+return a nested object, array, raw dashboard row, or raw metric dictionary as
+the value of an output key.
 
 Use the supplied analysis_sections as the source for each output field:
 - performance_overview(_<objective>) uses performance_overview;
@@ -93,6 +101,16 @@ def _normalise_objective(objective: str) -> str:
         .lower()
         .replace(" ", "_")
     )
+
+
+def _normalise_analysis_value(value: Any) -> str | None:
+    """Keep the state contract stable when an LLM returns structured data."""
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def run_ads_analysis_agent(
@@ -184,19 +202,22 @@ def run_ads_analysis_agent(
     # Build LLM-facing dashboard context
     # ------------------------------------------------------------------
 
-    dashboard_context = dict(objective_data)
-
-    # ``sections`` is already the agent-facing projection.
-    # Avoid sending the nested breakdown data twice.
-    dashboard_context.pop(
-        "breakdowns",
-        None,
-    )
-
-    dashboard_context.pop(
-        "sections",
-        None,
-    )
+    # ``sections`` already contains the actual metrics, rows and breakdowns.
+    # Only retain metadata here so the same potentially large data is not sent
+    # to Gemini twice for every platform/objective call.
+    dashboard_context = {
+        key: objective_data.get(key)
+        for key in (
+            "status",
+            "objective",
+            "analysis_type",
+            "platform_scope",
+            "source",
+            "unconfirmed_count",
+            "warnings",
+        )
+        if key in objective_data
+    }
 
     context = {
         "analysis": label,
@@ -234,7 +255,19 @@ def run_ads_analysis_agent(
         ),
     ]
 
-    response = llm.invoke(messages)
+    try:
+        response = invoke_with_rate_limit_retry(
+            llm,
+            messages,
+            label=label,
+        )
+    except Exception as exc:
+        safe_error = transient_error_message(exc)
+        if safe_error is None:
+            raise
+        print(f"{label} skipped after retries: {safe_error}")
+        base["analysis_error"] = safe_error
+        return {result_field: result_model(**base)}
 
     text = _llm_text(response)
 
@@ -262,7 +295,7 @@ def run_ads_analysis_agent(
 
     base.update(
         {
-            field: result.get(field)
+            field: _normalise_analysis_value(result.get(field))
             for field in output_fields
         }
     )

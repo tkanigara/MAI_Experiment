@@ -3,7 +3,7 @@ import Breadcrumb from "../components/Breadcrumb";
 import { PlatformBadges } from "../components/Badges";
 import { adsPeriodSlug, adsPlatformFlags } from "../lib/format";
 
-export default function AdsClientDetailPage({ client, periods, onNavigate, onUpload, onSync, onOpenPeriod, onEditClient, onEditGoals, onDeleteClient, onDeletePeriod }) {
+export default function AdsClientDetailPage({ client, periods, onNavigate, onUpload, onSync, onGenerateReport, onOpenPeriod, onEditClient, onEditGoals, onDeleteClient, onDeletePeriod }) {
   const platforms = adsPlatformFlags(client);
   const latestReport = periods[0]?.period_label || "-";
   return (
@@ -28,7 +28,7 @@ export default function AdsClientDetailPage({ client, periods, onNavigate, onUpl
       </div>
       <div className="month-grid">
         {periods.length ? periods.map((period) => (
-          <AdsMonthCard key={period.id} period={period} platforms={platforms} accounts={client.meta_ad_accounts || []} onOpen={() => onOpenPeriod(adsPeriodSlug(period))} onUpdate={onUpload} onSync={onSync} onEditGoals={onEditGoals} onDelete={onDeletePeriod} />
+          <AdsMonthCard key={period.id} period={period} platforms={platforms} accounts={client.meta_ad_accounts || []} onOpen={() => onOpenPeriod(adsPeriodSlug(period))} onUpdate={onUpload} onSync={onSync} onGenerateReport={onGenerateReport} onEditGoals={onEditGoals} onDelete={onDeletePeriod} />
         )) : <div className="empty report-empty">No Ads report data has been imported for this client yet. Add report data to create the first report month.</div>}
       </div>
     </section>

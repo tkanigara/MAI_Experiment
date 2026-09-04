@@ -20,3 +20,4 @@ dashboard/dist/
 .mypy_cache/
 .ruff_cache/
 test-results/
+artifacts/

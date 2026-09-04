@@ -205,6 +205,32 @@ def ads_product_configuration(value=None) -> dict:
 
 def ads_period_configuration(value=None, platforms=None) -> dict:
     configured_platforms = normalize_ads_platforms(platforms)
+    if isinstance(value, dict) and (
+        value.get("objective_model") == "canonical" or "objective_configs" in value
+    ):
+        objective_configs = value.get("objective_configs") or {}
+        meta_configs = objective_configs.get("meta") or {}
+        goals = {}
+        for platform in configured_platforms:
+            platform_configs = meta_configs if platform in ("instagram", "facebook") else {}
+            allowed = {goal["key"] for goal in ADS_GOAL_DEFINITIONS[platform]}
+            goals[platform] = [
+                {
+                    "key": objective,
+                    **{
+                        field: (values or {}).get(field)
+                        for field in GOAL_TARGET_FIELDS
+                    },
+                }
+                for objective, values in platform_configs.items()
+                if objective in allowed
+            ]
+        return {
+            "version": value.get("version", 2),
+            "objective_model": "canonical",
+            "objective_configs": objective_configs,
+            "goals": goals,
+        }
     return {
         "goals": normalize_ads_goals(
             value,
@@ -217,14 +243,36 @@ def ads_period_configuration(value=None, platforms=None) -> dict:
 def ads_platform_catalog(configured_platforms=None, period_configuration=None) -> list[dict]:
     product_configuration = ads_product_configuration(configured_platforms)
     configured = set(product_configuration["platforms"])
-    active_goals = (
-        ads_period_configuration(
-            period_configuration,
-            product_configuration["platforms"],
-        )["goals"]
-        if period_configuration is not None
-        else {}
-    )
+    if isinstance(period_configuration, dict) and (
+        period_configuration.get("objective_model") == "canonical"
+        or "objective_configs" in period_configuration
+    ):
+        meta_configs = (
+            (period_configuration.get("objective_configs") or {}).get("meta") or {}
+        )
+        canonical_goals = [
+            {
+                "key": objective,
+                **{
+                    field: (values or {}).get(field)
+                    for field in GOAL_TARGET_FIELDS
+                },
+            }
+            for objective, values in meta_configs.items()
+        ]
+        active_goals = {
+            platform: list(canonical_goals) if platform in ("instagram", "facebook") else []
+            for platform in product_configuration["platforms"]
+        }
+    else:
+        active_goals = (
+            ads_period_configuration(
+                period_configuration,
+                product_configuration["platforms"],
+            )["goals"]
+            if period_configuration is not None
+            else {}
+        )
     return [
         {
             **definition,

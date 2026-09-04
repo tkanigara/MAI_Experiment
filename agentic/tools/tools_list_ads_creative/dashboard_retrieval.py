@@ -114,6 +114,7 @@ def retrieve_ads_data(
     analysis_type: str = "creative",
     platform_scope: str = "meta",
     objectives: list[str] | None = None,
+    objective: str | None = None,
     campaign_ids: list[str] | None = None,
     adset_ids: list[str] | None = None,
     include_breakdowns: bool = False,
@@ -129,11 +130,16 @@ def retrieve_ads_data(
 
     api = client or AdsDashboardClient()
 
+    requested_values = list(objectives or [])
+    if not requested_values and objective:
+        requested_values = [objective]
+
     requested_objectives = [
         str(item).strip().lower().replace(" ", "_")
-        for item in (objectives or [])
+        for item in requested_values
         if str(item).strip()
     ]
+    requested_objectives = list(dict.fromkeys(requested_objectives))
 
     try:
         resolved_client, resolved_period = api.resolve_client_and_period(

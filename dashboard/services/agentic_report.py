@@ -56,8 +56,11 @@ def load_agentic_graph():
     if str(agentic_dir) not in sys.path:
         sys.path.insert(0, str(agentic_dir))
 
-    graph_module = importlib.import_module("CentralArch.graph")
-    state_module = importlib.import_module("CentralArch.state")
+    # The social workflow was moved out of the legacy CentralArch package.
+    # Keep the loader centralized so queued workers and direct runs resolve the
+    # same graph regardless of the process start method.
+    graph_module = importlib.import_module("workflows.socmed_workflow.graph")
+    state_module = importlib.import_module("workflows.socmed_workflow.state")
     agentic_graph = graph_module.app
     Request = state_module.Request
     State = state_module.State
@@ -214,6 +217,10 @@ def generate_agentic_report(
     on_presentation_created: Callable[[dict], None] | None = None,
     existing_presentation_id: str | None = None,
     existing_report_name: str | None = None,
+    report_type: str = "social_media",
+    report_model: str = "jba",
+    platform_scope: str | None = None,
+    objective: str | None = None,
 ) -> dict:
     try:
         from dashboard.services.report_jobs import (
@@ -221,6 +228,29 @@ def generate_agentic_report(
         )
     except ModuleNotFoundError:
         from services.report_jobs import ReportGenerationCancelledError
+
+    # Ads reports use the canonical Ads snapshot directly.  Keeping this
+    # branch here lets the existing report queue, cancellation, retries, and
+    # presentation checkpointing serve both workspaces without running the
+    # social-media analysis graph for paid-media data.
+    if str(report_type or "").strip().lower() in {"ads", "meta_ads", "paid_ads"}:
+        try:
+            from dashboard.services.slides_report import generate_ads_report_slides
+        except ModuleNotFoundError:
+            from services.slides_report import generate_ads_report_slides
+        return generate_ads_report_slides(
+            client_id=client_id,
+            period_id=period_id,
+            dry_run=dry_run,
+            report_model=report_model,
+            platform_scope=platform_scope,
+            objective=objective,
+            existing_presentation_id=existing_presentation_id,
+            existing_report_name=existing_report_name,
+            on_presentation_created=on_presentation_created,
+            should_cancel=should_cancel,
+            on_stage=on_stage,
+        )
 
     def cancellation_checkpoint() -> None:
         if should_cancel and should_cancel():
@@ -277,7 +307,9 @@ def generate_agentic_report(
             on_stage("slides")
         cancellation_checkpoint()
 
-        slides_module = importlib.import_module("agents.slides_generation")
+        slides_module = importlib.import_module(
+            "agents.socmed_agents.slides_generation"
+        )
         state_after_analysis = State(**result)
         insight_overrides = slides_module.state_insight_overrides(
             state_after_analysis

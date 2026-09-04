@@ -58,11 +58,13 @@ export default function Header({ activeSection, workspace, currentClient, onNavi
               <MenuItem title="Report Months" description="Open this client's monthly reports" onClick={() => onNavigate(clientPath)} />
               {isAds && <MenuItem title="Metric Display Settings" description="Choose metrics shown across reports" onClick={onOpenMetricSettings} />}
             </HeaderMenu>}
-            {!isAds && (
-              <button type="button" className={activeSection === "report-jobs" ? "active" : ""} onClick={() => onNavigate("/social/report-jobs")}>
-                Report Queue
-              </button>
-            )}
+            <button
+              type="button"
+              className={activeSection === "report-jobs" ? "active" : ""}
+              onClick={() => onNavigate(`/${isAds ? "ads" : "social"}/report-jobs`)}
+            >
+              Report Queue
+            </button>
             <HeaderMenu label="Workspace" panelLabel="Switch workspace">
               <MenuItem title="Ads" description="Paid campaign reporting" onClick={() => onNavigate("/ads/clients")} />
               <MenuItem title="Social Media" description="Organic content reporting" onClick={() => onNavigate("/social/clients")} />

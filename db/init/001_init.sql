@@ -584,7 +584,12 @@ CREATE TABLE IF NOT EXISTS report_assets (
 CREATE TABLE IF NOT EXISTS report_generation_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-    report_period_id UUID NOT NULL REFERENCES report_periods(id) ON DELETE CASCADE,
+    -- Generic period identifier. The report_type selects report_periods or
+    -- meta_ads_report_periods; deletion triggers below preserve cascade rules.
+    report_period_id UUID NOT NULL,
+    report_type TEXT NOT NULL DEFAULT 'social_media' CHECK (
+        report_type IN ('social_media', 'meta_ads')
+    ),
     retry_of_job_id UUID REFERENCES report_generation_jobs(id) ON DELETE SET NULL,
     client_name_snapshot TEXT NOT NULL,
     period_label_snapshot TEXT NOT NULL,
@@ -833,12 +838,13 @@ CREATE INDEX IF NOT EXISTS idx_report_assets_period
     ON report_assets (report_period_id, created_at DESC);
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_report_generation_jobs_active_period
-    ON report_generation_jobs (client_id, report_period_id)
+    ON report_generation_jobs (client_id, report_type, report_period_id)
     WHERE status IN ('queued', 'running', 'retrying', 'cancel_requested');
 
 CREATE INDEX IF NOT EXISTS idx_report_generation_jobs_period_history
     ON report_generation_jobs (
         client_id,
+        report_type,
         report_period_id,
         created_at DESC
     );
@@ -1019,6 +1025,7 @@ CREATE TABLE IF NOT EXISTS meta_ads_demographic_breakdown (
     campaign_external_id TEXT, campaign_name TEXT,
     adset_external_id TEXT, adset_name TEXT NOT NULL,
     ad_external_id TEXT, ad_name TEXT NOT NULL,
+    publisher_platform TEXT,
     age TEXT NOT NULL, gender TEXT NOT NULL,
     source_row_key CHAR(64) NOT NULL, source_row_number INTEGER NOT NULL,
     reporting_start DATE NOT NULL, reporting_end DATE NOT NULL, delivery_status TEXT,
@@ -1046,6 +1053,7 @@ CREATE TABLE IF NOT EXISTS meta_ads_region_breakdown (
     campaign_external_id TEXT, campaign_name TEXT,
     adset_external_id TEXT, adset_name TEXT NOT NULL,
     ad_external_id TEXT, ad_name TEXT NOT NULL,
+    publisher_platform TEXT,
     region TEXT NOT NULL,
     source_row_key CHAR(64) NOT NULL, source_row_number INTEGER NOT NULL,
     reporting_start DATE NOT NULL, reporting_end DATE NOT NULL, delivery_status TEXT,
@@ -1256,3 +1264,24 @@ BEGIN
         EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS page_likes NUMERIC(28, 4)', table_name);
     END LOOP;
 END $$;
+
+CREATE OR REPLACE FUNCTION cascade_report_jobs_for_period()
+RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM report_generation_jobs
+    WHERE client_id = OLD.client_id
+      AND report_period_id = OLD.id
+      AND report_type = TG_ARGV[0];
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS cascade_social_report_jobs ON report_periods;
+CREATE TRIGGER cascade_social_report_jobs
+AFTER DELETE ON report_periods
+FOR EACH ROW EXECUTE FUNCTION cascade_report_jobs_for_period('social_media');
+
+DROP TRIGGER IF EXISTS cascade_meta_ads_report_jobs ON meta_ads_report_periods;
+CREATE TRIGGER cascade_meta_ads_report_jobs
+AFTER DELETE ON meta_ads_report_periods
+FOR EACH ROW EXECUTE FUNCTION cascade_report_jobs_for_period('meta_ads');

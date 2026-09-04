@@ -1,6 +1,6 @@
 from datetime import date
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 class Request(BaseModel):
     client_code: str
@@ -12,6 +12,10 @@ class Request(BaseModel):
         default_factory=list
     )
 
+    # Backwards compatibility for callers that still send the old singular
+    # request contract. New callers should use ``objectives``.
+    objective: str | None = None
+
     campaign_ids: list[str] = Field(
         default_factory=list
     )
@@ -21,6 +25,19 @@ class Request(BaseModel):
     )
 
     include_breakdowns: bool = False
+
+    @model_validator(mode="after")
+    def normalise_objectives(self):
+        values = [
+            str(item).strip().lower().replace(" ", "_")
+            for item in self.objectives
+            if str(item).strip()
+        ]
+        if not values and self.objective and self.objective.strip():
+            values = [self.objective.strip().lower().replace(" ", "_")]
+        self.objectives = list(dict.fromkeys(values))
+        self.objective = self.objectives[0] if len(self.objectives) == 1 else None
+        return self
 class MetaData(BaseModel):
     client_id: str | None = None
     client_code:str | None = None
@@ -98,9 +115,28 @@ class TaskDelegation(BaseModel):
     client_code: str | None = None
     runner: str | None = None
 
+
+class ObjectiveMetricAnalysis(BaseModel):
+    """One platform analysis kept separate from every other objective."""
+
+    objective: str
+    status: str = "ready"
+    error: str | None = None
+    performance_overview: str | None = None
+    content_analysis: str | None = None
+    placement_analysis: str | None = None
+    audience_demographic_analysis: str | None = None
+    region_analysis: str | None = None
+    testing_optimization: str | None = None
+    bidding_optimisation: str | None = None
+    optimisation_action: str | None = None
+
 class InstagramMetricAnalysis(BaseModel):
     client_code: str | None = None
     objective: str | None = None
+    objectives: list[str] = Field(default_factory=list)
+    objective_results: dict[str, ObjectiveMetricAnalysis] = Field(default_factory=dict)
+    analysis_error: str | None = None
 
     performance_overview: str | None = None
     content_analysis: str | None = None
@@ -136,6 +172,9 @@ class InstagramMetricAnalysis(BaseModel):
 class FacebookMetricAnalysis(BaseModel):
     client_code: str | None = None
     objective: str | None = None
+    objectives: list[str] = Field(default_factory=list)
+    objective_results: dict[str, ObjectiveMetricAnalysis] = Field(default_factory=dict)
+    analysis_error: str | None = None
 
     performance_overview: str | None = None
     content_analysis: str | None = None
@@ -176,6 +215,10 @@ class FacebookMetricAnalysis(BaseModel):
 
 class YoutubeMetricAnalysis(BaseModel):
     client_code: str | None = None
+    objective: str | None = None
+    objectives: list[str] = Field(default_factory=list)
+    objective_results: dict[str, ObjectiveMetricAnalysis] = Field(default_factory=dict)
+    analysis_error: str | None = None
 
     performance_overview_impressions: str | None = None
     performance_overview_views: str | None = None
@@ -195,6 +238,10 @@ class YoutubeMetricAnalysis(BaseModel):
 
 class TiktokMetricAnalysis(BaseModel):
     client_code: str | None = None
+    objective: str | None = None
+    objectives: list[str] = Field(default_factory=list)
+    objective_results: dict[str, ObjectiveMetricAnalysis] = Field(default_factory=dict)
+    analysis_error: str | None = None
 
     performance_overview_views: str |  None = None
     performance_overview_follow: str | None = None

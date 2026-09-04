@@ -70,6 +70,27 @@ def test_profile_growth_metrics_use_platform_specific_meta_values():
     assert _facebook_page_likes({}) is None
 
 
+def test_audience_breakdowns_use_meta_supported_combinations(monkeypatch):
+    client = MetaAdsApiClient("token", max_retries=0)
+    requested = []
+    monkeypatch.setattr(client, "_entities", lambda _account: ({}, {}, {}, []))
+
+    def insights(_account, _start, _end, *, level="ad", breakdowns=None):
+        requested.append(breakdowns)
+        return []
+
+    monkeypatch.setattr(client, "_insights", insights)
+    result = client.fetch_account_snapshot(
+        {"id": "act_1"}, date(2026, 7, 1), date(2026, 7, 31),
+        ["instagram", "facebook"],
+    )
+    assert ["age", "gender"] in requested
+    assert ["region"] in requested
+    assert ["publisher_platform", "age", "gender"] not in requested
+    assert ["publisher_platform", "region"] not in requested
+    assert "shared All Meta" in result["warnings"][0]
+
+
 class FakeRepository:
     def __init__(self, accounts):
         self.accounts = accounts

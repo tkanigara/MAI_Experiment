@@ -8,6 +8,7 @@ def tt_follow_agent(state: State) -> dict:
     with node("TikTok Ads Follow Analysis running"):
         return run_ads_analysis_agent(
             state,
+            objective="follow",
             system_prompt=SYSTEM_PROMPT,
             result_model=TiktokMetricAnalysis,
             result_field="tiktok_result",
@@ -19,4 +20,3 @@ def tt_follow_agent(state: State) -> dict:
             ],
             label="TikTok Ads Paid Follows",
         )
-

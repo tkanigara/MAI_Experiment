@@ -8,6 +8,7 @@ def yt_impressions_agent(state: State) -> dict:
     with node("Youtube Ads Impressions Analysis running"):
         return run_ads_analysis_agent(
             state,
+            objective="impressions",
             system_prompt=SYSTEM_PROMPT,
             result_model=YoutubeMetricAnalysis,
             result_field="youtube_result",
@@ -20,4 +21,3 @@ def yt_impressions_agent(state: State) -> dict:
             ],
             label="YouTube Ads Impressions",
         )
-

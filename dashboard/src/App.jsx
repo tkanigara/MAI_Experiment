@@ -9,6 +9,7 @@ import ObjectiveKpiModal from "./components/ObjectiveKpiModal";
 import CampaignObjectiveModal from "./components/CampaignObjectiveModal";
 import MetricDisplaySettingsModal from "./components/MetricDisplaySettingsModal";
 import GenerateReportModal from "./components/GenerateReportModal";
+import AdsGenerateReportModal from "./components/AdsGenerateReportModal";
 import Header from "./components/Header";
 import MetaAdsImportModal from "./components/MetaAdsImportModal";
 import MetaAdsSyncModal from "./components/MetaAdsSyncModal";
@@ -77,6 +78,7 @@ export default function App() {
   const [adsPeriodOverview, setAdsPeriodOverview] = useState(null);
   const [adsImportPeriod, setAdsImportPeriod] = useState(null);
   const [adsSyncContext, setAdsSyncContext] = useState(null);
+  const [adsGenerateReportTarget, setAdsGenerateReportTarget] = useState(null);
   const [platformData, setPlatformData] = useState({});
   const [modal, setModal] = useState(null);
   const [generateReportTarget, setGenerateReportTarget] = useState(null);
@@ -121,8 +123,11 @@ export default function App() {
   const workspace = workspaceFromPath();
   const isAdsWorkspace = workspace === "ads";
   const isSocialWorkspace = workspace === "social";
-  const isGlobalReportJobs = isSocialWorkspace && route[0] === "report-jobs";
-  const isClientReportJobs = isSocialWorkspace && route[0] === "clients" && route[2] === "report-jobs";
+  const isGlobalReportJobs = (isSocialWorkspace || isAdsWorkspace)
+    && route[0] === "report-jobs";
+  const isClientReportJobs = (isSocialWorkspace || isAdsWorkspace)
+    && route[0] === "clients"
+    && route[2] === "report-jobs";
   const reportHistoryPage = (isGlobalReportJobs || isClientReportJobs)
     ? historyPageFromLocation()
     : 1;
@@ -283,8 +288,9 @@ export default function App() {
       setReportJobs([]);
       return [];
     }
+    const reportType = isAdsWorkspace ? "meta_ads" : "social_media";
     const payload = await api(
-      `/api/clients/${client.id}/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}`,
+      `/api/clients/${client.id}/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}&report_type=${reportType}`,
     );
     const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
     const pagination = Array.isArray(payload) ? {
@@ -294,7 +300,7 @@ export default function App() {
       total_pages: 1,
     } : payload.pagination;
     if (
-      isClientReportJobs
+    isClientReportJobs
       && pagination?.page
       && pagination.page !== page
     ) {
@@ -304,8 +310,9 @@ export default function App() {
   }
 
   async function loadGlobalReportJobs(page = reportHistoryPage) {
+    const reportType = isAdsWorkspace ? "meta_ads" : "social_media";
     const payload = await api(
-      `/api/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}`,
+      `/api/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}&report_type=${reportType}`,
     );
     const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
     const pagination = Array.isArray(payload) ? {
@@ -643,6 +650,58 @@ export default function App() {
     }
   }
 
+  function requestAdsSlidesReportGeneration(period) {
+    if (!selectedClient || !period?.id) return;
+    const activeJob = activeJobForPeriod(period.id);
+    if (activeJob) {
+      setFocusedReportJobId(activeJob.id);
+      return;
+    }
+    setAdsGenerateReportTarget(period);
+  }
+
+  async function generateAdsSlidesReport(period, options = {}) {
+    if (!selectedClient || !period?.id) return false;
+    const activeJob = activeJobForPeriod(period.id);
+    if (activeJob) {
+      setFocusedReportJobId(activeJob.id);
+      return true;
+    }
+    setReportJobActionId(`create:${period.id}`);
+    try {
+      const job = await api("/api/report-jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: selectedClient.id,
+          period_id: period.id,
+          report_type: "meta_ads",
+          report_model: options.report_model || "jba",
+          platform_scope: options.platform_scope || "meta",
+        }),
+      });
+      mergeReportJobs([job]);
+      setFocusedReportJobId(job.id);
+      setReportElapsed(0);
+      return true;
+    } catch (err) {
+      const jobs = await loadClientReportJobs(selectedClient).catch(() => []);
+      const queuedJob = jobs.find(
+        (job) => (
+          String(job.report_period_id) === String(period.id)
+          && isActiveReportJob(job)
+        ),
+      );
+      if (queuedJob) {
+        setFocusedReportJobId(queuedJob.id);
+        return true;
+      }
+      showToast(err.message || "Failed to add Ads report to queue.");
+      return false;
+    } finally {
+      setReportJobActionId("");
+    }
+  }
+
   async function confirmSlidesReportGeneration() {
     if (!generateReportTarget) return;
     const wasQueued = await generateSlidesReport(generateReportTarget);
@@ -763,11 +822,11 @@ export default function App() {
       window.clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGlobalReportJobs, reportHistoryPage]);
+  }, [isGlobalReportJobs, reportHistoryPage, workspace]);
 
   useEffect(() => {
     if (
-      !isSocialWorkspace
+      (!isSocialWorkspace && !isAdsWorkspace)
       ||
       !currentClient
       || !selectedClient
@@ -794,6 +853,7 @@ export default function App() {
     selectedClient?.id,
     isGlobalReportJobs,
     reportHistoryPage,
+    workspace,
   ]);
 
   useEffect(() => {
@@ -824,7 +884,7 @@ export default function App() {
   }, [selectedClient?.id, currentAdsPeriod?.id, currentAdsPlatform, workspace]);
 
   useEffect(() => {
-    if (!isSocialWorkspace || !activeReportJobIdsKey) return undefined;
+    if ((!isSocialWorkspace && !isAdsWorkspace) || !activeReportJobIdsKey) return undefined;
     const jobIds = activeReportJobIdsKey.split(",");
     let stopped = false;
     const poll = async () => {
@@ -922,6 +982,7 @@ export default function App() {
           onEditGoals={setEditAdsPeriodGoals}
           onDeleteClient={setDeleteTarget}
           onDeletePeriod={setDeleteAdsPeriodTarget}
+          onGenerateReport={requestAdsSlidesReportGeneration}
           onUpload={(period) => {
             setAdsImportPeriod(period);
             setModal("add-ads-import");
@@ -940,6 +1001,7 @@ export default function App() {
           overview={adsPeriodOverview}
           onNavigate={navigate}
           onOpenPlatform={(path) => navigate(`/ads/clients/${path}`)}
+          onGenerateReport={requestAdsSlidesReportGeneration}
           onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
           onSync={(period) => setAdsSyncContext({ period, platform: null })}
           onEditGoals={setEditAdsPeriodGoals}
@@ -1009,9 +1071,10 @@ export default function App() {
     }
   }
 
-  if (isSocialWorkspace && isGlobalReportJobs) {
+  if (isGlobalReportJobs) {
     content = (
       <ReportJobsPage
+        workspace={workspace}
         jobs={reportJobs}
         pagination={reportJobsPagination}
         actionJobId={reportJobActionId}
@@ -1031,8 +1094,7 @@ export default function App() {
 
   if (
     isSocialWorkspace
-    &&
-    currentClient
+    && currentClient
     && selectedClient
     && !currentMonth
     && !isClientReportJobs
@@ -1091,7 +1153,7 @@ export default function App() {
   }
 
   if (
-    isSocialWorkspace
+    (isSocialWorkspace || isAdsWorkspace)
     &&
     currentClient
     && selectedClient
@@ -1103,6 +1165,7 @@ export default function App() {
     content = (
       <ReportJobsPage
         client={selectedClient}
+        workspace={workspace}
         jobs={reportJobs}
         pagination={reportJobsPagination}
         actionJobId={reportJobActionId}
@@ -1364,6 +1427,18 @@ export default function App() {
           }}
         />
       )}
+      {isAdsWorkspace && adsGenerateReportTarget && selectedClient && (
+        <AdsGenerateReportModal
+          client={selectedClient}
+          period={adsGenerateReportTarget}
+          isSubmitting={reportJobActionId === `create:${adsGenerateReportTarget.id}`}
+          onClose={() => setAdsGenerateReportTarget(null)}
+          onConfirm={async (options) => {
+            const queued = await generateAdsSlidesReport(adsGenerateReportTarget, options);
+            if (queued) setAdsGenerateReportTarget(null);
+          }}
+        />
+      )}
       {isAdsWorkspace && editAdsPeriodGoals && selectedClient && (
         <ObjectiveKpiModal
           client={selectedClient}
@@ -1547,8 +1622,13 @@ export default function App() {
                   (client) => String(client.id) === String(reportJob.client_id),
                 );
                 if (targetClient) {
+                  const jobType = reportJob.report_type
+                    || reportJob.result_metadata?.report_type;
+                  const workspacePrefix = jobType === "meta_ads"
+                    ? "/ads"
+                    : "";
                   navigate(
-                    `/clients/${clientSlug(targetClient)}/report-jobs`,
+                    `${workspacePrefix}/clients/${clientSlug(targetClient)}/report-jobs`,
                   );
                 } else {
                   navigate("/report-jobs");

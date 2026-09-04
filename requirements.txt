@@ -8,17 +8,26 @@ matplotlib
 Pillow
 python-dotenv
 google-api-python-client
-google-auth
+# Keep Docker's resolver on the dependency set already validated by the
+# dashboard image; otherwise it backtracks across every google-auth release.
+google-api-core==2.33.0
+google-auth==2.57.0
 google-auth-httplib2
 google-auth-oauthlib
+pyasn1==0.6.4
+pyasn1-modules==0.4.2
 langgraph
 langchain
 langchain-core
-langchain-google-genai
+langchain-google-genai>=4.2,<4.3
+# 2.x currently rejects candidate_count emitted by the LangChain adapter used
+# by the existing Social agents. Keep the known-compatible SDK line.
+google-genai>=1.65,<2
 google-generativeai
 google-cloud-secret-manager
 google-cloud-storage
 google-cloud-tasks
+qstash>=3.4,<4
 gspread
 gspread_dataframe
 SQLAlchemy

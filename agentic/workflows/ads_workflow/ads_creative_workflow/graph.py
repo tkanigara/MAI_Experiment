@@ -262,40 +262,28 @@ workflow.add_conditional_edges(
 # INSTAGRAM RUNNER → INSTAGRAM AGENTS
 # ============================================================
 
-workflow.add_conditional_edges(
-    "ig_runner_node",
-    instagram_router
-)
+workflow.add_edge("ig_runner_node", "summary")
 
 
 # ============================================================
 # FACEBOOK RUNNER → FACEBOOK AGENTS
 # ============================================================
 
-workflow.add_conditional_edges(
-    "fb_runner_node",
-    facebook_router
-)
+workflow.add_edge("fb_runner_node", "summary")
 
 
 # ============================================================
 # YOUTUBE RUNNER → YOUTUBE AGENTS
 # ============================================================
 
-workflow.add_conditional_edges(
-    "yt_runner_node",
-    youtube_router
-)
+workflow.add_edge("yt_runner_node", "summary")
 
 
 # ============================================================
 # TIKTOK RUNNER → TIKTOK AGENTS
 # ============================================================
 
-workflow.add_conditional_edges(
-    "tt_runner_node",
-    tiktok_router
-)
+workflow.add_edge("tt_runner_node", "summary")
 
 
 # ============================================================

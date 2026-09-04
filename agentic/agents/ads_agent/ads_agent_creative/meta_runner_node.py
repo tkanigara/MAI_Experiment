@@ -29,6 +29,9 @@ from agentic.agents.ads_agent.ads_agent_creative.ig_reach_agent import (
 )
 
 from agentic.utils.logger import node
+from agentic.agents.ads_agent.ads_agent_creative.result_merge import (
+    merge_objective_result,
+)
 
 from agentic.workflows.ads_workflow.ads_creative_workflow.state import (
     FacebookMetricAnalysis,
@@ -71,19 +74,7 @@ def _merge_instagram_result(
     previous objectives are not overwritten.
     """
 
-    if current is None:
-        return new_result
-
-    current_data = current.model_dump()
-    new_data = new_result.model_dump()
-
-    for field, value in new_data.items():
-
-        # Do not overwrite existing values with None.
-        if value is not None:
-            current_data[field] = value
-
-    return InstagramMetricAnalysis(**current_data)
+    return merge_objective_result(current, new_result)
 
 
 def _merge_facebook_result(
@@ -98,19 +89,7 @@ def _merge_facebook_result(
     previous objectives are not overwritten.
     """
 
-    if current is None:
-        return new_result
-
-    current_data = current.model_dump()
-    new_data = new_result.model_dump()
-
-    for field, value in new_data.items():
-
-        # Do not overwrite existing values with None.
-        if value is not None:
-            current_data[field] = value
-
-    return FacebookMetricAnalysis(**current_data)
+    return merge_objective_result(current, new_result)
 
 
 def meta_runner_node(state: State) -> dict:

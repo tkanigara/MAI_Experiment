@@ -217,8 +217,21 @@ class MetaAdsApiClient:
         campaign_meta, adset_meta, ad_meta, raw_ads = self._entities(account_id)
         level_rows = {level: self._insights(account_id, start, end, level=level) for level in ("campaign", "adset", "ad")}
         placement_rows = self._insights(account_id, start, end, breakdowns=["publisher_platform", "platform_position", "impression_device"])
-        demographic_rows = self._insights(account_id, start, end, breakdowns=["age", "gender"])
-        region_rows = self._insights(account_id, start, end, breakdowns=["region"])
+        # Meta rejects publisher_platform combined with age/gender or region
+        # (error code 100). Keep these as honest All Meta breakdowns instead of
+        # failing the entire sync or duplicating one audience total per platform.
+        demographic_rows = self._insights(
+            account_id,
+            start,
+            end,
+            breakdowns=["age", "gender"],
+        )
+        region_rows = self._insights(
+            account_id,
+            start,
+            end,
+            breakdowns=["region"],
+        )
 
         def normalized(row: dict, row_number: int, scope_platform: str) -> dict:
             actions = _actions(row)
@@ -285,7 +298,7 @@ class MetaAdsApiClient:
         for kind, rows in (("placement", placement_rows), ("demographic", demographic_rows), ("region", region_rows)):
             for index, row in enumerate(rows, 1):
                 publisher = str(row.get("publisher_platform") or "").lower()
-                if kind == "placement" and publisher not in platforms:
+                if publisher and publisher not in platforms:
                     continue
                 datasets[kind].append(normalized(row, index, publisher or "meta"))
 
@@ -304,7 +317,14 @@ class MetaAdsApiClient:
                 "page_id": story_spec.get("page_id"), "instagram_actor_id": story_spec.get("instagram_actor_id"),
                 "creative_fetched_at": fetched_at, "raw_data": ad,
             })
-        return {"datasets": datasets, "creatives": creatives}
+        return {
+            "datasets": datasets,
+            "creatives": creatives,
+            "warnings": [
+                "Meta provides age/gender and region as shared All Meta breakdowns; "
+                "they are not attributed separately to Instagram or Facebook."
+            ],
+        }
 
 
 class MetaAdsSyncService:
@@ -337,6 +357,9 @@ class MetaAdsSyncService:
                 for key in datasets:
                     datasets[key].extend(fetched["datasets"][key])
                 creatives.extend(fetched["creatives"])
+                for warning in fetched.get("warnings") or []:
+                    if warning not in warnings:
+                        warnings.append(warning)
             return self.repository.complete_api_snapshot(import_id, client_id, period_id, platforms, datasets, creatives, warnings)
         except Exception as exc:
             self.repository.fail_api_snapshot(import_id, str(exc))

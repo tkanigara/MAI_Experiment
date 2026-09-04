@@ -18,8 +18,7 @@ request = {
     "objectives": [
         "reach",
         "engagement",
-        "profilevisit",
-        "pagelike",
+        "link_clicks",
     ],
     "campaign_ids": [],
     "adset_ids": [],
@@ -27,11 +26,45 @@ request = {
 }
 
 
+def print_objective_results(result, platform_name: str) -> bool:
+    """Print the canonical multi-objective output when it is available."""
+
+    objective_results = getattr(result, "objective_results", {}) or {}
+    if not objective_results:
+        return False
+
+    print("\n" + "=" * 80)
+    print(f"{platform_name.upper()} ANALYSIS")
+    print("=" * 80)
+    for objective, analysis in objective_results.items():
+        print(f"\n### {objective.upper()} [{analysis.status}]")
+        if analysis.error:
+            print(f"Error: {analysis.error}")
+        for label, field in (
+            ("Performance Overview", "performance_overview"),
+            ("Content Analysis", "content_analysis"),
+            ("Placement Analysis", "placement_analysis"),
+            ("Audience Demographic Analysis", "audience_demographic_analysis"),
+            ("Region Analysis", "region_analysis"),
+            ("Testing Optimization", "testing_optimization"),
+            ("Bidding Optimisation", "bidding_optimisation"),
+            ("Optimisation Action", "optimisation_action"),
+        ):
+            value = getattr(analysis, field, None)
+            if value is not None:
+                print(f"\n--- {label} ---")
+                print(value)
+    return True
+
+
 # =========================================================
 # INSTAGRAM RESULT
 # =========================================================
 
 def print_instagram_result(result):
+
+    if print_objective_results(result, "Instagram"):
+        return
 
     print("\n" + "=" * 80)
     print("INSTAGRAM ANALYSIS")
@@ -115,6 +148,9 @@ def print_instagram_result(result):
 # =========================================================
 
 def print_facebook_result(result):
+
+    if print_objective_results(result, "Facebook"):
+        return
 
     print("\n" + "=" * 80)
     print("FACEBOOK ANALYSIS")
@@ -259,6 +295,9 @@ def print_facebook_result(result):
 
 def print_youtube_result(result):
 
+    if print_objective_results(result, "YouTube"):
+        return
+
     print("\n" + "=" * 80)
     print("YOUTUBE ANALYSIS")
     print("=" * 80)
@@ -311,6 +350,9 @@ def print_youtube_result(result):
 # =========================================================
 
 def print_tiktok_result(result):
+
+    if print_objective_results(result, "TikTok"):
+        return
 
     print("\n" + "=" * 80)
     print("TIKTOK ANALYSIS")

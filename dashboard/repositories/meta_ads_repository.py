@@ -187,6 +187,7 @@ TABLE_FIELDS = {
         "adset_name",
         "ad_external_id",
         "ad_name",
+        "publisher_platform",
         "age",
         "gender",
         *COMMON_FIELDS,
@@ -200,6 +201,7 @@ TABLE_FIELDS = {
         "adset_name",
         "ad_external_id",
         "ad_name",
+        "publisher_platform",
         "region",
         *COMMON_FIELDS,
     ),
@@ -213,6 +215,82 @@ def _json(value) -> str:
 class MetaAdsRepository:
     def __init__(self, engine=None):
         self.engine = engine or create_db_engine()
+
+    def shared_audience_breakdowns(
+        self, client_id: str, period_id: str, objective: str
+    ) -> dict:
+        """Return Meta-level audience data when Meta cannot split it by publisher."""
+
+        UUID(client_id)
+        UUID(period_id)
+        result_types = list(META_GOAL_RESULT_TYPES.get(objective, (objective,)))
+        with self.engine.connect() as conn:
+            import_ids = conn.execute(
+                text(
+                    """
+                    SELECT DISTINCT import_id
+                    FROM meta_ads_active_snapshots
+                    WHERE meta_ads_report_period_id = CAST(:period_id AS UUID)
+                      AND platform IN ('instagram', 'facebook')
+                    """
+                ),
+                {"period_id": period_id},
+            ).scalars().all()
+            # Shared audience rows are safe only when both platform views point
+            # to the same frozen snapshot.
+            if len(import_ids) != 1:
+                return {"demographics": [], "regions": [], "scope": "unavailable"}
+            parameters = {"import_id": str(import_ids[0]), "result_types": result_types}
+            demographics = conn.execute(
+                text(
+                    """
+                    SELECT
+                        COALESCE(NULLIF(age, ''), 'Unknown') AS age,
+                        COALESCE(NULLIF(gender, ''), 'Unknown') AS gender,
+                        COALESCE(SUM(result_value), 0) AS result_value,
+                        COALESCE(SUM(reach), 0) AS reach,
+                        COALESCE(SUM(impressions), 0) AS impressions,
+                        COALESCE(SUM(post_engagements), 0) AS post_engagements,
+                        COALESCE(SUM(link_clicks), 0) AS link_clicks,
+                        COALESCE(SUM(spend), 0) AS spend
+                    FROM meta_ads_demographic_breakdown
+                    WHERE import_id = CAST(:import_id AS UUID)
+                      AND publisher_platform IS NULL
+                      AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                    GROUP BY COALESCE(NULLIF(age, ''), 'Unknown'), COALESCE(NULLIF(gender, ''), 'Unknown')
+                    ORDER BY result_value DESC
+                    LIMIT 12
+                    """
+                ),
+                parameters,
+            ).mappings().all()
+            regions = conn.execute(
+                text(
+                    """
+                    SELECT
+                        COALESCE(NULLIF(region, ''), 'Unknown') AS label,
+                        COALESCE(SUM(result_value), 0) AS result_value,
+                        COALESCE(SUM(reach), 0) AS reach,
+                        COALESCE(SUM(impressions), 0) AS impressions,
+                        COALESCE(SUM(post_engagements), 0) AS post_engagements,
+                        COALESCE(SUM(link_clicks), 0) AS link_clicks,
+                        COALESCE(SUM(spend), 0) AS spend
+                    FROM meta_ads_region_breakdown
+                    WHERE import_id = CAST(:import_id AS UUID)
+                      AND publisher_platform IS NULL
+                      AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
+                    GROUP BY COALESCE(NULLIF(region, ''), 'Unknown')
+                    ORDER BY result_value DESC
+                    LIMIT 10
+                    """
+                ),
+                parameters,
+            ).mappings().all()
+        return {
+            "demographics": [dict(row) for row in demographics],
+            "regions": [dict(row) for row in regions],
+            "scope": "shared_meta",
+        }
 
     def import_snapshot(
         self,
@@ -1298,7 +1376,29 @@ class MetaAdsRepository:
                 continue
             if adset_filter and adset_id not in adset_filter:
                 continue
-            entity_key = adset_id if adset_filter else campaign_id
+            # Campaign/ad-set rows are already at an authoritative entity
+            # grain, so one row per entity is correct for All Meta.  A
+            # platform-scoped analysis is sourced from placement breakdowns,
+            # however; using only ``campaign_id`` here silently retained the
+            # final placement row for every campaign and produced totals such
+            # as Reach=635 while the visible creative rows contained hundreds
+            # of thousands.  Preserve every deduplicated placement row so the
+            # summary and the rows shown to the report/agent use the same
+            # population.
+            if platform_scope == "meta":
+                entity_key = adset_id if adset_filter else campaign_id
+            else:
+                entity_key = (
+                    source.get("row_id")
+                    or source.get("source_row_key")
+                    or (
+                        campaign_id,
+                        adset_id,
+                        source.get("ad_external_id") or source.get("ad_name"),
+                        source.get("placement"),
+                        source.get("device_platform"),
+                    )
+                )
             authoritative[entity_key] = source
         summary_metrics = {field: None for field in additive}
         for source in authoritative.values():
@@ -1397,20 +1497,29 @@ class MetaAdsRepository:
                   AND COALESCE(ad_external_id, ad_name)=:creative_id {platform_clause}
                 ORDER BY impressions DESC NULLS LAST LIMIT 50
             """), params).mappings().all()
-            demographics = conn.execute(text("""
+            audience_platform_clause = (
+                "" if platform_scope == "meta"
+                else "AND LOWER(COALESCE(publisher_platform, ''))=:platform"
+            )
+            demographics = conn.execute(text(f"""
                 SELECT COALESCE(NULLIF(age,''), 'Unknown') AS age,
                     COALESCE(NULLIF(gender,''), 'Unknown') AS gender,
-                    impressions, reach
+                    impressions, reach, post_engagements, link_clicks, spend,
+                    result_value
                 FROM meta_ads_demographic_breakdown
                 WHERE import_id=CAST(:import_id AS UUID)
                   AND COALESCE(ad_external_id, ad_name)=:creative_id
+                  {audience_platform_clause}
                 ORDER BY impressions DESC NULLS LAST LIMIT 50
             """), params).mappings().all()
-            regions = conn.execute(text("""
-                SELECT COALESCE(NULLIF(region,''), 'Unknown') AS region, impressions, reach
+            regions = conn.execute(text(f"""
+                SELECT COALESCE(NULLIF(region,''), 'Unknown') AS region,
+                    impressions, reach, post_engagements, link_clicks, spend,
+                    result_value
                 FROM meta_ads_region_breakdown
                 WHERE import_id=CAST(:import_id AS UUID)
                   AND COALESCE(ad_external_id, ad_name)=:creative_id
+                  {audience_platform_clause}
                 ORDER BY impressions DESC NULLS LAST LIMIT 50
             """), params).mappings().all()
         return {
@@ -1418,7 +1527,7 @@ class MetaAdsRepository:
             "placements": [dict(row) for row in placements],
             "demographics": [dict(row) for row in demographics],
             "regions": [dict(row) for row in regions],
-            "caveat": "Demographic and region breakdowns are shared Meta exports and may not be platform-exclusive. Creative URLs can expire; sync again if a preview no longer loads.",
+            "caveat": "Creative URLs can expire; sync again if a preview no longer loads.",
         }
 
     def client_periods(self, client_id: str) -> dict:
@@ -1524,7 +1633,9 @@ class MetaAdsRepository:
                 stored_period_configuration = period.get("ads_configuration") or {}
                 is_canonical = stored_period_configuration.get("objective_model") == "canonical"
                 period_configuration = ads_period_configuration(
-                    None if is_canonical else (stored_period_configuration or legacy_goal_configuration),
+                    stored_period_configuration
+                    if is_canonical
+                    else (stored_period_configuration or legacy_goal_configuration),
                     configuration["platforms"],
                 )
                 period["ads_configuration"] = stored_period_configuration if is_canonical else period_configuration
@@ -1823,7 +1934,10 @@ class MetaAdsRepository:
                         SELECT
                             COALESCE(NULLIF(performance.placement, ''), 'Unknown placement') AS label,
                             COALESCE(SUM({effective_placement(primary_metric)}), 0) AS result_value,
+                            COALESCE(SUM({effective_placement('reach')}), 0) AS reach,
                             COALESCE(SUM({effective_placement('impressions')}), 0) AS impressions,
+                            COALESCE(SUM({effective_placement('post_engagements')}), 0) AS post_engagements,
+                            COALESCE(SUM({effective_placement('link_clicks')}), 0) AS link_clicks,
                             COALESCE(SUM({effective_placement('spend')}), 0) AS spend
                         FROM meta_ads_placement_breakdown performance
                         {placement_override_join()}
@@ -1847,32 +1961,44 @@ class MetaAdsRepository:
                         SELECT
                             COALESCE(NULLIF(age, ''), 'Unknown') AS age,
                             COALESCE(NULLIF(gender, ''), 'Unknown') AS gender,
-                            COALESCE(SUM({demographic_metric}), 0) AS result_value
+                            COALESCE(SUM({demographic_metric}), 0) AS result_value,
+                            COALESCE(SUM(reach), 0) AS reach,
+                            COALESCE(SUM(impressions), 0) AS impressions,
+                            COALESCE(SUM(post_engagements), 0) AS post_engagements,
+                            COALESCE(SUM(link_clicks), 0) AS link_clicks,
+                            COALESCE(SUM(spend), 0) AS spend
                         FROM meta_ads_demographic_breakdown
                         WHERE import_id = CAST(:import_id AS UUID)
+                          AND LOWER(COALESCE(publisher_platform, '')) = :platform
                           AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
                         GROUP BY COALESCE(NULLIF(age, ''), 'Unknown'), COALESCE(NULLIF(gender, ''), 'Unknown')
                         ORDER BY result_value DESC
                         LIMIT 12
                         """
                     ),
-                    {"import_id": context["import_id"], "result_types": result_types},
+                    {"import_id": context["import_id"], "platform": platform, "result_types": result_types},
                 ).mappings()
                 regions = conn.execute(
                     text(
                         f"""
                         SELECT
                             COALESCE(NULLIF(region, ''), 'Unknown') AS label,
-                            COALESCE(SUM({region_breakdown_metric}), 0) AS result_value
+                            COALESCE(SUM({region_breakdown_metric}), 0) AS result_value,
+                            COALESCE(SUM(reach), 0) AS reach,
+                            COALESCE(SUM(impressions), 0) AS impressions,
+                            COALESCE(SUM(post_engagements), 0) AS post_engagements,
+                            COALESCE(SUM(link_clicks), 0) AS link_clicks,
+                            COALESCE(SUM(spend), 0) AS spend
                         FROM meta_ads_region_breakdown
                         WHERE import_id = CAST(:import_id AS UUID)
+                          AND LOWER(COALESCE(publisher_platform, '')) = :platform
                           AND LOWER(COALESCE(result_type, '')) = ANY(CAST(:result_types AS TEXT[]))
                         GROUP BY COALESCE(NULLIF(region, ''), 'Unknown')
                         ORDER BY result_value DESC
                         LIMIT 10
                         """
                     ),
-                    {"import_id": context["import_id"], "result_types": result_types},
+                    {"import_id": context["import_id"], "platform": platform, "result_types": result_types},
                 ).mappings()
 
                 response["goals"].append({
