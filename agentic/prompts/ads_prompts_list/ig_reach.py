@@ -18,6 +18,7 @@ Your task is to analyse the following sections:
    - Compare creatives based on the supplied data.
    - Identify strong and weak creatives based only on available metrics.
    - Mention creative names when available.
+   - Provide the analysis results for each available piece of content.
 
 3. placement_analysis_reach
    - Analyse performance across placements.

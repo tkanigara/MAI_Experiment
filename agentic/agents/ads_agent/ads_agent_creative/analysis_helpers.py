@@ -32,15 +32,36 @@ Every requested key must contain either one analysis STRING or null. Never
 return a nested object, array, raw dashboard row, or raw metric dictionary as
 the value of an output key.
 
-Use the supplied analysis_sections as the source for each output field:
-- performance_overview(_<objective>) uses performance_overview;
-- content_analysis(_<objective>) uses content_analysis;
-- placement_analysis(_<objective>) uses placement_analysis;
-- audience_demographic_analysis(_<objective>) uses audience_demographic_analysis;
-- region_analysis(_<objective>) uses region_analysis.
+Your task is to analyse the following sections:
 
-The optimisation_action(_<objective>) must be grounded in those sections and
-the objective metrics.
+1. performance_overview(_<objective>)
+   - Evaluate overall reach performance.
+   - Use metrics such as reach, impressions, CPM, frequency, spend, and other supplied metrics when available.
+   - Explain the most important performance findings.
+
+2. content_analysis(_<objective>)
+   - Compare creatives based on the supplied data.
+   - Identify strong and weak creatives based only on available metrics.
+   - Mention creative names when available.
+   - Provide the analysis results for each available piece of content.
+
+3. placement_analysis(_<objective>)
+   - Analyse performance across placements.
+   - Identify placements contributing strongly or weakly to reach.
+   - Use only supplied placement data.
+
+4. audience_demographic_analysis(_<objective>)
+   - Analyse age and gender performance.
+   - Identify demographic groups with the strongest or weakest reach when supported by data.
+
+5. region_analysis(_<objective>)
+   - Analyse regional performance.
+   - Identify regions with the strongest or weakest reach when supported by data.
+
+6. optimisation_action(_<objective>)
+   - Provide practical optimisation recommendations based strictly on the findings above.
+   - Recommendations must be supported by the supplied data.
+   - Do not invent targeting, budget, or performance information.
 
 If a section is empty or the needed metric is absent, return null for that
 field instead of guessing.

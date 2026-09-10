@@ -11,14 +11,14 @@ from agentic.workflows.ads_workflow.ads_creative_workflow.state import (
 
 
 request = {
-    "client_code": "bourbon",
-    "period_id": "2026-07-01",
+    "client_code": "jba",
+    "period_id": "2026-08-01",
     "analysis_type": "creative",
     "platform_scope": "meta",
     "objectives": [
         "reach",
-        "engagement",
         "link_clicks",
+        "leads"
     ],
     "campaign_ids": [],
     "adset_ids": [],
@@ -495,7 +495,7 @@ def run(request_data: dict):
 
     print(
         f"Objectives  : "
-        f"{result_state.ads_data.objectives}"
+        f"{result_state.ads_data.objective_data}"
     )
 
     print(
@@ -522,55 +522,55 @@ def run(request_data: dict):
     # INSTAGRAM
     # =========================================================
 
-    if result_state.Metadata.instagram:
+    #if result_state.Metadata.instagram:
 
-        print_instagram_result(
-            result_state.instagram_result
-        )
+        #print_instagram_result(
+            #result_state.instagram_result
+        #)
 
     # =========================================================
     # FACEBOOK
     # =========================================================
 
-    if result_state.Metadata.facebook:
+    #if result_state.Metadata.facebook:
 
-        print_facebook_result(
-            result_state.facebook_result
-        )
+        #print_facebook_result(
+            #result_state.facebook_result
+        #)
 
     # =========================================================
     # YOUTUBE
     # =========================================================
 
-    if result_state.Metadata.youtube:
+    #if result_state.Metadata.youtube:
 
-        print_youtube_result(
-            result_state.youtube_result
-        )
+        #print_youtube_result(
+            #result_state.youtube_result
+        #)
 
     # =========================================================
     # TIKTOK
     # =========================================================
 
-    if result_state.Metadata.tiktok:
+    #if result_state.Metadata.tiktok:
 
-        print_tiktok_result(
-            result_state.tiktok_result
-        )
+        #print_tiktok_result(
+            #result_state.tiktok_result
+        #)
 
     # =========================================================
     # SUMMARY
     # =========================================================
 
-    print("\n" + "=" * 80)
-    print("SUMMARY")
-    print("=" * 80)
+    #print("\n" + "=" * 80)
+    #print("SUMMARY")
+    #print("=" * 80)
 
-    print(
-        result_state.summary_result.summary_result
-    )
+    #print(
+    #    result_state.summary_result.summary_result
+    #)
 
-    return result_state
+    #return result_state
 
 
 # =========================================================
