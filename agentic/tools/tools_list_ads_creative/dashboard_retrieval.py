@@ -99,13 +99,17 @@ def retrieve_ads_sections(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     is required, then pass its result here.
     """
 
-    return {
+    sections = {
         "performance_overview": retrieve_performance_overview(payload),
         "content_analysis": retrieve_content_analysis(payload),
         "placement_analysis": retrieve_placement_analysis(payload),
         "audience_demographic_analysis": retrieve_audience_demographic_analysis(payload),
         "region_analysis": retrieve_region_analysis(payload),
     }
+    if str((payload or {}).get("analysis_type") or "").lower() == "adset":
+        sections["objective_overview"] = dict((payload or {}).get("objective_overview") or {})
+        sections["adset_breakdowns"] = dict((payload or {}).get("adset_breakdowns") or {})
+    return sections
 
 
 def retrieve_ads_data(
@@ -229,13 +233,6 @@ def retrieve_ads_data(
                 campaign_ids=campaign_list,
                 adset_ids=adset_list,
             )
-            print("\n========== OBJECTIVE DEBUG ==========")
-            print("Requested objective :", objective)
-            print("Returned objective  :", response.get("objective"))
-            print("Data status         :", response.get("data_status"))
-            print("Response keys       :", list(response.keys()))
-            print("=====================================")
-
         except AdsDashboardClientError as exc:
             warnings.append(
                 f"Objective '{objective}' retrieval failed: {exc}"
@@ -456,6 +453,60 @@ def retrieve_ads_data(
 
             "warnings": objective_warnings,
         }
+
+        objective_config = response.get("objective_config") or (
+            (((resolved_period.get("objective_configs") or {}).get("meta") or {}).get(objective))
+            or {}
+        )
+        summary = objective_payload["summary"]
+        target = objective_config.get("target_monthly")
+        budget = objective_config.get("budget_monthly")
+        actual = summary.get("result")
+        spend = summary.get("spend")
+        objective_payload["objective_config"] = objective_config
+        objective_payload["kpi"] = response.get("kpi") or {
+            "target": target,
+            "budget": budget,
+            "target_cost_per_result": objective_config.get("target_cost_per_result"),
+            "actual": actual,
+            "spend": spend,
+            "achievement": float(actual) / float(target) * 100 if actual is not None and target else None,
+            "budget_use": float(spend) / float(budget) * 100 if spend is not None and budget else None,
+        }
+
+        if str(analysis_type).lower() == "adset":
+            adset_breakdowns = {}
+            campaigns: dict[str, dict[str, Any]] = {}
+            for row in objective_payload["rows"]:
+                adset_id = str(row.get("id") or "")
+                if not adset_id:
+                    continue
+                campaign_id = str(row.get("campaign_id") or row.get("campaign_name") or "unknown")
+                campaign = campaigns.setdefault(
+                    campaign_id,
+                    {
+                        "id": row.get("campaign_id"),
+                        "name": row.get("campaign_name"),
+                        "adsets": [],
+                    },
+                )
+                campaign["adsets"].append(row)
+                detail = breakdowns.get(adset_id) or {}
+                adset_breakdowns[adset_id] = {
+                    "adset": row,
+                    "summary": detail.get("summary") or {},
+                    "creatives": detail.get("rows") or [],
+                    "display_metrics": detail.get("display_metrics") or objective_payload["display_metrics"],
+                    "source": detail.get("source") or objective_payload["source"],
+                    "warnings": detail.get("warnings") or [],
+                }
+            objective_payload["objective_overview"] = {
+                "summary": objective_payload["summary"],
+                "kpi": objective_payload["kpi"],
+                "campaigns": list(campaigns.values()),
+                "adsets": objective_payload["rows"],
+            }
+            objective_payload["adset_breakdowns"] = adset_breakdowns
 
         # Build the existing analysis sections.
         objective_payload["sections"] = retrieve_ads_sections(

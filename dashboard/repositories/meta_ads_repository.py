@@ -1180,6 +1180,16 @@ class MetaAdsRepository:
             objective_definition("meta", objective_key)
 
         with self.engine.connect() as conn:
+            period_configuration = conn.execute(text("""
+                SELECT configuration
+                FROM meta_ads_report_periods
+                WHERE id=CAST(:period_id AS UUID)
+                  AND client_id=CAST(:client_id AS UUID)
+            """), {"client_id": client_id, "period_id": period_id}).scalar() or {}
+            objective_config = (
+                ((period_configuration.get("objective_configs") or {}).get("meta") or {}).get(objective_key)
+                or {}
+            )
             active_rows = conn.execute(text("""
                 SELECT active.platform, active.import_id, i.source, i.schema_version, i.imported_at, i.sync_completed_at,
                     i.date_preset, i.data_start, i.data_end
@@ -1360,6 +1370,28 @@ class MetaAdsRepository:
             rows.append(target)
         rows.sort(key=lambda row: (row["metrics"].get("result") is not None, row["metrics"].get("result") or 0), reverse=True)
 
+        adset_targets = {
+            str(item.get("adset_id")): item
+            for item in (objective_config.get("adset_targets") or [])
+            if isinstance(item, dict) and item.get("adset_id")
+        }
+        if dimension == "adset":
+            for row in rows:
+                target_config = adset_targets.get(str(row.get("id"))) or {}
+                actual = (row.get("metrics") or {}).get("result")
+                spend = (row.get("metrics") or {}).get("spend")
+                target = target_config.get("target")
+                budget = target_config.get("budget")
+                row["kpi"] = {
+                    "target": target,
+                    "budget": budget,
+                    "target_cost_per_result": target_config.get("target_cost_per_result"),
+                    "actual": actual,
+                    "spend": spend,
+                    "achievement": float(actual) / float(target) * 100 if actual is not None and target else None,
+                    "budget_use": float(spend) / float(budget) * 100 if spend is not None and budget else None,
+                }
+
         configuration_rows = self.metric_configurations(client_id)["configurations"]
         selected_config = next((row for row in configuration_rows if row["scope"] == "meta" and row["objective"] == objective_key), None)
         display_keys = list(selected_config["metric_keys"]) if selected_config else []
@@ -1426,11 +1458,23 @@ class MetaAdsRepository:
         warnings = []
         if platform_scope != "meta":
             warnings.append("Platform-scoped reach can overlap across placements; use All Meta for authoritative Campaign and Ad Set totals.")
+        target = objective_config.get("target_monthly")
+        budget = objective_config.get("budget_monthly")
+        objective_kpi = {
+            "target": target,
+            "budget": budget,
+            "target_cost_per_result": objective_config.get("target_cost_per_result"),
+            "actual": total_result,
+            "spend": total_spend,
+            "achievement": float(total_result) / float(target) * 100 if total_result is not None and target else None,
+            "budget_use": float(total_spend) / float(budget) * 100 if total_spend is not None and budget else None,
+        }
         return {
             "dimension": dimension, "platform_scope": platform_scope,
             "objective": objective_key or None, "objectives": objectives,
             "data_status": "ready" if objective_key else "needs_mapping",
             "rows": rows, "summary": summary, "display_metrics": display_metrics,
+            "objective_config": objective_config, "kpi": objective_kpi,
             "available_filters": {"campaigns": filter_campaigns, "adsets": list(filter_adsets.values())},
             "unconfirmed_count": mappings_payload["unconfirmed_count"],
             "source": {"import_id": import_id, "type": snapshot["source"], "updated_at": snapshot["sync_completed_at"] or snapshot["imported_at"],

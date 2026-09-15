@@ -56,6 +56,23 @@ class FakeDashboardClient:
             "unconfirmed_count": 0,
         }
 
+    def get_adset_creatives(self, **kwargs):
+        return {
+            "data_status": "ready",
+            "source": {"type": "api", "import_id": "import-id"},
+            "summary": {"reach": 100, "result": 12, "spend": 50000},
+            "rows": [
+                {
+                    "id": "creative-1",
+                    "name": "Creative One",
+                    "adset_id": kwargs["adset_id"],
+                    "metrics": {"reach": 100, "result": 12, "spend": 50000},
+                }
+            ],
+            "display_metrics": [{"key": "reach"}],
+            "warnings": [],
+        }
+
 
 def test_retrieval_returns_canonical_payload_and_preserves_nulls():
     api = FakeDashboardClient()
@@ -100,6 +117,48 @@ def test_retrieval_sections_split_dashboard_payload_by_analysis_area():
     assert sections["placement_analysis"][0]["entity_name"] == "Top ad"
     assert sections["audience_demographic_analysis"][0]["gender"] == "female"
     assert sections["region_analysis"][0]["region"] == "Jakarta"
+
+
+def test_adset_retrieval_exposes_objective_overview_kpi_and_creative_breakdowns():
+    api = FakeDashboardClient()
+    _, period = api.resolve_client_and_period("bourbon", "2026-07-01")
+    period["objective_configs"] = {
+        "meta": {
+            "leads": {
+                "target_monthly": 20,
+                "budget_monthly": 100000,
+                "target_cost_per_result": 5000,
+            }
+        }
+    }
+    api.resolve_client_and_period = lambda *_: (
+        {
+            "id": "client-id",
+            "client_code": "bourbon",
+            "client_name": "Bourbon",
+            "ads_configuration": {"platforms": ["instagram", "facebook"]},
+            "meta_ad_accounts": [],
+        },
+        period,
+    )
+
+    payload = retrieve_ads_data(
+        client_code="bourbon",
+        period_id="2026-07-01",
+        analysis_type="adset",
+        platform_scope="meta",
+        objectives=["leads"],
+        include_breakdowns=True,
+        client=api,
+    )
+
+    data = payload["objective_data"]["leads"]
+    assert data["objective_overview"]["adsets"] == data["rows"]
+    assert data["objective_overview"]["campaigns"][0]["adsets"] == data["rows"]
+    assert data["kpi"]["target"] == 20
+    assert data["kpi"]["budget"] == 100000
+    assert data["adset_breakdowns"]["ad-1"]["creatives"][0]["id"] == "creative-1"
+    assert data["sections"]["objective_overview"]["kpi"]["target"] == 20
 
 
 def test_state_has_typed_ads_data_contract():

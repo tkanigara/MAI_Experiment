@@ -129,6 +129,90 @@ class AdsSlidesV4Tests(unittest.TestCase):
         self.assertEqual(mapping["{{COMPARE_METRIC_8_LABEL}}"], "Achievement vs. KPI")
         self.assertEqual(mapping["{{COMPARE_ROW_8_COL_1}}"], "0.9%")
 
+    def test_jba_plan_covers_every_adset_and_paginates_comparison(self):
+        current = payload("leads", "meta")
+        current["model"] = "jba"
+        current["rows"] = [
+            {
+                "id": f"set-{index}",
+                "name": f"Audience {index}",
+                "campaign_name": "Campaign A",
+                "metrics": {"result": 10 - index, "reach": 1000 * index},
+            }
+            for index in range(1, 7)
+        ]
+        creative_rows = [
+            {
+                "id": f"creative-{index}",
+                "name": f"Creative {index}",
+                "adset_id": f"set-{index}",
+                "adset_name": f"Audience {index}",
+                "campaign_name": "Campaign A",
+                "metrics": {"result": 10 - index, "reach": 1000 * index},
+            }
+            for index in range(1, 7)
+        ]
+        current["creative_analysis"] = {
+            "data_status": "ready",
+            "summary": {"result": 39},
+            "rows": creative_rows,
+            "source": current["source"],
+        }
+        current["adset_breakdowns"] = {
+            f"set-{index}": {
+                "adset": current["rows"][index - 1],
+                "creatives": [creative_rows[index - 1]],
+                "source": current["source"],
+            }
+            for index in range(1, 7)
+        }
+
+        plans = _slide_plan([current], "jba")
+        sources = [plan["source"] for plan in plans]
+        self.assertEqual(sources.count(ARCHETYPE["comparison"]), 2)
+        self.assertEqual(sources.count(ARCHETYPE["adset"]), 6)
+        adset_mappings = [plan["mapping"] for plan in plans if plan["source"] == ARCHETYPE["adset"]]
+        self.assertIn("Audience 6", adset_mappings[-1]["{{ADSET_NAME}}"])
+        self.assertIn("Campaign A", adset_mappings[-1]["{{ADSET_NAME}}"])
+
+    def test_jba_plan_paginates_all_creatives_inside_an_adset(self):
+        current = payload("leads", "meta")
+        current["model"] = "jba"
+        adset = {
+            "id": "set-1",
+            "name": "Audience 1",
+            "campaign_name": "Campaign A",
+            "metrics": {"result": 21, "reach": 6000},
+        }
+        creatives = [
+            {
+                "id": f"creative-{index}",
+                "name": f"Creative {index}",
+                "adset_id": "set-1",
+                "adset_name": "Audience 1",
+                "campaign_name": "Campaign A",
+                "metrics": {"result": index, "reach": index * 100},
+            }
+            for index in range(1, 7)
+        ]
+        current["rows"] = [adset]
+        current["creative_analysis"] = {
+            "data_status": "ready",
+            "summary": {"result": 21},
+            "rows": creatives,
+            "source": current["source"],
+        }
+        current["adset_breakdowns"] = {
+            "set-1": {"adset": adset, "creatives": creatives, "source": current["source"]}
+        }
+
+        plans = _slide_plan([current], "jba")
+        adset_mappings = [plan["mapping"] for plan in plans if plan["source"] == ARCHETYPE["adset"]]
+        self.assertEqual(len(adset_mappings), 2)
+        self.assertEqual(adset_mappings[0]["{{AD_ROW_5_NAME}}"], "Creative 5")
+        self.assertEqual(adset_mappings[1]["{{AD_ROW_1_NAME}}"], "Creative 6")
+        self.assertIn("Part 2/2", adset_mappings[1]["{{ADSET_NAME}}"])
+
 
 if __name__ == "__main__":
     unittest.main()

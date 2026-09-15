@@ -350,13 +350,27 @@ def _goal_breakdown(
 
 def _analysis_sections(payload: dict) -> dict:
     breakdown = payload.get("breakdown") or {}
-    return {
+    sections = {
         "performance_overview": dict(payload.get("analysis", {}).get("summary") or {}),
         "content_analysis": list(payload.get("rows") or []),
         "placement_analysis": list(breakdown.get("placements") or []),
         "audience_demographic_analysis": list(breakdown.get("demographics") or []),
         "region_analysis": list(breakdown.get("regions") or []),
     }
+    if payload.get("model") == "jba":
+        sections["objective_overview"] = {
+            "summary": dict(payload.get("analysis", {}).get("summary") or {}),
+            "kpi": {
+                "target": payload.get("target"),
+                "budget": payload.get("budget"),
+                "actual": payload.get("actual"),
+                "spend": payload.get("spend"),
+                "achievement": payload.get("achievement"),
+            },
+            "adsets": list(payload.get("rows") or []),
+        }
+        sections["adset_breakdowns"] = dict(payload.get("adset_breakdowns") or {})
+    return sections
 
 
 def _payload_fingerprint(payload: dict) -> str:
@@ -414,6 +428,39 @@ def _build_payload(client_id: str, period_id: str, model: str, platform: str, ob
         "rows": list(analysis.get("rows") or []), "breakdown": breakdown,
         "warning": warning,
     }
+    if model == "jba" and analysis.get("data_status") == "ready":
+        creative_analysis = repo.analysis(
+            client_id,
+            period_id,
+            "creative",
+            {"platform_scope": platform, "objective": objective},
+        )
+        if (
+            (creative_analysis.get("source") or {}).get("import_id")
+            == (analysis.get("source") or {}).get("import_id")
+        ):
+            grouped_creatives: dict[str, list[dict]] = {}
+            for row in creative_analysis.get("rows") or []:
+                adset_id = str(row.get("adset_id") or "")
+                if adset_id:
+                    grouped_creatives.setdefault(adset_id, []).append(row)
+            payload["creative_analysis"] = creative_analysis
+            payload["adset_breakdowns"] = {
+                str(adset.get("id")): {
+                    "adset": adset,
+                    "creatives": grouped_creatives.get(str(adset.get("id")), []),
+                    "source": creative_analysis.get("source") or {},
+                }
+                for adset in payload["rows"]
+                if adset.get("id")
+            }
+        else:
+            payload["warning"] = " ".join(
+                item for item in (
+                    payload.get("warning"),
+                    "Creative details were skipped because their active snapshot differs from the Ad Set overview.",
+                ) if item
+            )
     payload["cumulative"] = _cumulative_values(
         repo,
         client_id,
@@ -918,15 +965,49 @@ def _slide_plan(payloads: list[dict], model: str) -> list[dict]:
                 plans.append({"source": ARCHETYPE["optimization"], "mapping": mapping, "images": {}})
             else:
                 plans.append({"source": ARCHETYPE["kpi"], "mapping": mapping, "images": {}})
-                plans.append({"source": ARCHETYPE["comparison"], "mapping": mapping, "images": {}})
-                creative_payload = _payload_with_analysis(payload, "creative")
-                if "agent_analysis" in payload:
-                    _attach_agent_analysis([creative_payload])
+                for start in range(0, len(payload.get("rows") or []), 4):
+                    comparison_payload = dict(payload)
+                    comparison_payload["rows"] = (payload.get("rows") or [])[start:start + 4]
+                    comparison = build_ads_mapping(comparison_payload)
+                    _fill_comparison(comparison, comparison_payload)
+                    plans.append({"source": ARCHETYPE["comparison"], "mapping": comparison, "images": {}})
+                creative_analysis = payload.get("creative_analysis")
+                creative_payload = (
+                    {
+                        **payload,
+                        "analysis": creative_analysis,
+                        "rows": list((creative_analysis or {}).get("rows") or []),
+                        "source": (creative_analysis or {}).get("source") or payload.get("source") or {},
+                    }
+                    if creative_analysis is not None
+                    else _payload_with_analysis(payload, "creative")
+                )
+                creative_payload["analysis_sections"] = _analysis_sections(creative_payload)
+                creative_payload["evidence_fingerprint"] = _payload_fingerprint(creative_payload)
                 content = build_ads_mapping(creative_payload); images = _fill_content(content, creative_payload)
-                for adset in (payload.get("rows") or [])[:4]:
-                    detail_payload = _payload_with_analysis(payload, "creative", {"adset_ids": [adset.get("id")]})
-                    detail = build_ads_mapping(detail_payload); _fill_adset(detail, detail_payload, adset)
-                    plans.append({"source": ARCHETYPE["adset"], "mapping": detail, "images": {}})
+                for adset in payload.get("rows") or []:
+                    stored = (payload.get("adset_breakdowns") or {}).get(str(adset.get("id"))) or {}
+                    if stored:
+                        detail_rows = list(stored.get("creatives") or [])
+                    else:
+                        fallback_detail = _payload_with_analysis(payload, "creative", {"adset_ids": [adset.get("id")]})
+                        detail_rows = list(fallback_detail.get("rows") or [])
+                        stored = {"source": fallback_detail.get("source") or {}}
+                    pages = list(_chunks(detail_rows, 5)) or [[]]
+                    for page_number, page_rows in enumerate(pages, 1):
+                        detail_analysis = dict(creative_analysis or {})
+                        detail_analysis["rows"] = page_rows
+                        detail_payload = {
+                            **payload,
+                            "analysis": detail_analysis,
+                            "rows": page_rows,
+                            "source": stored.get("source") or payload.get("source") or {},
+                        }
+                        page_adset = dict(adset)
+                        if len(pages) > 1:
+                            page_adset["name"] = f"{adset.get('name')} (Part {page_number}/{len(pages)})"
+                        detail = build_ads_mapping(detail_payload); _fill_adset(detail, detail_payload, page_adset)
+                        plans.append({"source": ARCHETYPE["adset"], "mapping": detail, "images": {}})
                 if creative_payload.get("rows"):
                     plans.append({"source": ARCHETYPE["content"], "mapping": content, "images": images})
                 if (payload.get("breakdown") or {}).get("regions"):
