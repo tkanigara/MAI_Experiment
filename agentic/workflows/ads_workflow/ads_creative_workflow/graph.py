@@ -1,93 +1,280 @@
 from langgraph.graph import StateGraph, START, END
-from langgraph.types import Send
-
 from agentic.workflows.ads_workflow.ads_creative_workflow.state import State
+
+
 # ============================================================
 # CORE AGENTS
 # ============================================================
 
-from agentic.agents.ads_agent.ads_agent_creative.retrieval import retrieval_agent
-from agentic.agents.ads_agent.ads_agent_creative.Orchestrator import orchestrator_agent
-from agentic.agents.ads_agent.ads_agent_creative.router import router_node
-from agentic.agents.ads_agent.ads_agent_creative.summary_agent import summary_agent
-
-
-# ============================================================
-# INSTAGRAM
-# ============================================================
-
-from agentic.agents.ads_agent.ads_agent_creative.ig_runner_node import (
-    instagram_runner_node,
-    instagram_router
+from agentic.agents.ads_agent.ads_agent_creative.retrieval import (
+    retrieval_agent,
 )
 
-from agentic.agents.ads_agent.ads_agent_creative.ig_engagement_agent import ig_engagement_agent
-from agentic.agents.ads_agent.ads_agent_creative.ig_reach_agent import ig_reach_agent
-from agentic.agents.ads_agent.ads_agent_creative.ig_profilevisit_agent import ig_profilevisit_agent
-from agentic.agents.ads_agent.ads_agent_creative.generic_objective_agents import (
-    ig_generic_objective_agent,
-    fb_generic_objective_agent,
-)
-from agentic.agents.ads_agent.ads_agent_creative.meta_runner_node import meta_runner_node
-
-
-# ============================================================
-# FACEBOOK
-# ============================================================
-
-from agentic.agents.ads_agent.ads_agent_creative.fb_runner_node import (
-    facebook_runner_node,
-    facebook_router
+from agentic.agents.ads_agent.ads_agent_creative.Orchestrator import (
+    orchestrator_agent,
 )
 
-from agentic.agents.ads_agent.ads_agent_creative.fb_engagement_agent import fb_engagement_agent
-from agentic.agents.ads_agent.ads_agent_creative.fb_reach_agent import fb_reach_agent
-from agentic.agents.ads_agent.ads_agent_creative.fb_profilevisit import fb_profilevisit_agent
-from agentic.agents.ads_agent.ads_agent_creative.fb_pagelike_agent import fb_pagelike_agent
-
-
-# ============================================================
-# YOUTUBE
-# ============================================================
-
-from agentic.agents.ads_agent.ads_agent_creative.yt_runner_node import (
-    youtube_runner_node,
-    youtube_router
+from agentic.agents.ads_agent.ads_agent_creative.router import (
+    router_node,
 )
 
-from agentic.agents.ads_agent.ads_agent_creative.yt_impressions import yt_impressions_agent
-from agentic.agents.ads_agent.ads_agent_creative.yt_views import yt_views_agent
-
-
-# ============================================================
-# TIKTOK
-# ============================================================
-
-from agentic.agents.ads_agent.ads_agent_creative.tt_runner_node import (
-    tiktok_runner_node,
-    tiktok_router
+from agentic.agents.ads_agent.ads_agent_creative.summary_agent import (
+    summary_agent,
 )
 
-from agentic.agents.ads_agent.ads_agent_creative.tt_follow import tt_follow_agent
-from agentic.agents.ads_agent.ads_agent_creative.tt_views_agent import tt_views_agent
+
+# ============================================================
+# INSTAGRAM AGENTS
+# ============================================================
+
+from agentic.agents.ads_agent.ads_agent_creative.ig_reach_agent import (
+    ig_reach_agent,
+)
+
+from agentic.agents.ads_agent.ads_agent_creative.ig_engagement_agent import (
+    ig_engagement_agent,
+)
+
+from agentic.agents.ads_agent.ads_agent_creative.ig_profilevisit_agent import (
+    ig_profilevisit_agent,
+)
 
 
 # ============================================================
-# ROUTER → RUNNER DISPATCHER
+# FACEBOOK AGENTS
 # ============================================================
 
-def route_to_runner_node(state: State):
-    return [
-        Send(
-            runner_name,
-            state
-        )
-        for runner_name in state.routes
+from agentic.agents.ads_agent.ads_agent_creative.fb_reach_agent import (
+    fb_reach_agent,
+)
+
+from agentic.agents.ads_agent.ads_agent_creative.fb_engagement_agent import (
+    fb_engagement_agent,
+)
+
+from agentic.agents.ads_agent.ads_agent_creative.fb_profilevisit import (
+    fb_profilevisit_agent,
+)
+
+from agentic.agents.ads_agent.ads_agent_creative.fb_pagelike_agent import (
+    fb_pagelike_agent,
+)
+
+
+# ============================================================
+# YOUTUBE AGENTS
+# ============================================================
+
+# Aktifkan import ini ketika agent YouTube sudah tersedia.
+#
+# from agentic.agents.ads_agent.ads_agent_creative.yt_impressions_agent import (
+#     yt_impressions_agent,
+# )
+#
+# from agentic.agents.ads_agent.ads_agent_creative.yt_views_agent import (
+#     yt_views_agent,
+# )
+
+
+# ============================================================
+# TIKTOK AGENTS
+# ============================================================
+
+# Aktifkan import ini ketika agent TikTok sudah tersedia.
+#
+# from agentic.agents.ads_agent.ads_agent_creative.tt_views_agent import (
+#     tt_views_agent,
+# )
+#
+# from agentic.agents.ads_agent.ads_agent_creative.tt_follow_agent import (
+#     tt_follow_agent,
+# )
+
+
+# ============================================================
+# INSTAGRAM RUNNER
+# ============================================================
+
+def instagram_runner_node(state: State):
+
+    objectives = [
+        objective.lower().strip()
+        for objective in state.request.objectives
     ]
 
+    current_state = state
+
+    for objective in objectives:
+
+        if objective == "reach":
+
+            result = ig_reach_agent(current_state)
+
+        elif objective == "engagement":
+
+            result = ig_engagement_agent(current_state)
+
+        elif objective == "profilevisit":
+
+            result = ig_profilevisit_agent(current_state)
+
+        else:
+            continue
+
+        if result:
+
+            current_state = current_state.model_copy(
+                update=result
+            )
+
+    # ========================================================
+    # IMPORTANT
+    # Jangan return seluruh State.
+    #
+    # Karena Instagram dan Facebook dapat berjalan
+    # secara paralel.
+    # ========================================================
+
+    return {
+        "instagram_result": current_state.instagram_result
+    }
+
 
 # ============================================================
-# INITIALIZE WORKFLOW
+# FACEBOOK RUNNER
+# ============================================================
+
+def facebook_runner_node(state: State):
+
+    objectives = [
+        objective.lower().strip()
+        for objective in state.request.objectives
+    ]
+
+    current_state = state
+
+    for objective in objectives:
+
+        if objective == "reach":
+
+            result = fb_reach_agent(current_state)
+
+        elif objective == "engagement":
+
+            result = fb_engagement_agent(current_state)
+
+        elif objective == "profilevisit":
+
+            result = fb_profilevisit_agent(current_state)
+
+        elif objective == "pagelike":
+
+            result = fb_pagelike_agent(current_state)
+
+        else:
+            continue
+
+        if result:
+
+            current_state = current_state.model_copy(
+                update=result
+            )
+
+    # ========================================================
+    # IMPORTANT
+    # Hanya return hasil Facebook.
+    # ========================================================
+
+    return {
+        "facebook_result": current_state.facebook_result
+    }
+
+
+# ============================================================
+# YOUTUBE RUNNER
+# ============================================================
+
+def youtube_runner_node(state: State):
+
+    objectives = [
+        objective.lower().strip()
+        for objective in state.request.objectives
+    ]
+
+    current_state = state
+
+    for objective in objectives:
+
+        if objective == "impressions":
+
+            result = yt_impressions_agent(current_state)
+
+        elif objective == "views":
+
+            result = yt_views_agent(current_state)
+
+        else:
+            continue
+
+        if result:
+
+            current_state = current_state.model_copy(
+                update=result
+            )
+
+    return {
+        "youtube_result": current_state.youtube_result
+    }
+
+
+# ============================================================
+# TIKTOK RUNNER
+# ============================================================
+
+def tiktok_runner_node(state: State):
+
+    objectives = [
+        objective.lower().strip()
+        for objective in state.request.objectives
+    ]
+
+    current_state = state
+
+    for objective in objectives:
+
+        if objective == "views":
+
+            result = tt_views_agent(current_state)
+
+        elif objective == "follow":
+
+            result = tt_follow_agent(current_state)
+
+        else:
+            continue
+
+        if result:
+
+            current_state = current_state.model_copy(
+                update=result
+            )
+
+    return {
+        "tiktok_result": current_state.tiktok_result
+    }
+
+
+# ============================================================
+# PLATFORM ROUTER
+# ============================================================
+
+def route_platform(state: State):
+
+    return state.routes
+
+
+# ============================================================
+# GRAPH
 # ============================================================
 
 workflow = StateGraph(State)
@@ -99,280 +286,123 @@ workflow = StateGraph(State)
 
 workflow.add_node(
     "retrieval",
-    retrieval_agent
+    retrieval_agent,
 )
 
 workflow.add_node(
     "orchestrator",
-    orchestrator_agent
+    orchestrator_agent,
 )
 
 workflow.add_node(
     "router",
-    router_node
+    router_node,
 )
+
+
+# ============================================================
+# PLATFORM RUNNERS
+# ============================================================
+
+workflow.add_node(
+    "instagram_runner",
+    instagram_runner_node,
+)
+
+workflow.add_node(
+    "facebook_runner",
+    facebook_runner_node,
+)
+
+workflow.add_node(
+    "youtube_runner",
+    youtube_runner_node,
+)
+
+workflow.add_node(
+    "tiktok_runner",
+    tiktok_runner_node,
+)
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
 
 workflow.add_node(
     "summary",
-    summary_agent
+    summary_agent,
 )
 
 
 # ============================================================
-# INSTAGRAM NODES
-# ============================================================
-
-workflow.add_node(
-    "ig_runner_node",
-    instagram_runner_node
-)
-
-workflow.add_node(
-    "instagram_engagement_agent",
-    ig_engagement_agent
-)
-
-workflow.add_node(
-    "instagram_reach_agent",
-    ig_reach_agent
-)
-
-workflow.add_node(
-    "instagram_profilevisit_agent",
-    ig_profilevisit_agent
-)
-
-workflow.add_node(
-    "instagram_generic_objective_agent",
-    ig_generic_objective_agent
-)
-
-workflow.add_node(
-    "meta_runner_node",
-    meta_runner_node
-)
-
-
-# ============================================================
-# FACEBOOK NODES
-# ============================================================
-
-workflow.add_node(
-    "fb_runner_node",
-    facebook_runner_node
-)
-
-workflow.add_node(
-    "facebook_engagement_agent",
-    fb_engagement_agent
-)
-
-workflow.add_node(
-    "facebook_reach_agent",
-    fb_reach_agent
-)
-
-workflow.add_node(
-    "facebook_profilevisit_agent",
-    fb_profilevisit_agent
-)
-
-workflow.add_node(
-    "facebook_pagelike_agent",
-    fb_pagelike_agent
-)
-
-workflow.add_node(
-    "facebook_generic_objective_agent",
-    fb_generic_objective_agent
-)
-
-
-# ============================================================
-# YOUTUBE NODES
-# ============================================================
-
-workflow.add_node(
-    "yt_runner_node",
-    youtube_runner_node
-)
-
-workflow.add_node(
-    "youtube_impressions_agent",
-    yt_impressions_agent
-)
-
-workflow.add_node(
-    "youtube_views_agent",
-    yt_views_agent
-)
-
-
-# ============================================================
-# TIKTOK NODES
-# ============================================================
-
-workflow.add_node(
-    "tt_runner_node",
-    tiktok_runner_node
-)
-
-workflow.add_node(
-    "tiktok_views",
-    tt_views_agent
-)
-
-workflow.add_node(
-    "tiktok_follow",
-    tt_follow_agent
-)
-
-
-# ============================================================
-# MAIN FLOW
+# START → RETRIEVAL
 # ============================================================
 
 workflow.add_edge(
     START,
-    "retrieval"
-)
-
-workflow.add_edge(
     "retrieval",
-    "orchestrator"
-)
-
-workflow.add_edge(
-    "orchestrator",
-    "router"
 )
 
 
 # ============================================================
-# ROUTER → PLATFORM RUNNERS
+# RETRIEVAL → ORCHESTRATOR
+# ============================================================
+
+workflow.add_edge(
+    "retrieval",
+    "orchestrator",
+)
+
+
+# ============================================================
+# ORCHESTRATOR → ROUTER
+# ============================================================
+
+workflow.add_edge(
+    "orchestrator",
+    "router",
+)
+
+
+# ============================================================
+# ROUTER → PLATFORM
 # ============================================================
 
 workflow.add_conditional_edges(
     "router",
-    route_to_runner_node
+    route_platform,
+    {
+        "instagram_runner": "instagram_runner",
+        "facebook_runner": "facebook_runner",
+        "youtube_runner": "youtube_runner",
+        "tiktok_runner": "tiktok_runner",
+    },
 )
 
 
 # ============================================================
-# INSTAGRAM RUNNER → INSTAGRAM AGENTS
-# ============================================================
-
-workflow.add_edge("ig_runner_node", "summary")
-
-
-# ============================================================
-# FACEBOOK RUNNER → FACEBOOK AGENTS
-# ============================================================
-
-workflow.add_edge("fb_runner_node", "summary")
-
-
-# ============================================================
-# YOUTUBE RUNNER → YOUTUBE AGENTS
-# ============================================================
-
-workflow.add_edge("yt_runner_node", "summary")
-
-
-# ============================================================
-# TIKTOK RUNNER → TIKTOK AGENTS
-# ============================================================
-
-workflow.add_edge("tt_runner_node", "summary")
-
-
-# ============================================================
-# INSTAGRAM AGENTS → SUMMARY
+# PLATFORM → SUMMARY
 # ============================================================
 
 workflow.add_edge(
-    "instagram_engagement_agent",
-    "summary"
+    "instagram_runner",
+    "summary",
 )
 
 workflow.add_edge(
-    "instagram_reach_agent",
-    "summary"
+    "facebook_runner",
+    "summary",
 )
 
 workflow.add_edge(
-    "instagram_profilevisit_agent",
-    "summary"
+    "youtube_runner",
+    "summary",
 )
 
 workflow.add_edge(
-    "instagram_generic_objective_agent",
-    "summary"
-)
-
-workflow.add_edge(
-    "meta_runner_node",
-    "summary"
-)
-
-
-# ============================================================
-# FACEBOOK AGENTS → SUMMARY
-# ============================================================
-
-workflow.add_edge(
-    "facebook_engagement_agent",
-    "summary"
-)
-
-workflow.add_edge(
-    "facebook_reach_agent",
-    "summary"
-)
-
-workflow.add_edge(
-    "facebook_profilevisit_agent",
-    "summary"
-)
-
-workflow.add_edge(
-    "facebook_pagelike_agent",
-    "summary"
-)
-
-workflow.add_edge(
-    "facebook_generic_objective_agent",
-    "summary"
-)
-
-
-# ============================================================
-# YOUTUBE AGENTS → SUMMARY
-# ============================================================
-
-workflow.add_edge(
-    "youtube_impressions_agent",
-    "summary"
-)
-
-workflow.add_edge(
-    "youtube_views_agent",
-    "summary"
-)
-
-
-# ============================================================
-# TIKTOK AGENTS → SUMMARY
-# ============================================================
-
-workflow.add_edge(
-    "tiktok_views",
-    "summary"
-)
-
-workflow.add_edge(
-    "tiktok_follow",
-    "summary"
+    "tiktok_runner",
+    "summary",
 )
 
 
@@ -382,7 +412,7 @@ workflow.add_edge(
 
 workflow.add_edge(
     "summary",
-    END
+    END,
 )
 
 

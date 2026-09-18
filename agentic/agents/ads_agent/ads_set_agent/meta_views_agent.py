@@ -1,33 +1,72 @@
+import json
 from langchain_core.messages import HumanMessage, SystemMessage
-from models.gemini import llm
-from workflows.ads_workflow.adset_workflow.state import State, MetaAnalysis
-from prompts.adset_prompts_list.meta_views_prompt import SYSTEM_PROMPT
+from agentic.models.gemini import llm
+from agentic.workflows.ads_workflow.adset_workflow.state import State, MetaAnalysis
+from agentic.prompts.adset_prompts_list.meta_views_prompt import SYSTEM_PROMPT
+from agentic.tools.tools_adset.retrieve_meta import views_retrieval
+from agentic.utils.logger import node, console
 
-def meta_reach_agent(state: State):
-    #retrieve Data
-    overall_views_data = """
-    Data yang harus di retrive adalah nama client, periodnya dan data metric yang berisi gabungan dari semua adset objective views
-    """
-    campaign_views_data = """
-    Data yang harus di retrieve adalah data campaign yang berisi masing masing adset dan metricnya ,dan jangan lupa data client dan periodnya 
-    """
+def meta_views_agent(state: State):
+    with node("Meta views Agent"):
+        data = views_retrieval.invoke(
+            {
+                "client_code": state.request.client_code,
+                "period_id": state.request.period_id,
+                "campaign_ids": state.request.campaign_ids,
+                "adset_ids": state.request.adset_ids,
+            }
+        )
 
-    data = {
-        "overall_views_data":overall_views_data,
-        "campaign_views_data":campaign_views_data
-    }
+        data_for_llm = json.dumps(
+            data,
+            indent=2,
+            default=str,
+        )
+        messages = [
+            SystemMessage(
+                content=SYSTEM_PROMPT
+            ),
+            HumanMessage(
+                content=data_for_llm
+            ),
+        ]
 
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=data)
-    ]
+        response = llm.invoke(messages)
+        result = response.content
+        try:
+            if isinstance(result, list):
+                text_parts = []
+                for part in result:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(
+                                part.get("text", "")
+                            )
+                result = "\n".join(text_parts)
+            analysis_data = json.loads(result)
 
-    analysis = llm.invoke(messages)
-    get_llm_analysis = analysis.content
+        except (json.JSONDecodeError, TypeError):
+            return {
+                "meta_analysis": state.meta_analysis
+            }
 
+        console.print("[cyan]Meta views Analysis result: [/cyan]")
+        console.print(json.dumps(analysis_data, indent=2, ensure_ascii=False))
+        updated_meta_analysis = state.meta_analysis.model_copy(
+            update={
+                "overall_views_analysis":
+                    analysis_data.get(
+                        "overall_views_analysis"
+                    ),
 
-    note = """
-    node ini belum bisa di jalanin, SystemPrompt belum gw setting
-    gw harus cek isi datanya dulu, dan format data yang di retrive kaya gimana
-    """
-    return state
+                "views_adset_analysis":
+                    analysis_data.get(
+                        "views_adset_analysis"
+                    ),
+            }
+        )
+
+        return {
+            "meta_analysis": updated_meta_analysis
+        }
+

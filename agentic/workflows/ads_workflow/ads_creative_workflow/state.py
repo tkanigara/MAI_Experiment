@@ -6,38 +6,14 @@ class Request(BaseModel):
     client_code: str
     period_id: str
     analysis_type: str
-    platform_scope: str
 
-    objectives: list[str] = Field(
-        default_factory=list
-    )
+    platform_scope: list[str] = Field(default_factory=list)
+    objectives: list[str] = Field(default_factory=list)
 
-    # Backwards compatibility for callers that still send the old singular
-    # request contract. New callers should use ``objectives``.
-    objective: str | None = None
-
-    campaign_ids: list[str] = Field(
-        default_factory=list
-    )
-
-    adset_ids: list[str] = Field(
-        default_factory=list
-    )
+    campaign_ids: list[str] = Field(default_factory=list)
+    adset_ids: list[str] = Field(default_factory=list)
 
     include_breakdowns: bool = False
-
-    @model_validator(mode="after")
-    def normalise_objectives(self):
-        values = [
-            str(item).strip().lower().replace(" ", "_")
-            for item in self.objectives
-            if str(item).strip()
-        ]
-        if not values and self.objective and self.objective.strip():
-            values = [self.objective.strip().lower().replace(" ", "_")]
-        self.objectives = list(dict.fromkeys(values))
-        self.objective = self.objectives[0] if len(self.objectives) == 1 else None
-        return self
 class MetaData(BaseModel):
     client_id: str | None = None
     client_code:str | None = None
