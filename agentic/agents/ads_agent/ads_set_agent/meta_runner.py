@@ -12,6 +12,7 @@ META_OBJECTIVE_AGENTS = {
     "engagement": meta_engagement_agent,
     "leads": meta_leads_agent,
     "linkclicks": meta_linkclicks_agent,
+    "link_clicks": meta_linkclicks_agent,
     "views": meta_views_agent,
 }
 def meta_runner(state: State):

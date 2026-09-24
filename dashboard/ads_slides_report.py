@@ -107,9 +107,12 @@ def _number(value, fallback: str = "—") -> str:
     return f"{number:,.2f}".rstrip("0").rstrip(".")
 
 
-def _metric_value(value, key: str) -> str:
+def _metric_value(value, key: str, *, zero_when_missing: bool = False) -> str:
     if value is None:
-        return "—"
+        if zero_when_missing:
+            value = 0
+        else:
+            return "—"
     definition = METRICS.get(key) or {}
     if definition.get("format") == "currency":
         return f"Rp {_number(value)}"
@@ -324,7 +327,10 @@ def _goal_breakdown(
                 if row.get("frequency") is None and impressions is not None and reach:
                     row["frequency"] = float(impressions) / float(reach)
                 combined[key].append(row)
-    if platform == "meta":
+    # Meta exports age/gender and region at shared All Meta grain. Use that
+    # authoritative fallback for Instagram/Facebook too; row labels below
+    # keep the shared scope explicit and avoid false publisher attribution.
+    if platform in {"meta", "instagram", "facebook"}:
         try:
             shared = repo.shared_audience_breakdowns(client_id, period_id, objective)
         except Exception:
@@ -342,6 +348,13 @@ def _goal_breakdown(
                         if row.get(field)
                     )
                 row["label"] = f"All Meta · {_friendly_label(label)}"
+                if key == "demographics":
+                    label = " | ".join(
+                        _clean(row.get(field), "")
+                        for field in ("age", "gender")
+                        if row.get(field)
+                    )
+                row["label"] = f"All Meta | {_friendly_label(label)}"
                 if row.get("result") is None:
                     row["result"] = row.get("result_value")
                 combined[key].append(row)
@@ -358,6 +371,22 @@ def _analysis_sections(payload: dict) -> dict:
         "region_analysis": list(breakdown.get("regions") or []),
     }
     if payload.get("model") == "jba":
+        campaigns: dict[str, dict] = {}
+        for adset in payload.get("rows") or []:
+            campaign_id = str(
+                adset.get("campaign_id")
+                or adset.get("campaign_name")
+                or "unknown"
+            )
+            campaign = campaigns.setdefault(
+                campaign_id,
+                {
+                    "id": adset.get("campaign_id"),
+                    "name": adset.get("campaign_name"),
+                    "adsets": [],
+                },
+            )
+            campaign["adsets"].append(adset)
         sections["objective_overview"] = {
             "summary": dict(payload.get("analysis", {}).get("summary") or {}),
             "kpi": {
@@ -367,6 +396,7 @@ def _analysis_sections(payload: dict) -> dict:
                 "spend": payload.get("spend"),
                 "achievement": payload.get("achievement"),
             },
+            "campaigns": list(campaigns.values()),
             "adsets": list(payload.get("rows") or []),
         }
         sections["adset_breakdowns"] = dict(payload.get("adset_breakdowns") or {})
@@ -488,6 +518,9 @@ def _payload_with_analysis(payload: dict, dimension: str, filters: dict | None =
 def _run_agent_analysis(payload: dict) -> dict[str, str | None]:
     """Analyse the exact frozen evidence that will populate this slide set."""
 
+    if payload.get("model") == "jba":
+        return _run_adset_agent_analysis(payload)
+
     from agentic.agents.ads_agent.ads_agent_creative.analysis_helpers import (
         run_ads_analysis_agent,
     )
@@ -551,7 +584,7 @@ def _run_agent_analysis(payload: dict) -> dict[str, str | None]:
             client_code=client.get("client_code"),
             period_id=str(period.get("id")),
             analysis_type=objective_payload["analysis_type"],
-            platform_scope=payload["platform_scope"],
+            platform_scope=[payload["platform_scope"]],
             objectives=[objective],
             include_breakdowns=True,
         ),
@@ -589,6 +622,62 @@ def _run_agent_analysis(payload: dict) -> dict[str, str | None]:
     return {field: getattr(result, field, None) for field in fields}
 
 
+def _run_adset_agent_analysis(payload: dict) -> dict[str, str | None]:
+    """Run the Ad Set agents against the generator's already-frozen payload."""
+
+    from agentic.workflows.ads_workflow.adset_workflow.graph import graph
+    from agentic.workflows.ads_workflow.adset_workflow.state import Request, State
+
+    objective = str(payload["objective"]).strip().lower()
+    client = payload["client"]
+    period = payload["period"]
+    analysis = payload.get("analysis") or {}
+    frozen_evidence = {
+        "analysis_type": "adset",
+        "platform": payload.get("platform_scope") or "meta",
+        "client_code": client.get("client_code"),
+        "period_id": str(period.get("id")),
+        "objective": objective,
+        "objective_data": {
+            "objective": objective,
+            "objective_overview": payload.get("analysis_sections", {}).get("objective_overview") or {
+                "summary": analysis.get("summary") or {},
+                "kpi": analysis.get("kpi") or {},
+                "campaigns": payload.get("campaigns") or [],
+                "adsets": payload.get("rows") or [],
+            },
+            "adset_breakdowns": payload.get("adset_breakdowns") or {},
+            "display_metrics": analysis.get("display_metrics") or [],
+            "kpi": analysis.get("kpi") or {},
+            "data_status": analysis.get("data_status"),
+            "source": payload.get("source") or {},
+            "warnings": analysis.get("warnings") or [],
+        },
+    }
+    state = State(
+        request=Request(
+            client_code=client.get("client_code"),
+            period_id=str(period.get("id")),
+            analysis_type="adset",
+            platform_scope=["meta"],
+            objectives=[objective],
+        ),
+        adset_data={objective: frozen_evidence},
+    )
+    result = State.model_validate(graph.invoke(state))
+    field_key = "linkclicks" if objective == "link_clicks" else objective
+    meta = result.meta_analysis
+    return {
+        "performance_overview": getattr(meta, f"overall_{field_key}_analysis", None),
+        "adset_analysis": getattr(meta, f"{field_key}_adset_analysis", None),
+        "content_analysis": None,
+        "placement_analysis": None,
+        "audience_demographic_analysis": None,
+        "region_analysis": None,
+        "optimisation_action": result.meta_summary.summary_result,
+    }
+
+
 def _attach_agent_analysis(payloads: list[dict]) -> list[dict]:
     enabled = str(os.getenv("ADS_REPORT_AGENT_ANALYSIS_ENABLED", "true")).lower() not in {
         "0", "false", "no", "off",
@@ -620,6 +709,7 @@ def _default_mapping() -> dict[str, str]:
     for key in ("CLIENT_NAME", "CLIENT_LOGO", "REPORT_PERIOD", "REPORT_MODEL_LABEL", "PREPARED_BY", "DATA_SOURCE", "LAST_SYNCED_AT", "PLATFORM_LABEL", "OBJECTIVE_LABEL", "DATE_START", "DATE_END", "SLIDE_NUMBER", "CONTENT_ANALYSIS_TITLE", "NEXT_REPORT_PERIOD"):
         _set(mapping, key, "", "")
     _set(mapping, "PREPARED_BY", "MAI Ads Team")
+    _set(mapping, "BEST_CONTENT_ANALYSIS", "â€”")
     for index in range(1, 4):
         for suffix in ("IMAGE", "NAME", "CAMPAIGN", "ADSET", "RESULT", "SPEND", "INSIGHT", "RECOMMENDATION"):
             _set(mapping, f"BEST_CONTENT_{index}_{suffix}", "Preview unavailable" if suffix == "IMAGE" else "—")
@@ -629,7 +719,10 @@ def _default_mapping() -> dict[str, str]:
 def _performance_insight(payload: dict) -> str:
     agent_value = (payload.get("agent_analysis") or {}).get("performance_overview")
     if agent_value:
-        return _clip(agent_value)
+        # Keep the complete finding supplied by the agent.  The report has a
+        # dedicated narrative area for this evidence, so silently shortening
+        # it here makes the Slides output diverge from the agent output.
+        return _clean(agent_value)
     rows = payload.get("rows") or []
     if not rows:
         return payload.get("warning") or "No performance rows are available."
@@ -665,7 +758,7 @@ def _fill_creative(mapping: dict, payload: dict) -> None:
             row = rows[row_index - 1] if row_index <= len(rows) else None
             if metric_index == 1:
                 _set(mapping, f"CREATIVE_ROW_{row_index}_NAME", row.get("name") if row else "", "")
-            _set(mapping, f"CREATIVE_ROW_{row_index}_METRIC_{metric_index}", _metric_value(_metric(row, key), key) if row and key else "", "")
+            _set(mapping, f"CREATIVE_ROW_{row_index}_METRIC_{metric_index}", _metric_value(_metric(row, key), key, zero_when_missing=True) if row and key else "", "")
 
 
 def _fill_content(mapping: dict, payload: dict) -> dict[str, str]:
@@ -673,6 +766,22 @@ def _fill_content(mapping: dict, payload: dict) -> dict[str, str]:
     rows = (payload.get("rows") or [])[:3]
     _set(mapping, "CONTENT_ANALYSIS_TITLE", f"TOP {len(rows)} CONTENT — {payload['objective'].replace('_', ' ').title()}")
     agent = payload.get("agent_analysis") or {}
+    ranked_names = [
+        f"#{index} {_clean(row.get('name'))}"
+        for index, row in enumerate(rows, 1)
+    ]
+    fallback_analysis = (
+        f"The eligible creatives rank as {', '.join(ranked_names)} based on "
+        f"the {payload['objective'].replace('_', ' ')} result used in this report."
+        if ranked_names
+        else "No eligible creative rows are available for content analysis."
+    )
+    combined_analysis = (
+        _clean(agent.get("content_analysis"))
+        if agent.get("content_analysis")
+        else fallback_analysis
+    )
+    _set(mapping, "BEST_CONTENT_ANALYSIS", combined_analysis)
     for index, row in enumerate(rows, 1):
         metrics = row.get("metrics") or {}
         _set(mapping, f"BEST_CONTENT_{index}_NAME", row.get("name"))
@@ -680,22 +789,13 @@ def _fill_content(mapping: dict, payload: dict) -> dict[str, str]:
         _set(mapping, f"BEST_CONTENT_{index}_ADSET", row.get("adset_name"))
         _set(mapping, f"BEST_CONTENT_{index}_RESULT", _metric_value(metrics.get("result"), "result"))
         _set(mapping, f"BEST_CONTENT_{index}_SPEND", _metric_value(metrics.get("spend"), "spend"))
-        evidence = (
-            f"Ranked #{index}: {_metric_value(metrics.get('result'), 'result')} results "
-            f"from {_metric_value(metrics.get('spend'), 'spend')} spend."
-        )
-        _set(
-            mapping,
-            f"BEST_CONTENT_{index}_INSIGHT",
-            _clip(agent.get("content_analysis"), 320) if index == 1 and agent.get("content_analysis") else evidence,
-        )
-        _set(
-            mapping,
-            f"BEST_CONTENT_{index}_RECOMMENDATION",
-            _clip(agent.get("optimisation_action"), 260)
-            if index == 1 and agent.get("optimisation_action")
-            else "Compare this creative against the other eligible rows using the same objective metrics.",
-        )
+        # Legacy fields remain available for older template copies. Only the
+        # first receives the shared narrative; the current template uses the
+        # one shared content-analysis placeholder above.
+        _set(mapping, f"BEST_CONTENT_{index}_INSIGHT", combined_analysis if index == 1 else "", "")
+        # Recommendation/action belongs to the dedicated Optimisation Action
+        # slide.  The Top 3 Content slide now has one shared content analysis.
+        _set(mapping, f"BEST_CONTENT_{index}_RECOMMENDATION", "", "")
         url = row.get("thumbnail_url") or row.get("image_url")
         if url:
             images[f"{{{{BEST_CONTENT_{index}_IMAGE}}}}"] = str(url)
@@ -720,7 +820,7 @@ def _fill_breakdown(mapping: dict, payload: dict, kind: str) -> None:
                 if not label and row:
                     label = " · ".join(_clean(row.get(field), "") for field in ("age", "gender") if row.get(field))
                 _set(mapping, f"BREAKDOWN_ROW_{row_index}_LABEL", _friendly_label(label) if label else "")
-            _set(mapping, f"BREAKDOWN_ROW_{row_index}_METRIC_{metric_index}", _metric_value(_metric(row, key), key) if row and key else "", "")
+            _set(mapping, f"BREAKDOWN_ROW_{row_index}_METRIC_{metric_index}", _metric_value(_metric(row, key), key, zero_when_missing=True) if row and key else "", "")
     agent_field = {
         "placement": "placement_analysis",
         "demographic": "audience_demographic_analysis",
@@ -730,7 +830,7 @@ def _fill_breakdown(mapping: dict, payload: dict, kind: str) -> None:
     _set(
         mapping,
         "BREAKDOWN_INSIGHT",
-        _clip(agent_value) if agent_value else f"No supported {dimensions[kind].lower()} conclusion is available for this scope.",
+        _clean(agent_value) if agent_value else f"No supported {dimensions[kind].lower()} conclusion is available for this scope.",
     )
 
 
@@ -783,7 +883,12 @@ def _fill_comparison(mapping: dict, payload: dict) -> None:
                 else:
                     value = _metric_value(_metric(row, key), key)
             _set(mapping, f"COMPARE_ROW_{metric_index}_COL_{column}", value, "")
-    _set(mapping, "OBJECTIVE_COMPARISON_INSIGHT", _performance_insight(payload))
+    comparison_analysis = (payload.get("agent_analysis") or {}).get("adset_analysis")
+    _set(
+        mapping,
+        "OBJECTIVE_COMPARISON_INSIGHT",
+        _clean(comparison_analysis) if comparison_analysis else _performance_insight(payload),
+    )
 
 
 def _fill_adset(mapping: dict, payload: dict, adset: dict) -> None:
@@ -798,17 +903,17 @@ def _fill_adset(mapping: dict, payload: dict, adset: dict) -> None:
             row = rows[row_index - 1] if row_index <= len(rows) else None
             if metric_index == 1:
                 _set(mapping, f"AD_ROW_{row_index}_NAME", row.get("name") if row else "", ""); _set(mapping, f"AD_ROW_{row_index}_ADSET", row.get("adset_name") if row else "", "")
-            _set(mapping, f"AD_ROW_{row_index}_METRIC_{metric_index}", _metric_value(_metric(row, key), key) if row and key else "", "")
+            _set(mapping, f"AD_ROW_{row_index}_METRIC_{metric_index}", _metric_value(_metric(row, key), key, zero_when_missing=True) if row and key else "", "")
     _set(mapping, "ADSET_PERFORMANCE_INSIGHT", f"Top creative: {_clean(rows[0].get('name') if rows else None)}.")
 
 
 def _fill_optimization(mapping: dict, payload: dict) -> None:
     top = _clean((payload.get("rows") or [{}])[0].get("name"))
     agent = payload.get("agent_analysis") or {}
-    _set(mapping, "OPTIMIZATION_WHAT_WORKED", _clip(agent.get("performance_overview")) if agent.get("performance_overview") else f"{top} delivered the strongest result for this objective.")
+    _set(mapping, "OPTIMIZATION_WHAT_WORKED", _clean(agent.get("performance_overview")) if agent.get("performance_overview") else f"{top} delivered the strongest result for this objective.")
     risk = agent.get("placement_analysis") or agent.get("audience_demographic_analysis") or payload.get("warning")
-    _set(mapping, "OPTIMIZATION_RISK", _clip(risk) if risk else "No supported placement or audience risk was identified from the available breakdowns.")
-    action = _clip(agent.get("optimisation_action")) if agent.get("optimisation_action") else "Retain the strongest setup as control and test one audience or creative variable at a time."
+    _set(mapping, "OPTIMIZATION_RISK", _clean(risk) if risk else "No supported placement or audience risk was identified from the available breakdowns.")
+    action = _clean(agent.get("optimisation_action")) if agent.get("optimisation_action") else "Retain the strongest setup as control and test one audience or creative variable at a time."
     _set(mapping, "OPTIMIZATION_NEXT_STEP", action)
     _set(mapping, "OPTIMIZATION_PRIORITY", action)
 
@@ -943,7 +1048,12 @@ def _slide_plan(payloads: list[dict], model: str) -> list[dict]:
     client_label = _clean(first["client"].get("client_name"))
     cumulative = dict(common); _set(cumulative, "REPORT_MODEL_LABEL", client_label); _fill_overview(cumulative, payloads, "CUMULATIVE")
     monthly = dict(common); _set(monthly, "REPORT_MODEL_LABEL", client_label); _fill_overview(monthly, payloads, "MONTHLY")
-    plans = [{"source": ARCHETYPE["cover"], "mapping": common, "images": {}}, {"source": ARCHETYPE["cumulative"], "mapping": cumulative, "images": {}}, {"source": ARCHETYPE["monthly"], "mapping": monthly, "images": {}}]
+    overview_trim = {"data_rows": min(len(payloads), 7), "metric_columns": 8}
+    plans = [
+        {"source": ARCHETYPE["cover"], "mapping": common, "images": {}},
+        {"source": ARCHETYPE["cumulative"], "mapping": cumulative, "images": {}, "table_trim": overview_trim},
+        {"source": ARCHETYPE["monthly"], "mapping": monthly, "images": {}, "table_trim": overview_trim},
+    ]
     by_platform = {}
     for payload in payloads: by_platform.setdefault(payload["platform_scope"], []).append(payload)
     for platform_payloads in by_platform.values():
@@ -952,16 +1062,60 @@ def _slide_plan(payloads: list[dict], model: str) -> list[dict]:
             _set(mapping, "REPORT_MODEL_LABEL", client_label)
             plans.append({"source": ARCHETYPE["divider"], "mapping": mapping, "images": {}})
             if model == "dunlop":
-                plans.append({"source": ARCHETYPE["creative"], "mapping": mapping, "images": {}})
+                # The creative table intentionally keeps five readable rows per
+                # slide.  Clone it as needed rather than dropping anything
+                # after the first five creatives.
+                creative_rows = list(payload.get("rows") or [])
+                creative_pages = list(_chunks(creative_rows, 5)) or [[]]
+                for page_number, page_rows in enumerate(creative_pages, 1):
+                    creative_payload = {**payload, "rows": page_rows}
+                    creative = build_ads_mapping(creative_payload)
+                    _set(creative, "REPORT_MODEL_LABEL", client_label)
+                    if len(creative_pages) > 1:
+                        _set(
+                            creative,
+                            "OBJECTIVE_LABEL",
+                            f"{payload['objective'].replace('_', ' ').title()} (Part {page_number}/{len(creative_pages)})",
+                        )
+                    plans.append({
+                        "source": ARCHETYPE["creative"],
+                        "mapping": creative,
+                        "images": {},
+                        "table_trim": _table_trim(page_rows, creative_payload.get("metric_keys"), max_rows=5, max_metrics=10),
+                    })
                 if payload.get("rows"):
                     content = dict(mapping); images = _fill_content(content, payload)
                     plans.append({"source": ARCHETYPE["content"], "mapping": content, "images": images})
-                for kind in ("placement", "demographic", "region"):
-                    source_key = {"placement": "placements", "demographic": "demographics", "region": "regions"}[kind]
-                    if not (payload.get("breakdown") or {}).get(source_key):
-                        continue
-                    detail = dict(mapping); _fill_breakdown(detail, payload, kind)
-                    plans.append({"source": ARCHETYPE["breakdown"], "mapping": detail, "images": {}})
+                breakdown_sources = {
+                    "placement": "placements",
+                    "demographic": "demographics",
+                    "region": "regions",
+                }
+                # Breakdowns are also paginated.  This retains all available
+                # audience/region rows and removes the unused template row on
+                # a short final page (for example five placements in a
+                # six-row table).
+                for kind, source_key in breakdown_sources.items():
+                    breakdown_rows = list((payload.get("breakdown") or {}).get(source_key) or [])
+                    breakdown_pages = list(_chunks(breakdown_rows, 6)) or [[]]
+                    for page_number, page_rows in enumerate(breakdown_pages, 1):
+                        detail_payload = {
+                            **payload,
+                            "breakdown": {**(payload.get("breakdown") or {}), source_key: page_rows},
+                        }
+                        detail = build_ads_mapping(detail_payload)
+                        _set(detail, "REPORT_MODEL_LABEL", client_label)
+                        _fill_breakdown(detail, detail_payload, kind)
+                        if len(breakdown_pages) > 1:
+                            suffix = f" (Part {page_number}/{len(breakdown_pages)})"
+                            _set(detail, "BREAKDOWN_TITLE", f"{detail['{{BREAKDOWN_TITLE}}']}{suffix}")
+                            _set(detail, "BREAKDOWN_TYPE_LABEL", f"{detail['{{BREAKDOWN_TYPE_LABEL}}']}{suffix}")
+                        plans.append({
+                            "source": ARCHETYPE["breakdown"],
+                            "mapping": detail,
+                            "images": {},
+                            "table_trim": _table_trim(page_rows, detail_payload.get("metric_keys"), max_rows=6, max_metrics=7),
+                        })
                 plans.append({"source": ARCHETYPE["optimization"], "mapping": mapping, "images": {}})
             else:
                 plans.append({"source": ARCHETYPE["kpi"], "mapping": mapping, "images": {}})
@@ -1031,6 +1185,68 @@ def _chunks(items: list, size: int):
     for index in range(0, len(items), size): yield items[index:index + size]
 
 
+def _table_trim(rows: list[dict], metric_keys: list[str] | None, *, max_rows: int, max_metrics: int) -> dict[str, int]:
+    """Describe the visible part of a reusable native Slides table.
+
+    The library tables include a fixed number of data rows and metric columns.
+    Output slides remove unused ones after cloning so blank cells do not appear
+    as empty report data.
+    """
+    return {
+        "data_rows": min(len(rows or []), max_rows),
+        "metric_columns": min(len(metric_keys or []), max_metrics),
+    }
+
+
+def _table_trim_requests(presentation: dict, plans: list[dict]) -> list[dict]:
+    """Build delete-row/delete-column requests for generated output slides."""
+    slides = {slide.get("objectId"): slide for slide in presentation.get("slides") or []}
+    requests: list[dict] = []
+    for plan in plans:
+        trim = plan.get("table_trim") or {}
+        if not trim:
+            continue
+        slide = slides.get(plan.get("slide_id")) or {}
+        tables = [element for element in slide.get("pageElements") or [] if element.get("table")]
+        if len(tables) != 1:
+            continue
+        table = tables[0]
+        table_id = table.get("objectId")
+        table_rows = list((table.get("table") or {}).get("tableRows") or [])
+        row_count = len(table_rows)
+        column_count = int((table.get("table") or {}).get("columns") or 0)
+        # The final template row is the Total row.  Delete only the unneeded
+        # data rows, in reverse order, so row indexes remain stable.
+        target_data_rows = max(0, int(trim.get("data_rows") or 0))
+        for row_index in range(row_count - 2, target_data_rows, -1):
+            requests.append({
+                "deleteTableRow": {
+                    "tableObjectId": table_id,
+                    "cellLocation": {"rowIndex": row_index, "columnIndex": 0},
+                }
+            })
+        # Column zero is the dimension/name column; all other columns are
+        # metrics.  Remove only metrics the selected display configuration does
+        # not request.
+        target_columns = 1 + max(0, int(trim.get("metric_columns") or 0))
+        for column_index in range(column_count - 1, target_columns - 1, -1):
+            requests.append({
+                "deleteTableColumn": {
+                    "tableObjectId": table_id,
+                    "cellLocation": {"rowIndex": 0, "columnIndex": column_index},
+                }
+            })
+    return requests
+
+
+def _apply_table_trims(slides_service, presentation_id: str, plans: list[dict]) -> int:
+    presentation = slides_service.presentations().get(presentationId=presentation_id).execute()
+    requests = _table_trim_requests(presentation, plans)
+    for batch in _chunks(requests, 50):
+        execute_slides_batch_update(slides_service, presentation_id, batch)
+    return len(requests)
+
+
 def _assemble_slides(slides_service, presentation_id: str, plans: list[dict]) -> dict:
     presentation = slides_service.presentations().get(presentationId=presentation_id).execute()
     current_ids = [slide.get("objectId") for slide in presentation.get("slides") or []]
@@ -1044,9 +1260,11 @@ def _assemble_slides(slides_service, presentation_id: str, plans: list[dict]) ->
         execute_slides_batch_update(slides_service, presentation_id, [{"deleteObject": {"objectId": item}} for item in originals])
         moves = [{"updateSlidesPosition": {"slideObjectIds": [slide_id], "insertionIndex": index}} for index, slide_id in enumerate(output_ids)]
         for batch in _chunks(moves, 40): execute_slides_batch_update(slides_service, presentation_id, batch)
-        return {"assembled": True, "slide_count": len(plans)}
+        trimmed = _apply_table_trims(slides_service, presentation_id, plans)
+        return {"assembled": True, "slide_count": len(plans), "table_trim_requests": trimmed}
     if all(slide_id in current_ids for slide_id in output_ids):
-        return {"assembled": False, "resumed": True, "slide_count": len(plans)}
+        trimmed = _apply_table_trims(slides_service, presentation_id, plans)
+        return {"assembled": False, "resumed": True, "slide_count": len(plans), "table_trim_requests": trimmed}
     raise RuntimeError("Existing Ads presentation is not a V4 library or a resumable generated report.")
 
 

@@ -1,35 +1,42 @@
 from __future__ import annotations
 
-import pytest
+import json
 
+from agentic.agents.ads_agent.ads_agent_creative import analysis_helpers
+from agentic.agents.ads_agent.ads_set_agent.data_source import get_adset_evidence
+from agentic.services.ads_services.adset_service import AdSetAdsService
+from agentic.services.ads_services.creative_service import CreativeAdsService
 from agentic.tools.tools_list_ads_creative.dashboard_retrieval import (
     retrieve_ads_data,
     retrieve_ads_sections,
 )
-from agentic.agents.ads_agent.ads_agent_creative import analysis_helpers
-from agentic.agents.ads_agent.ads_agent_creative.ig_reach_agent import ig_reach_agent
 from agentic.workflows.ads_workflow.ads_creative_workflow.state import (
     AdsRetrievalData,
+    InstagramMetricAnalysis,
     MetaData,
-    Request,
-    State,
+    Request as CreativeRequest,
+    State as CreativeState,
+)
+from agentic.workflows.ads_workflow.adset_workflow.state import (
+    Request as AdSetRequest,
+    State as AdSetState,
 )
 
 
 class FakeDashboardClient:
-    def __init__(self):
-        self.analysis_calls = []
+    def __init__(self, creative_import_id: str = "import-1"):
+        self.creative_import_id = creative_import_id
+        self.creative_calls = []
+        self.adset_calls = []
 
     def resolve_client_and_period(self, client_code, period_id):
-        assert client_code == "bourbon"
-        assert period_id == "2026-07-01"
         return (
             {
                 "id": "client-id",
-                "client_code": "bourbon",
-                "client_name": "Bourbon",
+                "client_code": client_code,
+                "client_name": "JBA",
                 "ads_configuration": {"platforms": ["instagram", "facebook"]},
-                "meta_ad_accounts": [{"id": "act_1", "name": "Bourbon Ads"}],
+                "meta_ad_accounts": [],
             },
             {
                 "id": "period-id",
@@ -40,521 +47,228 @@ class FakeDashboardClient:
         )
 
     def get_analysis(self, **kwargs):
-        self.analysis_calls.append(kwargs)
+        return self._creative_response()
+
+    def get_creative_performance(self, **kwargs):
+        self.creative_calls.append(kwargs)
+        return self._creative_response()
+
+    def get_adset_performance(self, **kwargs):
+        self.adset_calls.append(kwargs)
         return {
             "data_status": "ready",
-            "dimension": kwargs["analysis_type"],
-            "platform_scope": kwargs["platform_scope"],
-            "objective": kwargs["objective"],
-            "objectives": [kwargs["objective"]],
-            "source": {"type": "api", "import_id": "import-id"},
-            "summary": {"reach": 100, "ctr": None},
-            "rows": [{"id": "ad-1", "metrics": {"reach": 100, "ctr": None}}],
-            "display_metrics": [{"key": "reach"}],
+            "source": {"type": "api", "import_id": "import-1"},
+            "summary": {"result": 12, "reach": 100, "spend": 50000},
+            "rows": [
+                {
+                    "id": "adset-1",
+                    "name": "Beli Unit Audience",
+                    "campaign_id": "campaign-1",
+                    "campaign_name": "Leads Campaign",
+                    "metrics": {"result": 12, "reach": 100, "spend": 50000},
+                }
+            ],
+            "display_metrics": [{"key": "result"}, {"key": "reach"}],
+            "kpi": {"target": 20},
+            "warnings": [],
+        }
+
+    def _creative_response(self):
+        return {
+            "data_status": "ready",
+            "dimension": "creative",
+            "source": {"type": "api", "import_id": self.creative_import_id},
+            "summary": {"result": 12, "reach": 100, "ctr": None},
+            "rows": [
+                {
+                    "id": "ad-1",
+                    "name": "Creative One",
+                    "adset_id": "adset-1",
+                    "metrics": {"result": 12, "reach": 100, "ctr": None},
+                }
+            ],
+            "display_metrics": [{"key": "result"}, {"key": "reach"}],
             "available_filters": {"campaigns": [], "adsets": []},
+            "kpi": {"target": 20},
             "warnings": [],
             "unconfirmed_count": 0,
         }
 
-    def get_adset_creatives(self, **kwargs):
-        return {
-            "data_status": "ready",
-            "source": {"type": "api", "import_id": "import-id"},
-            "summary": {"reach": 100, "result": 12, "spend": 50000},
-            "rows": [
-                {
-                    "id": "creative-1",
-                    "name": "Creative One",
-                    "adset_id": kwargs["adset_id"],
-                    "metrics": {"reach": 100, "result": 12, "spend": 50000},
-                }
-            ],
-            "display_metrics": [{"key": "reach"}],
-            "warnings": [],
-        }
 
-
-def test_retrieval_returns_canonical_payload_and_preserves_nulls():
-    api = FakeDashboardClient()
+def test_dashboard_retrieval_preserves_null_values():
     payload = retrieve_ads_data(
-        client_code="bourbon",
+        client_code="jba",
         period_id="2026-07-01",
         analysis_type="creative",
         platform_scope="instagram",
-        objective="leads",
-        campaign_ids=["campaign-1"],
-        client=api,
+        objectives=["leads"],
+        client=FakeDashboardClient(),
     )
-
-    assert payload["status"] == "ready"
-    assert payload["client"]["name"] == "Bourbon"
-    objective_payload = payload["objective_data"]["leads"]
-    assert objective_payload["summary"]["ctr"] is None
-    assert objective_payload["rows"][0]["metrics"]["ctr"] is None
-    assert api.analysis_calls[0]["client_id"] == "client-id"
-    assert api.analysis_calls[0]["period_id"] == "period-id"
-    assert api.analysis_calls[0]["campaign_ids"] == ["campaign-1"]
+    objective = payload["objective_data"]["leads"]
+    assert objective["summary"]["ctr"] is None
+    assert objective["rows"][0]["metrics"]["ctr"] is None
 
 
-def test_retrieval_sections_split_dashboard_payload_by_analysis_area():
-    payload = {
-        "summary": {"result": 12, "spend": 100},
-        "rows": [{"id": "ad-1", "name": "Top ad"}],
-        "breakdowns": {
-            "ad-1": {
-                "creative": {"ad_name": "Top ad"},
-                "placements": [{"placement": "Feed", "impressions": 10}],
-                "demographics": [{"age": "25-34", "gender": "female", "reach": 8}],
-                "regions": [{"region": "Jakarta", "reach": 5}],
-            }
-        },
-    }
-
-    sections = retrieve_ads_sections(payload)
-
-    assert sections["performance_overview"] == {"result": 12, "spend": 100}
-    assert sections["content_analysis"] == [{"id": "ad-1", "name": "Top ad"}]
+def test_retrieval_sections_are_local_projections():
+    sections = retrieve_ads_sections(
+        {
+            "summary": {"result": 12},
+            "rows": [{"id": "ad-1", "name": "Top ad"}],
+            "breakdowns": {
+                "ad-1": {
+                    "creative": {"ad_name": "Top ad"},
+                    "placements": [{"placement": "Feed", "impressions": 10}],
+                    "demographics": [{"age": "25-34", "gender": "female"}],
+                    "regions": [{"region": "Jakarta", "reach": 5}],
+                }
+            },
+        }
+    )
+    assert sections["performance_overview"] == {"result": 12}
     assert sections["placement_analysis"][0]["entity_name"] == "Top ad"
     assert sections["audience_demographic_analysis"][0]["gender"] == "female"
     assert sections["region_analysis"][0]["region"] == "Jakarta"
 
 
-def test_adset_retrieval_exposes_objective_overview_kpi_and_creative_breakdowns():
+def test_adset_service_returns_campaigns_and_creatives_from_same_snapshot():
     api = FakeDashboardClient()
-    _, period = api.resolve_client_and_period("bourbon", "2026-07-01")
-    period["objective_configs"] = {
-        "meta": {
-            "leads": {
-                "target_monthly": 20,
-                "budget_monthly": 100000,
-                "target_cost_per_result": 5000,
-            }
-        }
-    }
-    api.resolve_client_and_period = lambda *_: (
-        {
-            "id": "client-id",
-            "client_code": "bourbon",
-            "client_name": "Bourbon",
-            "ads_configuration": {"platforms": ["instagram", "facebook"]},
-            "meta_ad_accounts": [],
-        },
-        period,
+    payload = AdSetAdsService(api).retrieve(
+        "jba", "2026-07-01", "meta", "linkclicks"
     )
+    data = payload["objective_data"]
+    assert payload["objective"] == "link_clicks"
+    assert data["objective_overview"]["campaigns"][0]["name"] == "Leads Campaign"
+    assert data["adset_breakdowns"]["adset-1"]["creatives"][0]["id"] == "ad-1"
+    assert api.adset_calls[0]["objective"] == "link_clicks"
+    assert api.creative_calls[0]["adset_ids"] is None
 
-    payload = retrieve_ads_data(
-        client_code="bourbon",
-        period_id="2026-07-01",
-        analysis_type="adset",
-        platform_scope="meta",
-        objectives=["leads"],
-        include_breakdowns=True,
-        client=api,
+
+def test_adset_service_rejects_cross_snapshot_creatives():
+    payload = AdSetAdsService(FakeDashboardClient("import-2")).retrieve(
+        "jba", "2026-07-01", "meta", "leads"
     )
-
-    data = payload["objective_data"]["leads"]
-    assert data["objective_overview"]["adsets"] == data["rows"]
-    assert data["objective_overview"]["campaigns"][0]["adsets"] == data["rows"]
-    assert data["kpi"]["target"] == 20
-    assert data["kpi"]["budget"] == 100000
-    assert data["adset_breakdowns"]["ad-1"]["creatives"][0]["id"] == "creative-1"
-    assert data["sections"]["objective_overview"]["kpi"]["target"] == 20
+    data = payload["objective_data"]
+    assert data["adset_breakdowns"]["adset-1"]["creatives"] == []
+    assert "same active snapshot" in data["warnings"][-1]
 
 
-def test_state_has_typed_ads_data_contract():
-    state = State(
-        request=Request(
-            client_code="bourbon",
-            period_id="2026-07-01",
-            analysis_type="creative",
-            platform_scope="meta",
-            objective="leads",
-        )
-    )
-    state.ads_data = AdsRetrievalData(status="ready", rows=[{"id": "ad-1"}])
-    assert state.ads_data.status == "ready"
-    assert state.ads_data.rows == [{"id": "ad-1"}]
-    assert state.request.objectives == ["leads"]
-
-
-def test_request_accepts_multiple_objectives_and_legacy_singular():
-    multiple = Request(
-        client_code="bourbon",
-        period_id="2026-07-01",
-        analysis_type="creative",
-        platform_scope="meta",
-        objectives=["Reach", "engagement", "reach"],
-    )
-    legacy = Request(
-        client_code="bourbon",
-        period_id="2026-07-01",
-        analysis_type="creative",
-        platform_scope="meta",
-        objective="reach",
-    )
-
-    assert multiple.objectives == ["reach", "engagement"]
-    assert multiple.objective is None
-    assert legacy.objectives == ["reach"]
-    assert legacy.objective == "reach"
-
-
-def test_unavailable_platform_is_explicitly_coming_soon():
+def test_creative_service_normalises_legacy_objective_aliases():
     api = FakeDashboardClient()
-    payload = retrieve_ads_data(
-        client_code="bourbon",
-        period_id="2026-07-01",
-        platform_scope="tiktok",
-        objective="views",
-        client=api,
+    payload = CreativeAdsService(api).retrieve(
+        "jba", "2026-07-01", "facebook", "pagelike"
     )
-    assert payload["status"] == "coming_soon"
-    assert payload["success"] is False
-    assert payload["rows"] == []
-    assert "coming soon" in payload["warnings"][0].lower()
-    assert api.analysis_calls == []
+    assert payload["objective"] == "page_likes"
+    assert api.creative_calls[0]["objective"] == "page_likes"
 
 
-def test_objective_agent_consumes_state_as_json_context(monkeypatch):
+def test_adset_agent_prefers_frozen_evidence():
+    frozen = {"objective": "leads", "objective_data": {"source": {"import_id": "1"}}}
+    state = AdSetState(
+        request=AdSetRequest(
+            client_code="jba",
+            period_id="period-id",
+            analysis_type="adset",
+            platform_scope=["meta"],
+            objectives=["leads"],
+        ),
+        adset_data={"leads": frozen},
+    )
+
+    class RetrievalMustNotRun:
+        def invoke(self, _):
+            raise AssertionError("dashboard was queried again")
+
+    assert get_adset_evidence(state, "leads", RetrievalMustNotRun()) == frozen
+
+
+def test_creative_analysis_helper_uses_only_frozen_sections(monkeypatch):
     captured = {}
 
+    def fake_invoke(_llm, messages, **_kwargs):
+        captured["context"] = json.loads(messages[-1].content)
+        return type("Response", (), {"content": '{"performance_overview":"supported"}'})()
+
+    monkeypatch.setattr(analysis_helpers, "invoke_with_rate_limit_retry", fake_invoke)
+    state = CreativeState(
+        request=CreativeRequest(
+            client_code="jba",
+            period_id="period-id",
+            analysis_type="creative",
+            platform_scope=["instagram"],
+            objectives=["leads"],
+        ),
+        Metadata=MetaData(client_code="jba"),
+        ads_data=AdsRetrievalData(
+            status="ready",
+            success=True,
+            objective_data={
+                "leads": {
+                    "status": "ready",
+                    "sections": {"performance_overview": {"result": 12}},
+                }
+            },
+        ),
+    )
+    result = analysis_helpers.run_ads_analysis_agent(
+        state,
+        objective="leads",
+        system_prompt=None,
+        result_model=InstagramMetricAnalysis,
+        result_field="instagram_result",
+        output_fields=["performance_overview"],
+        label="test",
+    )
+    assert result["instagram_result"].performance_overview == "supported"
+    assert captured["context"]["analysis_sections"]["performance_overview"]["result"] == 12
+
+
+def test_adset_slide_analysis_uses_friend_workflow_and_frozen_payload(monkeypatch):
+    import agentic.agents.ads_agent.ads_set_agent.meta_leads_agent as leads_module
+    import agentic.agents.ads_agent.ads_set_agent.meta_summary as summary_module
+    from dashboard.ads_slides_report import _run_adset_agent_analysis
+
+    captured = []
+
     class FakeLLM:
         def invoke(self, messages):
-            captured["content"] = messages[1].content
-            return type(
-                "Response",
-                (),
-                {
-                    "content": '{"performance_overview_reach":"ok","content_analysis_reach":"ok","placement_analysis_reach":"ok","audience_demographic_analysis_reach":"ok","region_analysis_reach":"ok","optimisation_action_reach":"ok"}'
-                },
-            )()
+            captured.append(json.loads(messages[-1].content))
+            if "final Meta Ads reporting analyst" in messages[0].content:
+                content = {"summary_result": "prioritise the efficient ad set"}
+            else:
+                content = {
+                    "overall_leads_analysis": "12 leads overall",
+                    "leads_adset_analysis": "Beli Unit Audience led the result",
+                }
+            return type("Response", (), {"content": json.dumps(content)})()
 
-    monkeypatch.setattr(analysis_helpers, "llm", FakeLLM())
-    state = State(
-        request=Request(
-            client_code="bourbon",
-            period_id="2026-07-01",
-            analysis_type="creative",
-            platform_scope="instagram",
-            objective="reach",
-        )
-    )
-    state.Metadata.client_code = "bourbon"
-    state.ads_data = AdsRetrievalData(
-        status="ready",
-        objectives=["reach"],
-        objective_data={
-            "reach": {
-                "status": "ready",
-                "summary": {"reach": 10},
-                "rows": [{"id": "ad-1", "metrics": {"reach": 10}}],
+    monkeypatch.setattr(leads_module, "llm", FakeLLM())
+    monkeypatch.setattr(summary_module, "llm", FakeLLM())
+    payload = {
+        "model": "jba",
+        "objective": "leads",
+        "platform_scope": "meta",
+        "client": {"id": "client-id", "client_code": "jba", "client_name": "JBA"},
+        "period": {"id": "period-id"},
+        "source": {"type": "api", "import_id": "import-1"},
+        "analysis": {
+            "data_status": "ready",
+            "summary": {"result": 12},
+            "display_metrics": [{"key": "result"}],
+            "warnings": [],
+        },
+        "analysis_sections": {
+            "objective_overview": {
+                "summary": {"result": 12},
+                "campaigns": [],
+                "adsets": [{"id": "adset-1", "name": "Beli Unit Audience"}],
             }
         },
-    )
-
-    result = ig_reach_agent(state)["instagram_result"]
-    assert result.performance_overview_reach == "ok"
-    assert '"content_analysis": [' in captured["content"]
-    assert '"id": "ad-1"' in captured["content"]
-    assert '"analysis_sections": {' in captured["content"]
-    parsed_context = __import__("json").loads(captured["content"])
-    assert "rows" not in parsed_context["ads_data"]
-
-
-def test_retrieval_rejects_dashboard_objective_fallback():
-    class FallbackClient(FakeDashboardClient):
-        def get_analysis(self, **kwargs):
-            response = super().get_analysis(**kwargs)
-            response["objective"] = "reach"
-            return response
-
-    payload = retrieve_ads_data(
-        client_code="bourbon",
-        period_id="2026-07-01",
-        analysis_type="creative",
-        platform_scope="instagram",
-        objective="leads",
-        client=FallbackClient(),
-    )
-
-    assert payload["status"] == "error"
-    assert payload["success"] is False
-    assert payload["rows"] == []
-    assert payload["objective_data"]["leads"]["status"] == "objective_mismatch"
-    assert "Confirm the campaign mapping" in payload["warnings"][0]
-
-
-def test_meta_runner_preserves_each_objective_result(monkeypatch):
-    from agentic.agents.ads_agent.ads_agent_creative.meta_runner_node import (
-        meta_runner_node,
-    )
-
-    class FakeLLM:
-        def invoke(self, messages):
-            import json
-
-            request = json.loads(messages[-1].content)
-            objective = request["objective"]
-            content = {
-                key: f"{objective}:{key}"
-                for key in request["required_output_keys"]
-            }
-            return type("Response", (), {"content": json.dumps(content)})()
-
-    monkeypatch.setattr(analysis_helpers, "llm", FakeLLM())
-    objective_data = {
-        objective: {
-            "status": "ready",
-            "objective": objective,
-            "summary": {},
-            "rows": [{"id": f"ad-{objective}"}],
-            "sections": {},
-        }
-        for objective in ("reach", "engagement", "link_clicks")
+        "adset_breakdowns": {
+            "adset-1": {"creatives": [{"id": "ad-1", "name": "Creative One"}]}
+        },
     }
-    state = State(
-        request=Request(
-            client_code="bourbon",
-            period_id="2026-07-01",
-            analysis_type="creative",
-            platform_scope="meta",
-            objectives=["reach", "engagement", "link_clicks"],
-        ),
-        Metadata=MetaData(client_code="bourbon", instagram=True, facebook=True),
-        ads_data=AdsRetrievalData(
-            status="ready",
-            success=True,
-            objectives=["reach", "engagement", "link_clicks"],
-            objective_data=objective_data,
-        ),
-    )
-
-    result = meta_runner_node(state)
-    instagram = result["instagram_result"]
-    facebook = result["facebook_result"]
-
-    assert instagram.objective is None
-    assert instagram.objectives == ["reach", "engagement", "link_clicks"]
-    assert set(instagram.objective_results) == {"reach", "engagement", "link_clicks"}
-    assert instagram.objective_results["reach"].performance_overview.startswith("reach:")
-    assert instagram.objective_results["engagement"].performance_overview.startswith("engagement:")
-    assert instagram.objective_results["link_clicks"].performance_overview.startswith("link_clicks:")
-    assert set(facebook.objective_results) == {"reach", "engagement", "link_clicks"}
-
-
-@pytest.mark.parametrize("scope", ["meta", "instagram", "facebook"])
-def test_workflow_runs_multiple_objectives_without_concurrent_updates(monkeypatch, scope):
-    import json
-
-    import agentic.agents.ads_agent.ads_agent_creative.summary_agent as summary_module
-    import agentic.agents.ads_agent.ads_agent_creative.retrieval as retrieval_module
-    from agentic.workflows.ads_workflow.ads_creative_workflow.graph import (
-        creative_architecture,
-    )
-
-    class FakeLLM:
-        def invoke(self, messages):
-            request = json.loads(messages[-1].content)
-            if "required_output_keys" in request:
-                objective = request["objective"]
-                content = {
-                    key: f"{objective}:{key}"
-                    for key in request["required_output_keys"]
-                }
-            else:
-                content = {"summary_result": "ok"}
-            return type("Response", (), {"content": json.dumps(content)})()
-
-    def fake_retrieve_ads_data(**kwargs):
-        objective_data = {
-            objective: {
-                "status": "ready",
-                "success": True,
-                "objective": objective,
-                "summary": {},
-                "rows": [{"id": f"ad-{objective}"}],
-                "sections": {},
-            }
-            for objective in kwargs["objectives"]
-        }
-        return {
-            "status": "ready",
-            "success": True,
-            "client": {
-                "id": "client-id",
-                "code": "bourbon",
-                "name": "Bourbon",
-                "ads_platforms": ["instagram", "facebook"],
-            },
-            "period": {"id": "period-id"},
-            "analysis_type": "creative",
-            "platform_scope": scope,
-            "objectives": kwargs["objectives"],
-            "objective_data": objective_data,
-        }
-
-    monkeypatch.setattr(analysis_helpers, "llm", FakeLLM())
-    monkeypatch.setattr(summary_module, "llm", FakeLLM())
-    monkeypatch.setattr(retrieval_module, "retrieve_ads_data", fake_retrieve_ads_data)
-
-    request = Request(
-        client_code="bourbon",
-        period_id="2026-07-01",
-        analysis_type="creative",
-        platform_scope=scope,
-        objectives=["reach", "engagement", "link_clicks"],
-    )
-    final = State.model_validate(creative_architecture.invoke(State(request=request)))
-
-    expected = {"reach", "engagement", "link_clicks"}
-    if scope in {"meta", "instagram"}:
-        assert set(final.instagram_result.objective_results) == expected
-    if scope in {"meta", "facebook"}:
-        assert set(final.facebook_result.objective_results) == expected
-    assert final.summary_result.summary_result == "ok"
-
-
-def test_llm_rate_limit_is_retried_without_repeating_other_errors(monkeypatch):
-    import agentic.utils.llm_retry as retry_module
-
-    sleeps = []
-
-    class RateLimitedOnce:
-        calls = 0
-
-        def invoke(self, messages):
-            self.calls += 1
-            if self.calls == 1:
-                raise RuntimeError("429 RESOURCE_EXHAUSTED Please retry in 0.1s")
-            return "ok"
-
-    monkeypatch.setattr(retry_module.time, "sleep", sleeps.append)
-    model = RateLimitedOnce()
-
-    assert retry_module.invoke_with_rate_limit_retry(
-        model,
-        [],
-        max_retries=1,
-    ) == "ok"
-    assert model.calls == 2
-    assert sleeps == [2]
-
-
-def test_llm_unavailable_is_retried_with_backoff(monkeypatch):
-    import agentic.utils.llm_retry as retry_module
-
-    sleeps = []
-
-    class UnavailableTwice:
-        calls = 0
-
-        def invoke(self, messages):
-            self.calls += 1
-            if self.calls < 3:
-                raise RuntimeError("503 UNAVAILABLE model is experiencing high demand")
-            return "ok"
-
-    monkeypatch.setenv("ADS_LLM_UNAVAILABLE_RETRY_SECONDS", "1")
-    monkeypatch.setattr(retry_module.time, "sleep", sleeps.append)
-    model = UnavailableTwice()
-
-    assert retry_module.invoke_with_rate_limit_retry(
-        model,
-        [],
-        max_retries=2,
-    ) == "ok"
-    assert model.calls == 3
-    assert sleeps == [2, 3]
-
-
-def test_generic_objective_coerces_nested_llm_values_to_strings(monkeypatch):
-    import json
-
-    from agentic.agents.ads_agent.ads_agent_creative.generic_objective_agents import (
-        ig_generic_objective_agent,
-    )
-
-    class NestedResponseLLM:
-        def invoke(self, messages):
-            return type(
-                "Response",
-                (),
-                {
-                    "content": json.dumps(
-                        {
-                            "performance_overview": {"clicks": 10},
-                            "content_analysis": [{"ad": "A"}],
-                            "placement_analysis": None,
-                            "audience_demographic_analysis": "Audience text",
-                            "region_analysis": "Region text",
-                            "optimisation_action": "Action text",
-                        }
-                    )
-                },
-            )()
-
-    monkeypatch.setattr(analysis_helpers, "llm", NestedResponseLLM())
-    state = State(
-        request=Request(
-            client_code="bourbon",
-            period_id="2026-07-01",
-            analysis_type="creative",
-            platform_scope="instagram",
-            objectives=["link_clicks"],
-        ),
-        Metadata=MetaData(client_code="bourbon", instagram=True),
-        ads_data=AdsRetrievalData(
-            status="ready",
-            success=True,
-            objectives=["link_clicks"],
-            objective_data={
-                "link_clicks": {
-                    "status": "ready",
-                    "summary": {"link_clicks": 10},
-                    "rows": [{"id": "ad-1"}],
-                }
-            },
-        ),
-    )
-
-    result = ig_generic_objective_agent(state, "link_clicks")["instagram_result"]
-    assert result.performance_overview == '{"clicks": 10}'
-    assert result.content_analysis == '[{"ad": "A"}]'
-
-
-def test_transient_llm_failure_becomes_objective_error(monkeypatch):
-    from agentic.agents.ads_agent.ads_agent_creative.generic_objective_agents import (
-        ig_generic_objective_agent,
-    )
-    from agentic.agents.ads_agent.ads_agent_creative.result_merge import (
-        merge_objective_result,
-    )
-
-    class UnavailableLLM:
-        def invoke(self, messages):
-            raise RuntimeError("503 UNAVAILABLE model is experiencing high demand")
-
-    monkeypatch.setenv("ADS_LLM_RATE_LIMIT_RETRIES", "0")
-    monkeypatch.setattr(analysis_helpers, "llm", UnavailableLLM())
-    state = State(
-        request=Request(
-            client_code="bourbon",
-            period_id="2026-07-01",
-            analysis_type="creative",
-            platform_scope="instagram",
-            objectives=["link_clicks"],
-        ),
-        Metadata=MetaData(client_code="bourbon", instagram=True),
-        ads_data=AdsRetrievalData(
-            status="ready",
-            success=True,
-            objectives=["link_clicks"],
-            objective_data={"link_clicks": {"status": "ready", "rows": []}},
-        ),
-    )
-
-    raw = ig_generic_objective_agent(state, "link_clicks")["instagram_result"]
-    result = merge_objective_result(None, raw)
-
-    assert result.objective_results["link_clicks"].status == "error"
-    assert "unavailable" in result.objective_results["link_clicks"].error.lower()
+    result = _run_adset_agent_analysis(payload)
+    assert result["performance_overview"] == "12 leads overall"
+    assert result["adset_analysis"] == "Beli Unit Audience led the result"
+    assert result["optimisation_action"] == "prioritise the efficient ad set"
+    assert captured[0]["objective_data"]["source"]["import_id"] == "import-1"

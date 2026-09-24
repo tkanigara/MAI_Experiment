@@ -1,11 +1,15 @@
 import unittest
+from unittest.mock import patch
 
 from dashboard.ads_slides_report import (
     ARCHETYPE,
     _fill_adset,
     _fill_comparison,
     _fill_overview,
+    _goal_breakdown,
+    _run_agent_analysis,
     _slide_plan,
+    _table_trim_requests,
     build_ads_mapping,
 )
 
@@ -105,7 +109,126 @@ class AdsSlidesV4Tests(unittest.TestCase):
         mapping = build_ads_mapping(current)
         self.assertEqual(mapping["{{PERFORMANCE_INSIGHT}}"], "Agent-backed performance finding.")
         self.assertEqual(mapping["{{BEST_CONTENT_1_INSIGHT}}"], "Agent-backed creative finding.")
+        self.assertEqual(mapping["{{BEST_CONTENT_ANALYSIS}}"], "Agent-backed creative finding.")
+        self.assertNotIn("Agent-backed next action.", mapping["{{BEST_CONTENT_ANALYSIS}}"])
+        self.assertEqual(mapping["{{BEST_CONTENT_2_INSIGHT}}"], "")
         self.assertEqual(mapping["{{OPTIMIZATION_NEXT_STEP}}"], "Agent-backed next action.")
+
+    def test_agent_narratives_are_not_shortened_for_report_slides(self):
+        current = payload()
+        long_finding = "finding " * 150
+        current["agent_analysis"] = {
+            "performance_overview": long_finding,
+            "content_analysis": long_finding,
+            "placement_analysis": long_finding,
+            "optimisation_action": long_finding,
+        }
+        mapping = build_ads_mapping(current)
+        self.assertEqual(mapping["{{PERFORMANCE_INSIGHT}}"], long_finding.strip())
+        self.assertEqual(mapping["{{BEST_CONTENT_ANALYSIS}}"], long_finding.strip())
+        self.assertEqual(mapping["{{OPTIMIZATION_NEXT_STEP}}"], long_finding.strip())
+
+    def test_missing_row_metric_displays_zero_instead_of_a_dash(self):
+        current = payload()
+        current["metric_keys"] = ["post_saves"]
+        current["rows"][0]["metrics"]["post_saves"] = None
+        mapping = build_ads_mapping(current)
+        self.assertEqual(mapping["{{CREATIVE_ROW_1_METRIC_1}}"], "0")
+
+    def test_dunlop_creative_and_breakdowns_paginate_all_available_rows(self):
+        current = payload()
+        current["rows"] = current["rows"] + [
+            {
+                "id": f"extra-{index}",
+                "name": f"Extra Creative {index}",
+                "campaign_name": "Campaign A",
+                "adset_name": "Audience A",
+                "metrics": {"result": index, "reach": index * 100, "impressions": index * 120, "spend": index * 1000},
+            }
+            for index in range(1, 10)
+        ]
+        current["breakdown"]["regions"] = [
+            {"label": f"Region {index}", "result": index, "impressions": index * 100}
+            for index in range(1, 11)
+        ]
+        plans = _slide_plan([current], "dunlop")
+        creative_plans = [plan for plan in plans if plan["source"] == ARCHETYPE["creative"]]
+        breakdown_plans = [plan for plan in plans if plan["source"] == ARCHETYPE["breakdown"]]
+        self.assertEqual(len(creative_plans), 3)
+        self.assertEqual(creative_plans[-1]["mapping"]["{{CREATIVE_ROW_4_NAME}}"], "Extra Creative 9")
+        self.assertEqual(creative_plans[-1]["table_trim"]["data_rows"], 4)
+        self.assertEqual(len(breakdown_plans), 4)
+        self.assertEqual(breakdown_plans[-1]["table_trim"]["data_rows"], 4)
+
+    def test_table_trim_deletes_only_unused_data_rows_and_metric_columns(self):
+        plans = [{"slide_id": "output-slide", "table_trim": {"data_rows": 3, "metric_columns": 2}}]
+        presentation = {
+            "slides": [{
+                "objectId": "output-slide",
+                "pageElements": [{
+                    "objectId": "output-table",
+                    "table": {"columns": 5, "tableRows": [{}, {}, {}, {}, {}, {}, {}]},
+                }],
+            }]
+        }
+        requests = _table_trim_requests(presentation, plans)
+        deleted_rows = [request["deleteTableRow"]["cellLocation"]["rowIndex"] for request in requests if "deleteTableRow" in request]
+        deleted_columns = [request["deleteTableColumn"]["cellLocation"]["columnIndex"] for request in requests if "deleteTableColumn" in request]
+        self.assertEqual(deleted_rows, [5, 4])
+        self.assertEqual(deleted_columns, [4, 3])
+
+    def test_dunlop_plan_keeps_all_three_breakdown_slides_when_a_cut_is_empty(self):
+        current = payload()
+        current["breakdown"] = {"placements": [], "demographics": [], "regions": []}
+        plans = _slide_plan([current], "dunlop")
+        sources = [plan["source"] for plan in plans]
+        self.assertEqual(sources.count(ARCHETYPE["breakdown"]), 3)
+
+    def test_platform_report_uses_shared_meta_audience_breakdowns(self):
+        class FakeRepo:
+            def platform_detail(self, *_args):
+                return {"goals": [{"key": "reach", "placements": [], "demographics": [], "regions": []}]}
+
+            def shared_audience_breakdowns(self, *_args):
+                return {
+                    "scope": "shared_meta",
+                    "demographics": [{"age": "25-34", "gender": "female", "reach": 10}],
+                    "regions": [{"label": "Jakarta", "reach": 8}],
+                }
+
+        result = _goal_breakdown(FakeRepo(), "client", "period", "instagram", "reach")
+        self.assertEqual(result["demographics"][0]["label"], "All Meta | 25-34 | Female")
+        self.assertEqual(result["regions"][0]["label"], "All Meta | Jakarta")
+
+    def test_dunlop_agent_accepts_platform_scope_and_returns_slide_fields(self):
+        current = payload()
+        current["client"]["client_code"] = "example-client"
+        current["analysis_sections"] = {
+            "performance_overview": {"result": 35},
+            "content_analysis": current["rows"],
+            "placement_analysis": current["breakdown"]["placements"],
+            "audience_demographic_analysis": current["breakdown"]["demographics"],
+            "region_analysis": current["breakdown"]["regions"],
+        }
+        response = type(
+            "Response",
+            (),
+            {
+                "content": (
+                    '{"performance_overview":"overview","content_analysis":"content",'
+                    '"placement_analysis":"placement","audience_demographic_analysis":"audience",'
+                    '"region_analysis":"region","optimisation_action":"action"}'
+                )
+            },
+        )()
+        with patch(
+            "agentic.agents.ads_agent.ads_agent_creative.analysis_helpers.invoke_with_rate_limit_retry",
+            return_value=response,
+        ):
+            result = _run_agent_analysis(current)
+        self.assertEqual(result["content_analysis"], "content")
+        self.assertEqual(result["audience_demographic_analysis"], "audience")
+        self.assertEqual(result["region_analysis"], "region")
 
     def test_cumulative_overview_uses_history_values(self):
         current = payload()

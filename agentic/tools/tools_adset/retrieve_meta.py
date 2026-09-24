@@ -87,7 +87,7 @@ def linkclicks_retrieval(
         client_code=client_code,
         period_id=period_id,
         platform="meta",
-        objective="linkclicks",
+        objective="link_clicks",
         campaign_ids=campaign_ids,
         adset_ids=adset_ids,
     )

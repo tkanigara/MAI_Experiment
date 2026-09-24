@@ -266,6 +266,7 @@ class AdsDashboardApiClient:
         platform_scope: str,
         objective: str | None = None,
         campaign_ids: list[str] | None = None,
+        adset_ids: list[str] | None = None,
     ) -> Any:
 
         params: dict[str, Any] = {
@@ -278,6 +279,11 @@ class AdsDashboardApiClient:
         if campaign_ids:
             params["campaign_ids"] = ",".join(
                 campaign_ids
+            )
+
+        if adset_ids:
+            params["adset_ids"] = ",".join(
+                adset_ids
             )
 
         return self.get(

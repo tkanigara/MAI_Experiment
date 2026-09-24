@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -50,6 +52,10 @@ class MetaSummary(BaseModel):
 class State(BaseModel):
 
     request: Request
+
+    # Optional frozen dashboard evidence supplied by the slide generator.
+    # Interactive workflow runs leave this empty and retrieve from the API.
+    adset_data: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     task_delegation: list[TaskDelegation] = Field(
         default_factory=list

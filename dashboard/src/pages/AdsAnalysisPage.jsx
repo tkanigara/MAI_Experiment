@@ -17,7 +17,7 @@ function filtersFromLocation() {
   };
 }
 function formatMetric(value, format) {
-  if (value === null || value === undefined) return "—";
+  if (value === null || value === undefined) value = 0;
   if (format === "currency") return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value);
   if (format === "percentage") return `${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(value)}%`;
   return new Intl.NumberFormat("id-ID", { maximumFractionDigits: format === "decimal" ? 2 : 0 }).format(value);

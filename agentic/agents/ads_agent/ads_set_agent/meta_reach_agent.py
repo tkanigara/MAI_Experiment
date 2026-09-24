@@ -5,16 +5,10 @@ from agentic.workflows.ads_workflow.adset_workflow.state import State, MetaAnaly
 from agentic.prompts.adset_prompts_list.meta_reach_prompt import SYSTEM_PROMPT
 from agentic.tools.tools_adset.retrieve_meta import reach_retrieval
 from agentic.utils.logger import node, console
+from agentic.agents.ads_agent.ads_set_agent.data_source import get_adset_evidence
 def meta_reach_agent(state: State):
     with node("Meta reach agent"):
-        data = reach_retrieval.invoke(
-            {
-                "client_code": state.request.client_code,
-                "period_id": state.request.period_id,
-                "campaign_ids": state.request.campaign_ids,
-                "adset_ids": state.request.adset_ids,
-            }
-        )
+        data = get_adset_evidence(state, "reach", reach_retrieval)
 
         data_for_llm = json.dumps(
             data,

@@ -7,6 +7,14 @@ from agentic.config.dashboard_integration import AdsDashboardApiClient
 
 class CreativeAdsService:
 
+    OBJECTIVE_ALIASES = {
+        "linkclicks": "link_clicks",
+        "profilevisit": "profile_visits",
+        "profile_visit": "profile_visits",
+        "pagelike": "page_likes",
+        "page_like": "page_likes",
+    }
+
     def __init__(
         self,
         api_client: AdsDashboardApiClient,
@@ -30,7 +38,11 @@ class CreativeAdsService:
         client_id = str(client["id"])
         resolved_period_id = str(period["id"])
 
-        objective_key = objective.lower().strip()
+        requested_objective = objective.lower().strip()
+        objective_key = self.OBJECTIVE_ALIASES.get(
+            requested_objective,
+            requested_objective,
+        )
 
         raw_data = self.api.get_creative_performance(
             client_id=client_id,
@@ -109,8 +121,9 @@ class CreativeAdsService:
             "engagement": "post_engagements",
             "link_clicks": "link_clicks",
             "leads": "leads",
-            "profilevisit": "profile_visits",
-            "pagelike": "page_likes",
+            "views": "views",
+            "profile_visits": "profile_visits",
+            "page_likes": "page_likes",
         }
 
         metric = metric_map.get(objective)
