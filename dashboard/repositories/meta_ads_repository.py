@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import calendar
+import math
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
@@ -22,6 +23,7 @@ try:
     from dashboard.services.ads_objectives import (
         METRICS,
         OBJECTIVE_CATALOG,
+        calculate_cost_per_result,
         normalize_metric_keys,
         objective_catalog,
         objective_definition,
@@ -41,6 +43,7 @@ except ModuleNotFoundError:
     from services.ads_objectives import (
         METRICS,
         OBJECTIVE_CATALOG,
+        calculate_cost_per_result,
         normalize_metric_keys,
         objective_catalog,
         objective_definition,
@@ -210,6 +213,47 @@ TABLE_FIELDS = {
 
 def _json(value) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _normalize_entity_targets(
+    rows,
+    id_field: str,
+    label_field: str,
+    *,
+    extra_label_fields: tuple[str, ...] = (),
+) -> list[dict]:
+    """Normalize optional entity KPI rows stored in period configuration."""
+    normalized = []
+    positions = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            raise ValueError(f"Each {id_field} target must be an object.")
+        entity_id = str(item.get(id_field) or "").strip()
+        if not entity_id:
+            raise ValueError(f"{id_field} is required for every target row.")
+        values = {id_field: entity_id}
+        for field in (label_field, *extra_label_fields):
+            if item.get(field) not in (None, ""):
+                values[field] = str(item[field]).strip()
+        has_value = False
+        for field in ("target", "budget", "target_cost_per_result"):
+            raw_value = item.get(field)
+            if raw_value in (None, ""):
+                values[field] = None
+                continue
+            number = float(raw_value)
+            if not math.isfinite(number) or number < 0:
+                raise ValueError(f"{field} must be a non-negative number.")
+            values[field] = number
+            has_value = True
+        if not has_value:
+            continue
+        if entity_id in positions:
+            normalized[positions[entity_id]] = values
+        else:
+            positions[entity_id] = len(normalized)
+            normalized.append(values)
+    return normalized
 
 
 class MetaAdsRepository:
@@ -1058,6 +1102,14 @@ class MetaAdsRepository:
                 WHERE import_id=CAST(:import_id AS UUID)
                 ORDER BY campaign_name, adset_name
             """), {"import_id": import_id}).mappings().all()
+            ads = conn.execute(text("""
+                SELECT DISTINCT COALESCE(meta_ad_account_id, '') AS meta_ad_account_id,
+                    campaign_external_id, campaign_name, adset_external_id, adset_name,
+                    ad_external_id, ad_name
+                FROM meta_ads_ad_performance
+                WHERE import_id=CAST(:import_id AS UUID)
+                ORDER BY campaign_name, adset_name, ad_name
+            """), {"import_id": import_id}).mappings().all()
         by_external = {(row["meta_ad_account_id"], row["campaign_external_id"]): dict(row) for row in stored if row["campaign_external_id"]}
         by_period = {row["campaign_key"]: dict(row) for row in stored if not row["campaign_external_id"]}
         result = []
@@ -1069,12 +1121,37 @@ class MetaAdsRepository:
             optimization_goals = list((mapping or {}).get("optimization_goals") or ([row["optimization_goal"]] if row["optimization_goal"] else []))
             result_types = list((mapping or {}).get("result_types") or ([row["result_type"]] if row["result_type"] else []))
             suggestion = suggest_meta_objective(row["campaign_objective"], optimization_goals, result_types)
-            campaign_adsets = [
-                {"id": item["adset_external_id"] or item["adset_name"], "external_id": item["adset_external_id"], "name": item["adset_name"]}
-                for item in adsets
-                if (external_id and item["campaign_external_id"] == external_id)
-                or (not external_id and item["campaign_name"] == row["campaign_name"])
-            ]
+            campaign_adsets = []
+            for item in adsets:
+                belongs_to_campaign = (
+                    (external_id and item["campaign_external_id"] == external_id)
+                    or (not external_id and item["campaign_name"] == row["campaign_name"])
+                )
+                if not belongs_to_campaign:
+                    continue
+                adset_id = item["adset_external_id"] or item["adset_name"]
+                adset_ads = [
+                    {
+                        "id": ad["ad_external_id"] or ad["ad_name"],
+                        "external_id": ad["ad_external_id"],
+                        "name": ad["ad_name"],
+                    }
+                    for ad in ads
+                    if (
+                        (item["adset_external_id"] and ad["adset_external_id"] == item["adset_external_id"])
+                        or (not item["adset_external_id"] and ad["adset_name"] == item["adset_name"])
+                    )
+                    and (
+                        (external_id and ad["campaign_external_id"] == external_id)
+                        or (not external_id and ad["campaign_name"] == row["campaign_name"])
+                    )
+                ]
+                campaign_adsets.append({
+                    "id": adset_id,
+                    "external_id": item["adset_external_id"],
+                    "name": item["adset_name"],
+                    "ads": adset_ads,
+                })
             result.append({
                 "campaign_key": campaign_key,
                 "meta_ad_account_id": account_id,
@@ -1361,7 +1438,7 @@ class MetaAdsRepository:
                 "ctr": clicks / impressions * 100 if clicks is not None and impressions else None,
                 "engagement_rate": engagements / impressions * 100 if engagements is not None and impressions else None,
                 "result_rate": result / impressions * 100 if result is not None and impressions else None,
-                "cost_per_result": spend / result if spend is not None and result else None,
+                "cost_per_result": calculate_cost_per_result(spend, result, objective_key),
                 "cpm": spend / impressions * 1000 if spend is not None and impressions else None,
                 "cpc": spend / clicks if spend is not None and clicks else None,
             })
@@ -1375,6 +1452,11 @@ class MetaAdsRepository:
             for item in (objective_config.get("adset_targets") or [])
             if isinstance(item, dict) and item.get("adset_id")
         }
+        ad_targets = {
+            str(item.get("ad_id")): item
+            for item in (objective_config.get("ad_targets") or [])
+            if isinstance(item, dict) and item.get("ad_id")
+        }
         if dimension == "adset":
             for row in rows:
                 target_config = adset_targets.get(str(row.get("id"))) or {}
@@ -1386,6 +1468,21 @@ class MetaAdsRepository:
                     "target": target,
                     "budget": budget,
                     "target_cost_per_result": target_config.get("target_cost_per_result"),
+                    "actual": actual,
+                    "spend": spend,
+                    "achievement": float(actual) / float(target) * 100 if actual is not None and target else None,
+                    "budget_use": float(spend) / float(budget) * 100 if spend is not None and budget else None,
+                }
+        else:
+            for row in rows:
+                target_config = ad_targets.get(str(row.get("id"))) or {}
+                actual = (row.get("metrics") or {}).get("result")
+                spend = (row.get("metrics") or {}).get("spend")
+                target = target_config.get("target")
+                budget = target_config.get("budget")
+                row["kpi"] = {
+                    "target": target,
+                    "budget": budget,
                     "actual": actual,
                     "spend": spend,
                     "achievement": float(actual) / float(target) * 100 if actual is not None and target else None,
@@ -1451,7 +1548,7 @@ class MetaAdsRepository:
             "ctr": total_clicks / total_impressions * 100 if total_clicks is not None and total_impressions else None,
             "engagement_rate": total_engagements / total_impressions * 100 if total_engagements is not None and total_impressions else None,
             "result_rate": total_result / total_impressions * 100 if total_result is not None and total_impressions else None,
-            "cost_per_result": total_spend / total_result if total_spend is not None and total_result else None,
+            "cost_per_result": calculate_cost_per_result(total_spend, total_result, objective_key),
             "cpm": total_spend / total_impressions * 1000 if total_spend is not None and total_impressions else None,
             "cpc": total_spend / total_clicks if total_spend is not None and total_clicks else None,
         })
@@ -1904,7 +2001,7 @@ class MetaAdsRepository:
                     "frequency": impressions / reach if reach else None,
                     "ctr": numeric["link_clicks"] / impressions * 100 if impressions else None,
                     "engagement_rate": engagements / impressions * 100 if impressions else None,
-                    "cost_per_result": spend / result_value if result_value else None,
+                    "cost_per_result": calculate_cost_per_result(spend, result_value, goal_key),
                     "cost_per_thousand_reached": spend / reach * 1000 if reach else None,
                     "visit_to_follow_rate": follows / result_value * 100
                     if goal_key == "profile_visits" and result_value
@@ -2359,7 +2456,15 @@ class MetaAdsRepository:
                     adset_targets = raw.get("adset_targets") or []
                     if not isinstance(adset_targets, list):
                         raise ValueError("adset_targets must be a list.")
-                    values["adset_targets"] = adset_targets
+                    values["adset_targets"] = _normalize_entity_targets(
+                        adset_targets, "adset_id", "adset_name"
+                    )
+                    ad_targets = raw.get("ad_targets") or []
+                    if not isinstance(ad_targets, list):
+                        raise ValueError("ad_targets must be a list.")
+                    values["ad_targets"] = _normalize_entity_targets(
+                        ad_targets, "ad_id", "ad_name", extra_label_fields=("adset_id", "adset_name")
+                    )
                     normalized_meta[objective_key] = values
                 period_configuration = {
                     "version": 2,

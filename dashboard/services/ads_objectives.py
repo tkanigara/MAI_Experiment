@@ -19,7 +19,7 @@ METRICS = {
     "ctr": {"label": "CTR", "format": "percentage", "formula": "link_clicks / impressions * 100"},
     "engagement_rate": {"label": "Engagement Rate", "format": "percentage", "formula": "post_engagements / impressions * 100"},
     "result_rate": {"label": "Result Rate", "format": "percentage", "formula": "result / impressions * 100"},
-    "cost_per_result": {"label": "Cost per Result", "format": "currency", "formula": "spend / result"},
+    "cost_per_result": {"label": "Cost per Result", "format": "currency", "formula": "spend / result; reach and impressions use spend / result * 1000"},
     "spend": {"label": "Spent", "format": "currency"},
     "video_views": {"label": "Video Views", "format": "number"},
     "video_views_2s": {"label": "2-Second Video Views", "format": "number"},
@@ -38,6 +38,16 @@ METRICS = {
     "video_100": {"label": "Video Played to 100%", "format": "percentage"},
     "cpv": {"label": "CPV", "format": "currency"},
 }
+
+
+PER_THOUSAND_RESULT_OBJECTIVES = {"reach", "impression", "impressions"}
+
+
+def calculate_cost_per_result(spend, result, objective_key: str | None = None):
+    if spend is None or not result:
+        return None
+    multiplier = 1000 if str(objective_key or "").lower() in PER_THOUSAND_RESULT_OBJECTIVES else 1
+    return float(spend) / float(result) * multiplier
 
 
 def _objective(

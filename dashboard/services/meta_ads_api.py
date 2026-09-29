@@ -9,6 +9,11 @@ from typing import Any
 
 import requests
 
+try:
+    from dashboard.services.ads_objectives import calculate_cost_per_result
+except ModuleNotFoundError:
+    from services.ads_objectives import calculate_cost_per_result
+
 
 class MetaAdsApiError(RuntimeError):
     """A safe-to-display Meta API error (never includes the access token)."""
@@ -275,7 +280,7 @@ class MetaAdsApiClient:
                 "source_row_key": _hash_key(account_id, scope_platform, row.get("campaign_id"), row.get("adset_id"), row.get("ad_id"), row.get("publisher_platform"), row.get("platform_position"), row.get("impression_device"), row.get("age"), row.get("gender"), row.get("region")),
                 "source_row_number": row_number, "reporting_start": row.get("date_start") or start, "reporting_end": row.get("date_stop") or end,
                 "delivery_status": ad.get("effective_status") or adset.get("effective_status") or campaign.get("effective_status"),
-                "result_value": result_value, "result_type": result_type, "cost_per_result": spend / result_value if spend is not None and result_value else None,
+                "result_value": result_value, "result_type": result_type, "cost_per_result": calculate_cost_per_result(spend, result_value, result_type),
                 "spend": spend, "impressions": impressions, "reach": reach, "frequency": _number(row.get("frequency")) if _number(row.get("frequency")) is not None else (impressions / reach if impressions is not None and reach else None),
                 "post_engagements": engagements, "link_clicks": link_clicks, "link_ctr": link_clicks / impressions * 100 if link_clicks is not None and impressions else None,
                 "campaign_objective": campaign_objective, "optimization_goal": optimization_goal,
