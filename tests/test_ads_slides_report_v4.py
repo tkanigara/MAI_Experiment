@@ -90,6 +90,25 @@ class AdsSlidesV4Tests(unittest.TestCase):
         self.assertEqual(mapping["{{AD_TOTAL_METRIC_3}}"], "Rp 1,500,000")
         self.assertEqual(mapping["{{AD_TOTAL_METRIC_4}}"], "5.36")
 
+    def test_adset_breakdown_uses_agent_analysis_for_the_exact_adset(self):
+        current = payload("leads", "meta")
+        current["model"] = "jba"
+        current["agent_analysis"] = {
+            "adset_breakdown_analysis": {
+                "set-1": "Agent-backed creative comparison for Audience A."
+            }
+        }
+        mapping = build_ads_mapping(current)
+        _fill_adset(
+            mapping,
+            current,
+            {"id": "set-1", "name": "Audience A", "campaign_name": "Campaign A"},
+        )
+        self.assertEqual(
+            mapping["{{ADSET_PERFORMANCE_INSIGHT}}"],
+            "Agent-backed creative comparison for Audience A.",
+        )
+
     def test_overview_does_not_add_results_with_different_units(self):
         leads = payload("leads")
         reach = payload("reach")
@@ -297,6 +316,40 @@ class AdsSlidesV4Tests(unittest.TestCase):
         adset_mappings = [plan["mapping"] for plan in plans if plan["source"] == ARCHETYPE["adset"]]
         self.assertIn("Audience 6", adset_mappings[-1]["{{ADSET_NAME}}"])
         self.assertIn("Campaign A", adset_mappings[-1]["{{ADSET_NAME}}"])
+
+    def test_jba_plan_includes_every_available_breakdown_type(self):
+        current = payload("leads", "meta")
+        current["model"] = "jba"
+        current["rows"] = [{
+            "id": "set-1",
+            "name": "Audience 1",
+            "campaign_name": "Campaign A",
+            "metrics": {"result": 10},
+        }]
+        current["creative_analysis"] = {
+            "data_status": "ready", "summary": {"result": 10},
+            "rows": [], "source": current["source"],
+        }
+        current["adset_breakdowns"] = {"set-1": {"creatives": []}}
+        plans = _slide_plan([current], "jba")
+        breakdowns = [plan for plan in plans if plan["source"] == ARCHETYPE["breakdown"]]
+        labels = {plan["mapping"]["{{BREAKDOWN_TYPE_LABEL}}"] for plan in breakdowns}
+        self.assertEqual(labels, {"PLACEMENT ANALYSIS", "AUDIENCE DEMOGRAPHICS", "REGION BREAKDOWN"})
+
+    def test_summary_keeps_full_agent_text_without_ellipsis(self):
+        current = payload()
+        long_finding = "full agent finding " * 40
+        current["agent_analysis"] = {
+            "performance_overview": long_finding,
+            "placement_analysis": long_finding,
+            "optimisation_action": long_finding,
+        }
+        plans = _slide_plan([current], "dunlop")
+        platform = next(plan for plan in plans if plan["source"] == ARCHETYPE["platform_conclusion"])
+        executive = next(plan for plan in plans if plan["source"] == ARCHETYPE["executive"])
+        self.assertIn(long_finding.strip(), platform["mapping"]["{{PLATFORM_CONCLUSION_WIN}}"])
+        self.assertNotIn("…", platform["mapping"]["{{PLATFORM_CONCLUSION_WIN}}"])
+        self.assertIn(long_finding.strip(), executive["mapping"]["{{EXECUTIVE_KEY_WINS}}"])
 
     def test_jba_plan_paginates_all_creatives_inside_an_adset(self):
         current = payload("leads", "meta")

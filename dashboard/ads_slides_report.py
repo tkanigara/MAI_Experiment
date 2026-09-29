@@ -363,9 +363,12 @@ def _goal_breakdown(
 
 def _analysis_sections(payload: dict) -> dict:
     breakdown = payload.get("breakdown") or {}
+    content_rows = list(payload.get("rows") or [])
+    if payload.get("model") == "jba" and payload.get("creative_analysis") is not None:
+        content_rows = list((payload.get("creative_analysis") or {}).get("rows") or [])
     sections = {
         "performance_overview": dict(payload.get("analysis", {}).get("summary") or {}),
-        "content_analysis": list(payload.get("rows") or []),
+        "content_analysis": content_rows,
         "placement_analysis": list(breakdown.get("placements") or []),
         "audience_demographic_analysis": list(breakdown.get("demographics") or []),
         "region_analysis": list(breakdown.get("regions") or []),
@@ -515,12 +518,14 @@ def _payload_with_analysis(payload: dict, dimension: str, filters: dict | None =
     return result
 
 
-def _run_agent_analysis(payload: dict) -> dict[str, str | None]:
-    """Analyse the exact frozen evidence that will populate this slide set."""
-
-    if payload.get("model") == "jba":
-        return _run_adset_agent_analysis(payload)
-
+def _run_creative_agent_analysis(
+    payload: dict,
+    *,
+    fields: list[str] | None = None,
+    system_prompt: str | None = None,
+    label_suffix: str = "report analysis",
+) -> dict[str, str | None]:
+    """Run the generic evidence analyst without issuing another data read."""
     from agentic.agents.ads_agent.ads_agent_creative.analysis_helpers import (
         run_ads_analysis_agent,
     )
@@ -599,27 +604,31 @@ def _run_agent_analysis(payload: dict) -> dict[str, str | None]:
         ),
         ads_data=ads_data,
     )
-    fields = [
-        "performance_overview",
-        "content_analysis",
-        "placement_analysis",
-        "audience_demographic_analysis",
-        "region_analysis",
-        "optimisation_action",
+    fields = fields or [
+        "performance_overview", "content_analysis", "placement_analysis",
+        "audience_demographic_analysis", "region_analysis", "optimisation_action",
     ]
     result = run_ads_analysis_agent(
         state,
         objective=objective,
-        system_prompt=None,
+        system_prompt=system_prompt,
         result_model=InstagramMetricAnalysis,
         result_field="instagram_result",
         output_fields=fields,
         label=(
             f"{PLATFORM_LABELS.get(payload['platform_scope'], payload['platform_scope'])} "
-            f"Ads {objective.replace('_', ' ').title()} report analysis"
+            f"Ads {objective.replace('_', ' ').title()} {label_suffix}"
         ),
     )["instagram_result"]
     return {field: getattr(result, field, None) for field in fields}
+
+
+def _run_agent_analysis(payload: dict) -> dict[str, str | None]:
+    """Analyse the exact frozen evidence that will populate this slide set."""
+
+    if payload.get("model") == "jba":
+        return _run_adset_agent_analysis(payload)
+    return _run_creative_agent_analysis(payload)
 
 
 def _run_adset_agent_analysis(payload: dict) -> dict[str, str | None]:
@@ -667,13 +676,49 @@ def _run_adset_agent_analysis(payload: dict) -> dict[str, str | None]:
     result = State.model_validate(graph.invoke(state))
     field_key = "linkclicks" if objective == "link_clicks" else objective
     meta = result.meta_analysis
+    supplementary_prompt = """
+You are an Ads performance analyst. Analyse only the supplied frozen dashboard
+evidence. Return valid JSON containing exactly these keys:
+content_analysis, placement_analysis, audience_demographic_analysis,
+region_analysis, and adset_breakdown_analysis.
+
+The first four values must be one evidence-backed analysis string or null when
+their section is empty. adset_breakdown_analysis must be an object whose keys
+are the exact Ad Set IDs in analysis_sections.adset_breakdowns and whose values
+are concise analyses comparing the creatives inside that Ad Set. Mention only
+metrics present in the supplied evidence. Do not invent causes or data. Use
+null for an Ad Set that has no creative performance evidence. Return only the
+JSON object without Markdown.
+""".strip()
+    supplementary = _run_creative_agent_analysis(
+        payload,
+        fields=[
+            "content_analysis", "placement_analysis",
+            "audience_demographic_analysis", "region_analysis",
+            "adset_breakdown_analysis",
+        ],
+        system_prompt=supplementary_prompt,
+        label_suffix="Ad Set detail analysis",
+    )
+    raw_adset_analysis = supplementary.get("adset_breakdown_analysis")
+    adset_breakdown_analysis = {}
+    if isinstance(raw_adset_analysis, dict):
+        adset_breakdown_analysis = raw_adset_analysis
+    elif raw_adset_analysis:
+        try:
+            decoded = json.loads(str(raw_adset_analysis))
+            if isinstance(decoded, dict):
+                adset_breakdown_analysis = decoded
+        except (TypeError, ValueError, json.JSONDecodeError):
+            adset_breakdown_analysis = {}
     return {
         "performance_overview": getattr(meta, f"overall_{field_key}_analysis", None),
         "adset_analysis": getattr(meta, f"{field_key}_adset_analysis", None),
-        "content_analysis": None,
-        "placement_analysis": None,
-        "audience_demographic_analysis": None,
-        "region_analysis": None,
+        "content_analysis": supplementary.get("content_analysis"),
+        "placement_analysis": supplementary.get("placement_analysis"),
+        "audience_demographic_analysis": supplementary.get("audience_demographic_analysis"),
+        "region_analysis": supplementary.get("region_analysis"),
+        "adset_breakdown_analysis": adset_breakdown_analysis,
         "optimisation_action": result.meta_summary.summary_result,
     }
 
@@ -771,8 +816,9 @@ def _fill_content(mapping: dict, payload: dict) -> dict[str, str]:
         for index, row in enumerate(rows, 1)
     ]
     fallback_analysis = (
-        f"The eligible creatives rank as {', '.join(ranked_names)} based on "
-        f"the {payload['objective'].replace('_', ' ')} result used in this report."
+        f"Agent content analysis was unavailable. The table ranks "
+        f"{', '.join(ranked_names)} by the "
+        f"{payload['objective'].replace('_', ' ')} result used in this report."
         if ranked_names
         else "No eligible creative rows are available for content analysis."
     )
@@ -904,15 +950,36 @@ def _fill_adset(mapping: dict, payload: dict, adset: dict) -> None:
             if metric_index == 1:
                 _set(mapping, f"AD_ROW_{row_index}_NAME", row.get("name") if row else "", ""); _set(mapping, f"AD_ROW_{row_index}_ADSET", row.get("adset_name") if row else "", "")
             _set(mapping, f"AD_ROW_{row_index}_METRIC_{metric_index}", _metric_value(_metric(row, key), key, zero_when_missing=True) if row and key else "", "")
-    _set(mapping, "ADSET_PERFORMANCE_INSIGHT", f"Top creative: {_clean(rows[0].get('name') if rows else None)}.")
+    analyses = (payload.get("agent_analysis") or {}).get("adset_breakdown_analysis") or {}
+    adset_id = str(adset.get("id") or "")
+    insight = analyses.get(adset_id) if isinstance(analyses, dict) else None
+    if not insight and rows:
+        insight = (
+            "Agent analysis was unavailable for this Ad Set. "
+            f"The highest displayed {payload['objective'].replace('_', ' ')} result belongs to "
+            f"{_clean(rows[0].get('name'))}."
+        )
+    if not insight:
+        insight = "No creative performance rows are available for this Ad Set."
+    _set(mapping, "ADSET_PERFORMANCE_INSIGHT", _clean(insight))
 
 
 def _fill_optimization(mapping: dict, payload: dict) -> None:
     top = _clean((payload.get("rows") or [{}])[0].get("name"))
     agent = payload.get("agent_analysis") or {}
-    _set(mapping, "OPTIMIZATION_WHAT_WORKED", _clean(agent.get("performance_overview")) if agent.get("performance_overview") else f"{top} delivered the strongest result for this objective.")
-    risk = agent.get("placement_analysis") or agent.get("audience_demographic_analysis") or payload.get("warning")
-    _set(mapping, "OPTIMIZATION_RISK", _clean(risk) if risk else "No supported placement or audience risk was identified from the available breakdowns.")
+    performance_fallback = (
+        f"{top} delivered the highest displayed result for this objective."
+        if payload.get("rows") else
+        "No performance rows are available for this scope."
+    )
+    _set(mapping, "OPTIMIZATION_WHAT_WORKED", _clean(agent.get("performance_overview")) if agent.get("performance_overview") else performance_fallback)
+    risk = (
+        agent.get("placement_analysis")
+        or agent.get("audience_demographic_analysis")
+        or agent.get("region_analysis")
+        or payload.get("warning")
+    )
+    _set(mapping, "OPTIMIZATION_RISK", _clean(risk) if risk else "Breakdown analysis was unavailable for this scope.")
     action = _clean(agent.get("optimisation_action")) if agent.get("optimisation_action") else "Retain the strongest setup as control and test one audience or creative variable at a time."
     _set(mapping, "OPTIMIZATION_NEXT_STEP", action)
     _set(mapping, "OPTIMIZATION_PRIORITY", action)
@@ -987,16 +1054,21 @@ def _fill_platform_conclusion(mapping: dict, payloads: list[dict]) -> None:
     ]
     for index, (label, value, key) in enumerate(cards, 1): _set(mapping, f"PLATFORM_SUMMARY_METRIC_{index}_LABEL", label); _set(mapping, f"PLATFORM_SUMMARY_METRIC_{index}_VALUE", _metric_value(value, key))
     evidence = [
-        _clip((p.get("agent_analysis") or {}).get("performance_overview"), 220)
+        f"{p['objective'].replace('_', ' ').title()}: {_clean((p.get('agent_analysis') or {}).get('performance_overview'))}"
         for p in payloads if (p.get("agent_analysis") or {}).get("performance_overview")
     ]
-    actions = [
-        _clip((p.get("agent_analysis") or {}).get("optimisation_action"), 220)
-        for p in payloads if (p.get("agent_analysis") or {}).get("optimisation_action")
-    ]
-    _set(mapping, "PLATFORM_CONCLUSION_WIN", " ".join(evidence[:2]) or "Each objective is evaluated using its own primary-result unit and KPI.")
-    _set(mapping, "PLATFORM_CONCLUSION_RISK", "Primary results are not added or ranked across objectives because their units differ.")
-    _set(mapping, "PLATFORM_CONCLUSION_NEXT_ACTION", " ".join(actions[:2]) or "Review each objective against its own target before reallocating budget.")
+    risks = []
+    actions = []
+    for p in payloads:
+        agent = p.get("agent_analysis") or {}
+        risk = agent.get("placement_analysis") or agent.get("audience_demographic_analysis") or agent.get("region_analysis")
+        if risk:
+            risks.append(f"{p['objective'].replace('_', ' ').title()}: {_clean(risk)}")
+        if agent.get("optimisation_action"):
+            actions.append(f"{p['objective'].replace('_', ' ').title()}: {_clean(agent['optimisation_action'])}")
+    _set(mapping, "PLATFORM_CONCLUSION_WIN", "\n\n".join(evidence) or "Each objective is evaluated using its own primary-result unit and KPI.")
+    _set(mapping, "PLATFORM_CONCLUSION_RISK", "\n\n".join(risks) or "No agent-supported breakdown finding is available for this platform.")
+    _set(mapping, "PLATFORM_CONCLUSION_NEXT_ACTION", "\n\n".join(actions) or "Review each objective against its own target before reallocating budget.")
 
 
 def _fill_executive(mapping: dict, payloads: list[dict]) -> None:
@@ -1019,16 +1091,23 @@ def _fill_executive(mapping: dict, payloads: list[dict]) -> None:
     ]
     for index, (label, value, key) in enumerate(cards, 1): _set(mapping, f"EXEC_METRIC_{index}_LABEL", label); _set(mapping, f"EXEC_METRIC_{index}_VALUE", _metric_value(value, key))
     evidence = [
-        _clip((p.get("agent_analysis") or {}).get("performance_overview"), 220)
+        f"{PLATFORM_LABELS.get(p['platform_scope'], p['platform_scope'].title())} · {p['objective'].replace('_', ' ').title()}: "
+        f"{_clean((p.get('agent_analysis') or {}).get('performance_overview'))}"
         for p in payloads if (p.get("agent_analysis") or {}).get("performance_overview")
     ]
-    actions = [
-        _clip((p.get("agent_analysis") or {}).get("optimisation_action"), 220)
-        for p in payloads if (p.get("agent_analysis") or {}).get("optimisation_action")
-    ]
-    _set(mapping, "EXECUTIVE_KEY_WINS", " ".join(evidence[:2]) or "Objective-level performance is detailed in the report using comparable metrics within each objective.")
-    _set(mapping, "EXECUTIVE_RISKS", "Cross-objective Results, Reach, and Achievement are intentionally not combined because the units or audiences can overlap.")
-    _set(mapping, "EXECUTIVE_NEXT_PRIORITIES", " ".join(actions[:2]) or "Use objective-level KPI achievement and cost efficiency for the next allocation decision.")
+    risks = []
+    actions = []
+    for p in payloads:
+        agent = p.get("agent_analysis") or {}
+        prefix = f"{PLATFORM_LABELS.get(p['platform_scope'], p['platform_scope'].title())} · {p['objective'].replace('_', ' ').title()}: "
+        risk = agent.get("placement_analysis") or agent.get("audience_demographic_analysis") or agent.get("region_analysis")
+        if risk:
+            risks.append(prefix + _clean(risk))
+        if agent.get("optimisation_action"):
+            actions.append(prefix + _clean(agent["optimisation_action"]))
+    _set(mapping, "EXECUTIVE_KEY_WINS", "\n\n".join(evidence) or "Objective-level performance is detailed in the report using comparable metrics within each objective.")
+    _set(mapping, "EXECUTIVE_RISKS", "\n\n".join(risks) or "No agent-supported cross-objective risk is available.")
+    _set(mapping, "EXECUTIVE_NEXT_PRIORITIES", "\n\n".join(actions) or "Use objective-level KPI achievement and cost efficiency for the next allocation decision.")
 
 
 def build_ads_mapping(payload: dict, *, slide_number: str = "") -> dict[str, str]:
@@ -1124,6 +1203,18 @@ def _slide_plan(payloads: list[dict], model: str) -> list[dict]:
                     comparison_payload["rows"] = (payload.get("rows") or [])[start:start + 4]
                     comparison = build_ads_mapping(comparison_payload)
                     _fill_comparison(comparison, comparison_payload)
+                    if start:
+                        per_adset = (payload.get("agent_analysis") or {}).get("adset_breakdown_analysis") or {}
+                        continuation = [
+                            _clean(per_adset.get(str(row.get("id"))))
+                            for row in comparison_payload["rows"]
+                            if isinstance(per_adset, dict) and per_adset.get(str(row.get("id")))
+                        ]
+                        _set(
+                            comparison,
+                            "OBJECTIVE_COMPARISON_INSIGHT",
+                            "\n\n".join(continuation) if continuation else "Additional Ad Set comparison rows for this objective.",
+                        )
                     plans.append({"source": ARCHETYPE["comparison"], "mapping": comparison, "images": {}})
                 creative_analysis = payload.get("creative_analysis")
                 creative_payload = (
@@ -1164,9 +1255,33 @@ def _slide_plan(payloads: list[dict], model: str) -> list[dict]:
                         plans.append({"source": ARCHETYPE["adset"], "mapping": detail, "images": {}})
                 if creative_payload.get("rows"):
                     plans.append({"source": ARCHETYPE["content"], "mapping": content, "images": images})
-                if (payload.get("breakdown") or {}).get("regions"):
-                    region = dict(mapping); _fill_breakdown(region, payload, "region")
-                    plans.append({"source": ARCHETYPE["breakdown"], "mapping": region, "images": {}})
+                for kind, source_key in {
+                    "placement": "placements",
+                    "demographic": "demographics",
+                    "region": "regions",
+                }.items():
+                    breakdown_rows = list((payload.get("breakdown") or {}).get(source_key) or [])
+                    if not breakdown_rows:
+                        continue
+                    breakdown_pages = list(_chunks(breakdown_rows, 6))
+                    for page_number, page_rows in enumerate(breakdown_pages, 1):
+                        detail_payload = {
+                            **payload,
+                            "breakdown": {**(payload.get("breakdown") or {}), source_key: page_rows},
+                        }
+                        detail = build_ads_mapping(detail_payload)
+                        _set(detail, "REPORT_MODEL_LABEL", client_label)
+                        _fill_breakdown(detail, detail_payload, kind)
+                        if len(breakdown_pages) > 1:
+                            suffix = f" (Part {page_number}/{len(breakdown_pages)})"
+                            _set(detail, "BREAKDOWN_TITLE", f"{detail['{{BREAKDOWN_TITLE}}']}{suffix}")
+                            _set(detail, "BREAKDOWN_TYPE_LABEL", f"{detail['{{BREAKDOWN_TYPE_LABEL}}']}{suffix}")
+                        plans.append({
+                            "source": ARCHETYPE["breakdown"],
+                            "mapping": detail,
+                            "images": {},
+                            "table_trim": _table_trim(page_rows, detail_payload.get("metric_keys"), max_rows=6, max_metrics=7),
+                        })
                 plans.append({"source": ARCHETYPE["optimization"], "mapping": mapping, "images": {}})
         conclusion = _base_mapping(platform_payloads[0]); _set(conclusion, "REPORT_MODEL_LABEL", client_label); _fill_platform_conclusion(conclusion, platform_payloads)
         plans.append({"source": ARCHETYPE["platform_conclusion"], "mapping": conclusion, "images": {}})

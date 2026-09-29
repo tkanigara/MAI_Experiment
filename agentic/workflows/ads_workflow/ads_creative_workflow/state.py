@@ -120,6 +120,9 @@ class InstagramMetricAnalysis(BaseModel):
     audience_demographic_analysis: str | None = None
     region_analysis: str | None = None
     optimisation_action: str | None = None
+    # JSON object encoded as a string by the generic analysis helper. Keys are
+    # Ad Set external IDs and values are evidence-backed per-Ad-Set findings.
+    adset_breakdown_analysis: str | None = None
 
     performance_overview_reach: str | None = None
     performance_overview_engagement: str | None = None

@@ -225,6 +225,7 @@ def test_creative_analysis_helper_uses_only_frozen_sections(monkeypatch):
 def test_adset_slide_analysis_uses_friend_workflow_and_frozen_payload(monkeypatch):
     import agentic.agents.ads_agent.ads_set_agent.meta_leads_agent as leads_module
     import agentic.agents.ads_agent.ads_set_agent.meta_summary as summary_module
+    import dashboard.ads_slides_report as slides_module
     from dashboard.ads_slides_report import _run_adset_agent_analysis
 
     captured = []
@@ -243,6 +244,19 @@ def test_adset_slide_analysis_uses_friend_workflow_and_frozen_payload(monkeypatc
 
     monkeypatch.setattr(leads_module, "llm", FakeLLM())
     monkeypatch.setattr(summary_module, "llm", FakeLLM())
+    monkeypatch.setattr(
+        slides_module,
+        "_run_creative_agent_analysis",
+        lambda *_args, **_kwargs: {
+            "content_analysis": "Creative One led the result.",
+            "placement_analysis": "Feed led delivery.",
+            "audience_demographic_analysis": "25-34 led delivery.",
+            "region_analysis": "Jakarta led delivery.",
+            "adset_breakdown_analysis": json.dumps(
+                {"adset-1": "Creative One generated all results in this Ad Set."}
+            ),
+        },
+    )
     payload = {
         "model": "jba",
         "objective": "leads",
@@ -270,5 +284,7 @@ def test_adset_slide_analysis_uses_friend_workflow_and_frozen_payload(monkeypatc
     result = _run_adset_agent_analysis(payload)
     assert result["performance_overview"] == "12 leads overall"
     assert result["adset_analysis"] == "Beli Unit Audience led the result"
+    assert result["content_analysis"] == "Creative One led the result."
+    assert result["adset_breakdown_analysis"]["adset-1"].startswith("Creative One")
     assert result["optimisation_action"] == "prioritise the efficient ad set"
     assert captured[0]["objective_data"]["source"]["import_id"] == "import-1"
