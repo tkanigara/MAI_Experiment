@@ -1,4 +1,4 @@
-import { PLATFORMS } from "./constants";
+import { ADS_GOALS, ADS_PLATFORMS, PLATFORMS } from "./constants";
 
 export function formatNumber(value, suffix = "") {
   if (value === null || value === undefined || value === "") return "-";
@@ -32,6 +32,34 @@ export function formatDateTime(value) {
 
 export function platformFlags(client) {
   return PLATFORMS.filter((platform) => client?.[`has_${platform}`]);
+}
+
+export function adsPlatformFlags(client) {
+  const configured = client?.ads_platforms || client?.ads_configuration?.platforms;
+  if (!Array.isArray(configured) || configured.length === 0) return ADS_PLATFORMS;
+  return ADS_PLATFORMS.filter((platform) => configured.includes(platform));
+}
+
+export function adsGoalConfiguration(period, platform) {
+  const configured = period?.ads_configuration?.goals?.[platform];
+  if (Array.isArray(configured)) return configured;
+  return (ADS_GOALS[platform] || []).map((goal) => ({ key: goal.key }));
+}
+
+export function formatCurrency(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return `Rp${number.toLocaleString("id-ID", { maximumFractionDigits: 0 })}`;
+}
+
+export function adsPeriodSlug(period) {
+  if (period?.slug) return period.slug;
+  return String(period?.period_label || period?.label || period?.id || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 export function clientSlug(client) {

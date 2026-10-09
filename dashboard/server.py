@@ -19,6 +19,7 @@ try:
         DashboardRepository,
         json_safe,
     )
+    from dashboard.repositories.meta_ads_repository import MetaAdsRepository  # noqa: E402
     from dashboard.routes import clients, images, imports, kpi, reports  # noqa: E402
 except ModuleNotFoundError:
     from config import STATIC_DIR  # noqa: E402
@@ -26,11 +27,13 @@ except ModuleNotFoundError:
         DashboardRepository,
         json_safe,
     )
+    from repositories.meta_ads_repository import MetaAdsRepository  # noqa: E402
     from routes import clients, images, imports, kpi, reports  # noqa: E402
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
     repository = DashboardRepository()
+    meta_ads_repository = MetaAdsRepository(repository.engine)
 
     def __init__(self, *args, **kwargs):
         static_directory = STATIC_DIR if STATIC_DIR.exists() else DASHBOARD_DIR
@@ -41,7 +44,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         parts = [part for part in parsed.path.split("/") if part]
         if images.handle_get(self, parsed):
             return
-        if clients.handle_get(self, parts):
+        if clients.handle_get(self, parts, parsed):
             return
         if parsed.path == "/":
             self.path = "/index.html"

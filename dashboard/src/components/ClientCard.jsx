@@ -4,6 +4,7 @@ import OpenIconButton from "./OpenIconButton";
 
 export default function ClientCard({ client, onOpen, onEdit, onDelete }) {
   const platforms = platformFlags(client);
+  const isSharedWithAds = (client.products || []).includes("meta_ads");
   return (
     <article className="client-card">
       <div className="card-main">
@@ -29,7 +30,7 @@ export default function ClientCard({ client, onOpen, onEdit, onDelete }) {
           type="button"
           onClick={() => onDelete(client)}
         >
-          Delete
+          {isSharedWithAds ? "Remove" : "Delete"}
         </button>
       </div>
     </article>

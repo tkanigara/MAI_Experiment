@@ -23,6 +23,12 @@ except ModuleNotFoundError:
 
 
 TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled")
+ADS_REPORT_TYPES = {"ads", "meta_ads", "paid_ads"}
+
+
+def _normalize_report_type(value: Any) -> str:
+    normalized = str(value or "social_media").strip().lower()
+    return "meta_ads" if normalized in ADS_REPORT_TYPES else "social_media"
 
 
 class ReportJobNotFoundError(ValueError):
@@ -60,10 +66,20 @@ class ReportJobRepository:
         self.engine = engine or create_db_engine()
 
     @staticmethod
-    def _context(conn, client_id: str, period_id: str) -> dict:
+    def _context(
+        conn,
+        client_id: str,
+        period_id: str,
+        report_type: str = "social_media",
+    ) -> dict:
+        period_table = (
+            "meta_ads_report_periods"
+            if _normalize_report_type(report_type) == "meta_ads"
+            else "report_periods"
+        )
         row = conn.execute(
             text(
-                """
+                f"""
                 SELECT
                     c.id AS client_id,
                     c.client_name,
@@ -73,7 +89,7 @@ class ReportJobRepository:
                         to_char(rp.period_start, 'FMMonth YYYY')
                     ) AS period_label
                 FROM clients c
-                JOIN report_periods rp ON rp.client_id = c.id
+                JOIN {period_table} rp ON rp.client_id = c.id
                 WHERE c.id = :client_id
                   AND rp.id = :period_id
                 """
@@ -84,7 +100,55 @@ class ReportJobRepository:
             raise ValueError("Client or report period not found.")
         return dict(row)
 
-    def active_job(self, client_id: str, period_id: str) -> dict | None:
+    @staticmethod
+    def _lock_ads_period(conn, client_id: str, period_id: str) -> dict:
+        period = conn.execute(
+            text(
+                """
+                SELECT id, client_id, period_label, period_start
+                FROM meta_ads_report_periods
+                WHERE id = CAST(:period_id AS UUID)
+                  AND client_id = CAST(:client_id AS UUID)
+                FOR UPDATE
+                """
+            ),
+            {"client_id": client_id, "period_id": period_id},
+        ).mappings().first()
+        if not period:
+            raise ValueError("Ads report month not found")
+
+        active = conn.execute(
+            text(
+                """
+                SELECT *
+                FROM report_generation_jobs
+                WHERE client_id = CAST(:client_id AS UUID)
+                  AND report_period_id = CAST(:period_id AS UUID)
+                  AND report_type = 'meta_ads'
+                  AND status IN (
+                      'queued', 'running', 'retrying', 'cancel_requested'
+                  )
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"client_id": client_id, "period_id": period_id},
+        ).mappings().first()
+        if active:
+            raise ReportDataLockedError(dict(active))
+        return dict(period)
+
+    def active_job(
+        self,
+        client_id: str,
+        period_id: str,
+        report_type: str | None = None,
+    ) -> dict | None:
+        normalized_type = (
+            _normalize_report_type(report_type)
+            if report_type is not None
+            else None
+        )
         with self.engine.begin() as conn:
             row = conn.execute(
                 text(
@@ -93,6 +157,10 @@ class ReportJobRepository:
                     FROM report_generation_jobs
                     WHERE client_id = :client_id
                       AND report_period_id = :period_id
+                      AND (
+                          CAST(:report_type AS TEXT) IS NULL
+                          OR report_type = CAST(:report_type AS TEXT)
+                      )
                       AND status IN (
                           'queued',
                           'running',
@@ -103,7 +171,11 @@ class ReportJobRepository:
                     LIMIT 1
                     """
                 ),
-                {"client_id": client_id, "period_id": period_id},
+                {
+                    "client_id": client_id,
+                    "period_id": period_id,
+                    "report_type": normalized_type,
+                },
             ).mappings().first()
             return _row_dict(row)
 
@@ -115,22 +187,37 @@ class ReportJobRepository:
         dry_run: bool = False,
         requested_by: str | None = None,
         retry_of_job_id: str | None = None,
+        report_options: dict | None = None,
         max_attempts: int = 3,
     ) -> dict:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1.")
         actor = str(requested_by or "").strip() or None
+        normalized_options = dict(report_options or {})
+        report_type = _normalize_report_type(
+            normalized_options.get("report_type")
+        )
+        normalized_options["report_type"] = report_type
 
         try:
             with self.engine.begin() as conn:
-                context = self._context(conn, client_id, period_id)
-                lock_report_period(conn, client_id, period_id)
+                context = self._context(
+                    conn,
+                    client_id,
+                    period_id,
+                    report_type,
+                )
+                if report_type == "meta_ads":
+                    self._lock_ads_period(conn, client_id, period_id)
+                else:
+                    lock_report_period(conn, client_id, period_id)
                 row = conn.execute(
                     text(
                         """
                         INSERT INTO report_generation_jobs (
                             client_id,
                             report_period_id,
+                            report_type,
                             retry_of_job_id,
                             client_name_snapshot,
                             period_label_snapshot,
@@ -139,11 +226,13 @@ class ReportJobRepository:
                             max_attempts,
                             presentation_id,
                             presentation_url,
-                            report_name
+                            report_name,
+                            result_metadata
                         )
                         VALUES (
                             :client_id,
                             :period_id,
+                            :report_type,
                             :retry_of_job_id,
                             :client_name,
                             :period_label,
@@ -164,6 +253,14 @@ class ReportJobRepository:
                                 SELECT report_name
                                 FROM report_generation_jobs
                                 WHERE id = :retry_of_job_id
+                            ),
+                            COALESCE(
+                                (
+                                    SELECT result_metadata
+                                    FROM report_generation_jobs
+                                    WHERE id = :retry_of_job_id
+                                ),
+                                CAST(:report_options AS JSONB)
                             )
                         )
                         RETURNING *
@@ -172,19 +269,21 @@ class ReportJobRepository:
                     {
                         "client_id": context["client_id"],
                         "period_id": context["report_period_id"],
+                        "report_type": report_type,
                         "retry_of_job_id": retry_of_job_id,
                         "client_name": context["client_name"],
                         "period_label": context["period_label"],
                         "dry_run": bool(dry_run),
                         "requested_by": actor,
                         "max_attempts": max_attempts,
+                        "report_options": _json_parameter(normalized_options),
                     },
                 ).mappings().one()
                 return dict(row)
         except ReportDataLockedError as exc:
             raise ActiveReportJobError(exc.job) from exc
         except IntegrityError as exc:
-            active = self.active_job(client_id, period_id)
+            active = self.active_job(client_id, period_id, report_type)
             if active:
                 raise ActiveReportJobError(active) from exc
             raise
@@ -239,8 +338,14 @@ class ReportJobRepository:
         client_id: str,
         *,
         limit: int = 100,
+        report_type: str | None = None,
     ) -> list[dict]:
         safe_limit = max(1, min(int(limit), 100))
+        normalized_type = (
+            _normalize_report_type(report_type)
+            if report_type is not None
+            else None
+        )
         with self.engine.begin() as conn:
             rows = conn.execute(
                 text(
@@ -248,6 +353,10 @@ class ReportJobRepository:
                     SELECT *
                     FROM report_generation_jobs
                     WHERE client_id = :client_id
+                      AND (
+                          CAST(:report_type AS TEXT) IS NULL
+                          OR report_type = CAST(:report_type AS TEXT)
+                      )
                     ORDER BY
                         CASE
                             WHEN status IN (
@@ -265,6 +374,7 @@ class ReportJobRepository:
                 {
                     "client_id": client_id,
                     "limit": safe_limit,
+                    "report_type": normalized_type,
                 },
             ).mappings()
             return [dict(row) for row in rows]
@@ -273,6 +383,7 @@ class ReportJobRepository:
         self,
         *,
         client_id: str | None = None,
+        report_type: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
@@ -283,6 +394,9 @@ class ReportJobRepository:
         if client_id is not None:
             scope_sql = "AND client_id = :client_id"
             parameters["client_id"] = client_id
+        if report_type is not None:
+            scope_sql += " AND report_type = :report_type"
+            parameters["report_type"] = _normalize_report_type(report_type)
 
         with self.engine.begin() as conn:
             count_row = conn.execute(
@@ -356,21 +470,37 @@ class ReportJobRepository:
         *,
         page: int = 1,
         page_size: int = 20,
+        report_type: str | None = None,
     ) -> dict:
         return self._list_paginated(
             client_id=client_id,
+            report_type=report_type,
             page=page,
             page_size=page_size,
         )
 
-    def list_all(self, *, limit: int = 100) -> list[dict]:
+    def list_all(
+        self,
+        *,
+        limit: int = 100,
+        report_type: str | None = None,
+    ) -> list[dict]:
         safe_limit = max(1, min(int(limit), 100))
+        normalized_type = (
+            _normalize_report_type(report_type)
+            if report_type is not None
+            else None
+        )
         with self.engine.begin() as conn:
             rows = conn.execute(
                 text(
                     """
                     SELECT *
                     FROM report_generation_jobs
+                    WHERE (
+                        CAST(:report_type AS TEXT) IS NULL
+                        OR report_type = CAST(:report_type AS TEXT)
+                    )
                     ORDER BY
                         CASE
                             WHEN status IN (
@@ -385,7 +515,7 @@ class ReportJobRepository:
                     LIMIT :limit
                     """
                 ),
-                {"limit": safe_limit},
+                {"limit": safe_limit, "report_type": normalized_type},
             ).mappings()
             return [dict(row) for row in rows]
 
@@ -394,8 +524,13 @@ class ReportJobRepository:
         *,
         page: int = 1,
         page_size: int = 20,
+        report_type: str | None = None,
     ) -> dict:
-        return self._list_paginated(page=page, page_size=page_size)
+        return self._list_paginated(
+            page=page,
+            page_size=page_size,
+            report_type=report_type,
+        )
 
     def set_cloud_task_name(self, job_id: str, task_name: str) -> dict:
         return self._transition(

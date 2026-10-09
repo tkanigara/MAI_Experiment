@@ -1,5 +1,5 @@
-from CentralArch.graph import app
-from CentralArch.state import (
+from workflows.socmed_workflow.graph import app
+from workflows.socmed_workflow.state import (
     State,
     Request, 
     instagram_result_analysis, facebook_result_analysis, tiktok_result_analysis, youtube_result_analysis, 
@@ -17,7 +17,7 @@ initial_state = State(
         request=Request(
         user_intent="Generate Marketing Report",
         client_code="mai001",
-        report_date=date(2026, 6, 23),
+        report_date=date(2026, 9, 30),
         generate_slides=False,
         slides_dry_run=False,
         persist_insights=False,

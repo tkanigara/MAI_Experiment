@@ -1,15 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
 import AddClientModal from "./components/AddClientModal";
+import AddAdsClientModal from "./components/AddAdsClientModal";
 import AddReportModal from "./components/AddReportModal";
 import DeleteClientModal from "./components/DeleteClientModal";
 import DeleteReportMonthModal from "./components/DeleteReportMonthModal";
 import EditKpiModal from "./components/EditKpiModal";
+import ObjectiveKpiModal from "./components/ObjectiveKpiModal";
+import CampaignObjectiveModal from "./components/CampaignObjectiveModal";
+import MetricDisplaySettingsModal from "./components/MetricDisplaySettingsModal";
 import GenerateReportModal from "./components/GenerateReportModal";
+import AdsGenerateReportModal from "./components/AdsGenerateReportModal";
 import Header from "./components/Header";
+import MetaAdsImportModal from "./components/MetaAdsImportModal";
+import MetaAdsSyncModal from "./components/MetaAdsSyncModal";
 import ReportDataLockedModal from "./components/ReportDataLockedModal";
 import { api } from "./lib/api";
-import { clientSlug, platformFlags } from "./lib/format";
+import { adsPeriodSlug, clientSlug, platformFlags } from "./lib/format";
 import ClientDetailPage from "./pages/ClientDetailPage";
+import AdsClientDetailPage from "./pages/AdsClientDetailPage";
+import AdsClientsPage from "./pages/AdsClientsPage";
+import AdsPeriodDetailPage from "./pages/AdsPeriodDetailPage";
+import AdsPlatformDetailPage from "./pages/AdsPlatformDetailPage";
+import AdsAnalysisPage from "./pages/AdsAnalysisPage";
+import AdsDataEditorPage from "./pages/AdsDataEditorPage";
 import ClientsPage from "./pages/ClientsPage";
 import MonthDetailPage from "./pages/MonthDetailPage";
 import PlatformDetailPage from "./pages/PlatformDetailPage";
@@ -19,9 +32,27 @@ import ReportJobsPage, {
   reportJobStageLabel,
   reportJobStatusLabel,
 } from "./pages/ReportJobsPage";
+import WorkspaceSelectorPage from "./pages/WorkspaceSelectorPage";
+
+function pathParts() {
+  return window.location.pathname.split("/").filter(Boolean);
+}
+
+function workspaceFromPath() {
+  const parts = pathParts();
+  const first = parts[0];
+  if (first === "ads") return "ads";
+  if (first === "social" || first === "report-jobs") return "social";
+  // `/clients` was the old landing page before workspace selection existed.
+  // Preserve legacy client/month deep links, but let the old bare landing URL
+  // fall back to the new workspace selector.
+  if (first === "clients" && parts.length > 1) return "social";
+  return null;
+}
 
 function routeParts() {
-  return window.location.pathname.split("/").filter(Boolean);
+  const parts = pathParts();
+  return ["social", "ads"].includes(parts[0]) ? parts.slice(1) : parts;
 }
 
 const REPORT_HISTORY_PAGE_SIZE = 20;
@@ -33,22 +64,38 @@ function historyPageFromLocation() {
 
 export default function App() {
   const [clients, setClients] = useState([]);
+  const [allClients, setAllClients] = useState([]);
+  const [productSummary, setProductSummary] = useState({ social_media: 0, meta_ads: 0 });
   const [query, setQuery] = useState("");
   const [industry, setIndustry] = useState("");
   const [route, setRoute] = useState(routeParts());
   const [selectedClient, setSelectedClient] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [reportMonths, setReportMonths] = useState([]);
+  const [adsPeriods, setAdsPeriods] = useState([]);
+  const [adsPlatformCatalog, setAdsPlatformCatalog] = useState([]);
+  const [adsPlatformDetail, setAdsPlatformDetail] = useState(null);
+  const [adsPeriodOverview, setAdsPeriodOverview] = useState(null);
+  const [adsImportPeriod, setAdsImportPeriod] = useState(null);
+  const [adsSyncContext, setAdsSyncContext] = useState(null);
+  const [adsGenerateReportTarget, setAdsGenerateReportTarget] = useState(null);
   const [platformData, setPlatformData] = useState({});
   const [modal, setModal] = useState(null);
   const [generateReportTarget, setGenerateReportTarget] = useState(null);
   const [toast, setToast] = useState("");
   const [editKpi, setEditKpi] = useState(null);
   const [editClient, setEditClient] = useState(null);
+  const [editAdsClient, setEditAdsClient] = useState(null);
+  const [editAdsPeriodGoals, setEditAdsPeriodGoals] = useState(null);
+  const [campaignObjectivePeriod, setCampaignObjectivePeriod] = useState(null);
+  const [showMetricSettings, setShowMetricSettings] = useState(false);
+  const [metricSettingsVersion, setMetricSettingsVersion] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
   const [deleteReportMonthTarget, setDeleteReportMonthTarget] = useState(null);
   const [isDeletingReportMonth, setIsDeletingReportMonth] = useState(false);
+  const [deleteAdsPeriodTarget, setDeleteAdsPeriodTarget] = useState(null);
+  const [isDeletingAdsPeriod, setIsDeletingAdsPeriod] = useState(false);
   const [reportJobs, setReportJobs] = useState([]);
   const [reportJobsPagination, setReportJobsPagination] = useState({
     page: 1,
@@ -72,8 +119,15 @@ export default function App() {
     () => clients.find((client) => client.client_code === currentClientSlug || client.id === currentClientSlug),
     [clients, currentClientSlug],
   );
-  const isGlobalReportJobs = route[0] === "report-jobs";
-  const isClientReportJobs = route[0] === "clients" && route[2] === "report-jobs";
+
+  const workspace = workspaceFromPath();
+  const isAdsWorkspace = workspace === "ads";
+  const isSocialWorkspace = workspace === "social";
+  const isGlobalReportJobs = (isSocialWorkspace || isAdsWorkspace)
+    && route[0] === "report-jobs";
+  const isClientReportJobs = (isSocialWorkspace || isAdsWorkspace)
+    && route[0] === "clients"
+    && route[2] === "report-jobs";
   const reportHistoryPage = (isGlobalReportJobs || isClientReportJobs)
     ? historyPageFromLocation()
     : 1;
@@ -81,6 +135,10 @@ export default function App() {
     ? null
     : reportMonths.find((month) => month.slug === route[2]);
   const currentPlatform = route[3];
+  const currentAdsPeriod = isAdsWorkspace
+    ? adsPeriods.find((period) => adsPeriodSlug(period) === route[2] || String(period.id) === route[2])
+    : null;
+  const currentAdsPlatform = isAdsWorkspace ? route[3] : null;
   const isReportEditor = currentPlatform === "edit";
   const isLegacyPeriodReportJobs = currentPlatform === "jobs";
   const reportJob = reportJobs.find((job) => job.id === focusedReportJobId);
@@ -156,9 +214,16 @@ export default function App() {
   }
 
   function navigate(path, replace = false) {
+    let targetPath = path;
+    if (
+      isSocialWorkspace
+      && (path === "/clients" || path.startsWith("/clients/") || path === "/report-jobs")
+    ) {
+      targetPath = `/social${path}`;
+    }
     const currentPath = `${window.location.pathname}${window.location.search}`;
-    if (currentPath !== path) {
-      window.history[replace ? "replaceState" : "pushState"]({}, "", path);
+    if (currentPath !== targetPath) {
+      window.history[replace ? "replaceState" : "pushState"]({}, "", targetPath);
     }
     setRoute(routeParts());
   }
@@ -223,8 +288,9 @@ export default function App() {
       setReportJobs([]);
       return [];
     }
+    const reportType = isAdsWorkspace ? "meta_ads" : "social_media";
     const payload = await api(
-      `/api/clients/${client.id}/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}`,
+      `/api/clients/${client.id}/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}&report_type=${reportType}`,
     );
     const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
     const pagination = Array.isArray(payload) ? {
@@ -234,7 +300,7 @@ export default function App() {
       total_pages: 1,
     } : payload.pagination;
     if (
-      isClientReportJobs
+    isClientReportJobs
       && pagination?.page
       && pagination.page !== page
     ) {
@@ -244,8 +310,9 @@ export default function App() {
   }
 
   async function loadGlobalReportJobs(page = reportHistoryPage) {
+    const reportType = isAdsWorkspace ? "meta_ads" : "social_media";
     const payload = await api(
-      `/api/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}`,
+      `/api/report-jobs?page=${page}&page_size=${REPORT_HISTORY_PAGE_SIZE}&report_type=${reportType}`,
     );
     const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
     const pagination = Array.isArray(payload) ? {
@@ -277,9 +344,39 @@ export default function App() {
   }
 
   async function loadClients() {
-    const rows = await api("/api/clients");
-    setClients(rows);
-    if (!routeParts().length) navigate("/clients", true);
+    if (!workspace) {
+      const summary = await api("/api/client-products/summary");
+      setProductSummary(summary);
+      setClients([]);
+      setAllClients([]);
+      return;
+    }
+    if (isAdsWorkspace) {
+      const [adsRows, masterRows, summary] = await Promise.all([
+        api("/api/clients?product=meta_ads"),
+        api("/api/clients"),
+        api("/api/client-products/summary"),
+      ]);
+      setClients(adsRows);
+      setAllClients(masterRows);
+      setProductSummary(summary);
+      return;
+    }
+    const [socialRows, summary] = await Promise.all([
+      api("/api/clients?product=social_media"),
+      api("/api/client-products/summary"),
+    ]);
+    setClients(socialRows);
+    setAllClients(socialRows);
+    setProductSummary(summary);
+  }
+
+  async function loadAdsClient(client) {
+    if (!client?.id) return;
+    const payload = await api(`/api/ads/clients/${client.id}/periods`);
+    setSelectedClient(payload.client);
+    setAdsPeriods(payload.periods || []);
+    setAdsPlatformCatalog(payload.platforms || []);
   }
 
   async function loadClient(client) {
@@ -390,17 +487,27 @@ export default function App() {
     if (!client?.id) return;
     setIsDeletingClient(true);
     try {
-      await api(`/api/clients/${client.id}`, { method: "DELETE" });
+      const sharedWithOtherWorkspace = isAdsWorkspace
+        ? (client.products || []).includes("social_media")
+        : (client.products || []).includes("meta_ads");
+      if (sharedWithOtherWorkspace) {
+        const product = isAdsWorkspace ? "meta_ads" : "social_media";
+        await api(`/api/clients/${client.id}/products/${product}`, { method: "DELETE" });
+      } else {
+        await api(`/api/clients/${client.id}`, { method: "DELETE" });
+      }
       await loadClients();
       if (selectedClient?.id === client.id || currentClient?.id === client.id) {
         setSelectedClient(null);
         setProfiles([]);
         setReportMonths([]);
         setPlatformData({});
-        navigate("/clients");
+        navigate(isAdsWorkspace ? "/ads/clients" : "/clients");
       }
       setDeleteTarget(null);
-      showToast("Client deleted.");
+      showToast(sharedWithOtherWorkspace
+        ? `Client removed from ${isAdsWorkspace ? "Ads" : "Social Media"}.`
+        : "Client deleted.");
     } catch (err) {
       if (handleReportDataLock(err, { client })) {
         setDeleteTarget(null);
@@ -409,6 +516,20 @@ export default function App() {
       throw err;
     } finally {
       setIsDeletingClient(false);
+    }
+  }
+
+  async function deleteAdsPeriod(period) {
+    if (!selectedClient?.id || !period?.id) return;
+    setIsDeletingAdsPeriod(true);
+    try {
+      await api(`/api/ads/clients/${selectedClient.id}/periods/${period.id}`, { method: "DELETE" });
+      await loadAdsClient(selectedClient);
+      if (currentAdsPeriod?.id === period.id) navigate(`/ads/clients/${clientSlug(selectedClient)}`);
+      setDeleteAdsPeriodTarget(null);
+      showToast(`${period.period_label} Ads report data deleted.`);
+    } finally {
+      setIsDeletingAdsPeriod(false);
     }
   }
 
@@ -529,6 +650,58 @@ export default function App() {
     }
   }
 
+  function requestAdsSlidesReportGeneration(period) {
+    if (!selectedClient || !period?.id) return;
+    const activeJob = activeJobForPeriod(period.id);
+    if (activeJob) {
+      setFocusedReportJobId(activeJob.id);
+      return;
+    }
+    setAdsGenerateReportTarget(period);
+  }
+
+  async function generateAdsSlidesReport(period, options = {}) {
+    if (!selectedClient || !period?.id) return false;
+    const activeJob = activeJobForPeriod(period.id);
+    if (activeJob) {
+      setFocusedReportJobId(activeJob.id);
+      return true;
+    }
+    setReportJobActionId(`create:${period.id}`);
+    try {
+      const job = await api("/api/report-jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: selectedClient.id,
+          period_id: period.id,
+          report_type: "meta_ads",
+          report_model: options.report_model || "jba",
+          platform_scope: options.platform_scope || "meta",
+        }),
+      });
+      mergeReportJobs([job]);
+      setFocusedReportJobId(job.id);
+      setReportElapsed(0);
+      return true;
+    } catch (err) {
+      const jobs = await loadClientReportJobs(selectedClient).catch(() => []);
+      const queuedJob = jobs.find(
+        (job) => (
+          String(job.report_period_id) === String(period.id)
+          && isActiveReportJob(job)
+        ),
+      );
+      if (queuedJob) {
+        setFocusedReportJobId(queuedJob.id);
+        return true;
+      }
+      showToast(err.message || "Failed to add Ads report to queue.");
+      return false;
+    } finally {
+      setReportJobActionId("");
+    }
+  }
+
   async function confirmSlidesReportGeneration() {
     if (!generateReportTarget) return;
     const wasQueued = await generateSlidesReport(generateReportTarget);
@@ -584,20 +757,53 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadClients().catch((err) => setError(err.message));
     const onPopState = () => setRoute(routeParts());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setError("");
+    setSelectedClient(null);
+    setProfiles([]);
+    setReportMonths([]);
+    setAdsPeriods([]);
+    setAdsPlatformCatalog([]);
+    setAdsPlatformDetail(null);
+    setAdsPeriodOverview(null);
+    loadClients().catch((err) => setError(err.message));
+    const first = pathParts()[0];
+    if (first === "clients" && pathParts().length === 1) {
+      navigate("/", true);
+    } else if (["clients", "report-jobs"].includes(first)) {
+      navigate(`/social${window.location.pathname}${window.location.search}`, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace]);
+
+  useEffect(() => {
+    if (!isAdsWorkspace || !selectedClient?.id || !currentAdsPeriod?.id) {
+      setAdsPeriodOverview(null);
+      return;
+    }
+    setAdsPeriodOverview(null);
+    api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/overview`)
+      .then(setAdsPeriodOverview)
+      .catch((err) => setError(err.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClient?.id, currentAdsPeriod?.id, workspace]);
 
   useEffect(() => {
     if (!currentClient) return;
     setReportJobs([]);
     setFocusedReportJobId("");
-    loadClient(currentClient).catch((err) => setError(err.message));
+    if (isAdsWorkspace) {
+      loadAdsClient(currentClient).catch((err) => setError(err.message));
+    } else if (isSocialWorkspace) {
+      loadClient(currentClient).catch((err) => setError(err.message));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentClient?.id]);
+  }, [currentClient?.id, workspace]);
 
   useEffect(() => {
     if (!isGlobalReportJobs) return undefined;
@@ -616,10 +822,12 @@ export default function App() {
       window.clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGlobalReportJobs, reportHistoryPage]);
+  }, [isGlobalReportJobs, reportHistoryPage, workspace]);
 
   useEffect(() => {
     if (
+      (!isSocialWorkspace && !isAdsWorkspace)
+      ||
       !currentClient
       || !selectedClient
       || String(selectedClient.id) !== String(currentClient.id)
@@ -645,16 +853,38 @@ export default function App() {
     selectedClient?.id,
     isGlobalReportJobs,
     reportHistoryPage,
+    workspace,
   ]);
 
   useEffect(() => {
-    if (!currentClient || !selectedClient) return;
+    if (!isSocialWorkspace || !currentClient || !selectedClient) return;
     loadPlatformData(selectedClient).catch((err) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClient?.id, currentMonth?.slug]);
+  }, [selectedClient?.id, currentMonth?.slug, workspace]);
 
   useEffect(() => {
-    if (!activeReportJobIdsKey) return undefined;
+    if (
+      !isAdsWorkspace
+      || !selectedClient?.id
+      || !currentAdsPeriod?.id
+      || !currentAdsPlatform
+      || ["creative", "adsets", "edit"].includes(currentAdsPlatform)
+    ) {
+      setAdsPlatformDetail(null);
+      return;
+    }
+    setAdsPlatformDetail(null);
+    Promise.all([
+      api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/platforms/${currentAdsPlatform}`),
+      api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/sources`),
+    ])
+      .then(([detail, sources]) => setAdsPlatformDetail({ ...detail, sources: (sources.snapshots || []).filter((item) => (item.platform_scope || []).includes(currentAdsPlatform)) }))
+      .catch((err) => setError(err.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClient?.id, currentAdsPeriod?.id, currentAdsPlatform, workspace]);
+
+  useEffect(() => {
+    if ((!isSocialWorkspace && !isAdsWorkspace) || !activeReportJobIdsKey) return undefined;
     const jobIds = activeReportJobIdsKey.split(",");
     let stopped = false;
     const poll = async () => {
@@ -694,32 +924,157 @@ export default function App() {
   ]);
 
   let content = (
-    <ClientsPage
-      clients={clients}
-      industries={industries}
-      query={query}
-      industry={industry}
-      onQueryChange={setQuery}
-      onIndustryChange={setIndustry}
-      onOpenClient={(id) => {
-        const client = clients.find((item) => item.id === id);
-        navigate(`/clients/${clientSlug(client)}`);
-      }}
-      onOpenAddClient={() => setModal("add-client")}
-      onEditClient={(client) => runWhenClientUnlocked(
-        client,
-        () => setEditClient(client),
-      )}
-      onDeleteClient={(client) => runWhenClientUnlocked(
-        client,
-        () => setDeleteTarget(client),
-      )}
-    />
+    <WorkspaceSelectorPage counts={productSummary} onNavigate={navigate} />
   );
+
+  if (isSocialWorkspace) {
+    content = (
+      <ClientsPage
+        clients={clients}
+        industries={industries}
+        query={query}
+        industry={industry}
+        onQueryChange={setQuery}
+        onIndustryChange={setIndustry}
+        onOpenClient={(id) => {
+          const client = clients.find((item) => item.id === id);
+          navigate(`/clients/${clientSlug(client)}`);
+        }}
+        onOpenAddClient={() => setModal("add-client")}
+        onEditClient={(client) => runWhenClientUnlocked(
+          client,
+          () => setEditClient(client),
+        )}
+        onDeleteClient={(client) => runWhenClientUnlocked(
+          client,
+          () => setDeleteTarget(client),
+        )}
+      />
+    );
+  }
+
+  if (isAdsWorkspace) {
+    content = (
+      <AdsClientsPage
+        clients={clients}
+        industries={industries}
+        query={query}
+        industry={industry}
+        onQueryChange={setQuery}
+        onIndustryChange={setIndustry}
+        onOpenClient={(id) => {
+          const client = clients.find((item) => item.id === id);
+          navigate(`/ads/clients/${clientSlug(client)}`);
+        }}
+        onOpenAddClient={() => setModal("add-ads-client")}
+        onEditClient={setEditAdsClient}
+        onDeleteClient={setDeleteTarget}
+      />
+    );
+    if (currentClient && selectedClient && !currentAdsPeriod) {
+      content = (
+        <AdsClientDetailPage
+          client={selectedClient}
+          periods={adsPeriods}
+          onNavigate={navigate}
+          onOpenPeriod={(periodSlug) => navigate(`/ads/clients/${clientSlug(selectedClient)}/${periodSlug}`)}
+          onEditClient={setEditAdsClient}
+          onEditGoals={setEditAdsPeriodGoals}
+          onDeleteClient={setDeleteTarget}
+          onDeletePeriod={setDeleteAdsPeriodTarget}
+          onGenerateReport={requestAdsSlidesReportGeneration}
+          onUpload={(period) => {
+            setAdsImportPeriod(period);
+            setModal("add-ads-import");
+          }}
+          onSync={(period = null) => setAdsSyncContext({ period, platform: null })}
+        />
+      );
+    }
+    if (currentClient && selectedClient && currentAdsPeriod && !currentAdsPlatform) {
+      const sourcePath = `/ads/clients/${clientSlug(selectedClient)}/${adsPeriodSlug(currentAdsPeriod)}/instagram`;
+      content = (
+        <AdsPeriodDetailPage
+          client={selectedClient}
+          period={currentAdsPeriod}
+          platformCatalog={adsPlatformCatalog}
+          overview={adsPeriodOverview}
+          onNavigate={navigate}
+          onOpenPlatform={(path) => navigate(`/ads/clients/${path}`)}
+          onGenerateReport={requestAdsSlidesReportGeneration}
+          onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
+          onSync={(period) => setAdsSyncContext({ period, platform: null })}
+          onEditGoals={setEditAdsPeriodGoals}
+          onReviewObjectives={() => setCampaignObjectivePeriod(currentAdsPeriod)}
+          onMetricSettings={() => setShowMetricSettings(true)}
+          onSources={() => navigate(sourcePath)}
+        />
+      );
+    }
+    if (currentClient && selectedClient && currentAdsPeriod && ["creative", "adsets"].includes(currentAdsPlatform)) {
+      const sourcePath = `/ads/clients/${clientSlug(selectedClient)}/${adsPeriodSlug(currentAdsPeriod)}/instagram`;
+      content = <AdsAnalysisPage
+        client={selectedClient}
+        period={currentAdsPeriod}
+        dimension={currentAdsPlatform === "creative" ? "creative" : "adset"}
+        refreshKey={metricSettingsVersion}
+        onNavigate={navigate}
+        onReviewObjectives={() => setCampaignObjectivePeriod(currentAdsPeriod)}
+        onGoals={() => setEditAdsPeriodGoals(currentAdsPeriod)}
+        onMetrics={() => setShowMetricSettings(true)}
+        onSync={() => setAdsSyncContext({ period: currentAdsPeriod, platform: null })}
+        onImport={() => { setAdsImportPeriod(currentAdsPeriod); setModal("add-ads-import"); }}
+        onSources={() => navigate(sourcePath)}
+      />;
+    }
+    if (currentClient && selectedClient && currentAdsPeriod && currentAdsPlatform === "edit") {
+      const sourcePath = `/ads/clients/${clientSlug(selectedClient)}/${adsPeriodSlug(currentAdsPeriod)}/instagram`;
+      content = <AdsDataEditorPage
+        client={selectedClient}
+        period={currentAdsPeriod}
+        onNavigate={navigate}
+        onSaved={() => { setMetricSettingsVersion((value) => value + 1); showToast("Ads data updated."); }}
+        navigationActions={{
+          onReviewObjectives: () => setCampaignObjectivePeriod(currentAdsPeriod),
+          onGoals: () => setEditAdsPeriodGoals(currentAdsPeriod),
+          onMetrics: () => setShowMetricSettings(true),
+          onSync: () => setAdsSyncContext({ period: currentAdsPeriod, platform: null }),
+          onImport: () => { setAdsImportPeriod(currentAdsPeriod); setModal("add-ads-import"); },
+          onSources: () => navigate(sourcePath),
+        }}
+      />;
+    }
+    if (currentClient && selectedClient && currentAdsPeriod && currentAdsPlatform && !["creative", "adsets", "edit"].includes(currentAdsPlatform)) {
+      content = (
+        <AdsPlatformDetailPage
+          client={selectedClient}
+          period={currentAdsPeriod}
+          platform={currentAdsPlatform}
+          detail={adsPlatformDetail}
+          onNavigate={navigate}
+          onUpdate={(period) => { setAdsImportPeriod(period); setModal("add-ads-import"); }}
+          onSync={(period) => setAdsSyncContext({ period, platform: currentAdsPlatform })}
+          onSelectSource={async (importId) => {
+            await api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/active-source`, {
+              method: "PUT", body: JSON.stringify({ platform: currentAdsPlatform, import_id: importId }),
+            });
+            const [refreshed, sources] = await Promise.all([
+              api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/platforms/${currentAdsPlatform}`),
+              api(`/api/ads/clients/${selectedClient.id}/periods/${currentAdsPeriod.id}/sources`),
+            ]);
+            setAdsPlatformDetail({ ...refreshed, sources: (sources.snapshots || []).filter((item) => (item.platform_scope || []).includes(currentAdsPlatform)) });
+            showToast("Active data source updated.");
+          }}
+          onEditGoals={setEditAdsPeriodGoals}
+        />
+      );
+    }
+  }
 
   if (isGlobalReportJobs) {
     content = (
       <ReportJobsPage
+        workspace={workspace}
         jobs={reportJobs}
         pagination={reportJobsPagination}
         actionJobId={reportJobActionId}
@@ -738,7 +1093,8 @@ export default function App() {
   }
 
   if (
-    currentClient
+    isSocialWorkspace
+    && currentClient
     && selectedClient
     && !currentMonth
     && !isClientReportJobs
@@ -770,7 +1126,7 @@ export default function App() {
     );
   }
 
-  if (currentClient && selectedClient && currentMonth && !currentPlatform) {
+  if (isSocialWorkspace && currentClient && selectedClient && currentMonth && !currentPlatform) {
     content = (
       <MonthDetailPage
         client={selectedClient}
@@ -797,6 +1153,8 @@ export default function App() {
   }
 
   if (
+    (isSocialWorkspace || isAdsWorkspace)
+    &&
     currentClient
     && selectedClient
     && (
@@ -807,6 +1165,7 @@ export default function App() {
     content = (
       <ReportJobsPage
         client={selectedClient}
+        workspace={workspace}
         jobs={reportJobs}
         pagination={reportJobsPagination}
         actionJobId={reportJobActionId}
@@ -824,7 +1183,7 @@ export default function App() {
     );
   }
 
-  if (currentClient && selectedClient && currentMonth && isReportEditor) {
+  if (isSocialWorkspace && currentClient && selectedClient && currentMonth && isReportEditor) {
     content = (
       <ReportDataEditorPage
         client={selectedClient}
@@ -844,6 +1203,8 @@ export default function App() {
   }
 
   if (
+    isSocialWorkspace
+    &&
     currentClient
     && selectedClient
     && currentMonth
@@ -878,12 +1239,15 @@ export default function App() {
     <>
       <Header
         activeSection={isGlobalReportJobs ? "report-jobs" : "clients"}
+        workspace={workspace}
+        currentClient={selectedClient}
         onNavigate={navigate}
+        onOpenMetricSettings={() => setShowMetricSettings(true)}
       />
       <main className="page-shell">
         {error ? <div className="empty">{error}</div> : content}
       </main>
-      {modal === "add-client" && (
+      {isSocialWorkspace && modal === "add-client" && (
         <AddClientModal
           industries={industries}
           onClose={() => setModal(null)}
@@ -974,6 +1338,7 @@ export default function App() {
       {deleteTarget && (
         <DeleteClientModal
           client={deleteTarget}
+          workspace={workspace}
           isDeleting={isDeletingClient}
           onClose={() => setDeleteTarget(null)}
           onConfirm={() => {
@@ -982,6 +1347,146 @@ export default function App() {
               setError(err.message);
             });
           }}
+        />
+      )}
+      {isAdsWorkspace && modal === "add-ads-client" && (
+        <AddAdsClientModal
+          clients={allClients.filter((client) => !(client.products || []).includes("meta_ads"))}
+          industries={[...new Set(allClients.map((client) => client.industry).filter(Boolean))]}
+          onClose={() => setModal(null)}
+          onSave={async (payload) => {
+            let savedClient;
+            if (payload.existing_client_id) {
+              savedClient = await api(
+                `/api/clients/${payload.existing_client_id}/products/meta_ads`,
+                { method: "POST", body: JSON.stringify({ ads_platforms: payload.ads_platforms, meta_ad_account_ids: payload.meta_ad_account_ids }) },
+              );
+            } else {
+              savedClient = await api("/api/clients", {
+                method: "POST",
+                body: JSON.stringify({ ...payload, product: "meta_ads" }),
+              });
+            }
+            await loadClients();
+            setModal(null);
+            showToast("Ads client enabled.");
+            navigate(`/ads/clients/${clientSlug(savedClient)}`);
+          }}
+        />
+      )}
+      {isAdsWorkspace && editAdsClient && (
+        <AddAdsClientModal
+          client={editAdsClient}
+          clients={[]}
+          industries={industries}
+          onClose={() => setEditAdsClient(null)}
+          onSave={async (payload) => {
+            const savedClient = await api(
+              `/api/clients/${editAdsClient.id}/products/meta_ads`,
+              { method: "POST", body: JSON.stringify({ ads_platforms: payload.ads_platforms, meta_ad_account_ids: payload.meta_ad_account_ids }) },
+            );
+            await loadClients();
+            await loadAdsClient({ ...editAdsClient, ...savedClient });
+            setEditAdsClient(null);
+            showToast("Ads client updated.");
+          }}
+        />
+      )}
+      {isAdsWorkspace && modal === "add-ads-import" && selectedClient && (
+        <MetaAdsImportModal
+          client={selectedClient}
+          period={adsImportPeriod}
+          onClose={() => {
+            setModal(null);
+            setAdsImportPeriod(null);
+          }}
+          onImported={async () => {
+            await loadClients();
+            await loadAdsClient(selectedClient);
+            setModal(null);
+            setAdsImportPeriod(null);
+            showToast("Ads report data imported.");
+          }}
+        />
+      )}
+      {isAdsWorkspace && adsSyncContext && selectedClient && (
+        <MetaAdsSyncModal
+          client={selectedClient}
+          period={adsSyncContext.period}
+          initialPlatform={adsSyncContext.platform}
+          onClose={() => setAdsSyncContext(null)}
+          onSynced={async (_result, syncedPeriod) => {
+            await loadClients();
+            await loadAdsClient(selectedClient);
+            if (adsSyncContext.platform && syncedPeriod?.id) {
+              const refreshed = await api(`/api/ads/clients/${selectedClient.id}/periods/${syncedPeriod.id}/platforms/${adsSyncContext.platform}`);
+              setAdsPlatformDetail(refreshed);
+            }
+            setAdsSyncContext(null);
+            showToast("Meta Ads sync completed.");
+          }}
+        />
+      )}
+      {isAdsWorkspace && adsGenerateReportTarget && selectedClient && (
+        <AdsGenerateReportModal
+          client={selectedClient}
+          period={adsGenerateReportTarget}
+          isSubmitting={reportJobActionId === `create:${adsGenerateReportTarget.id}`}
+          onClose={() => setAdsGenerateReportTarget(null)}
+          onConfirm={async (options) => {
+            const queued = await generateAdsSlidesReport(adsGenerateReportTarget, options);
+            if (queued) setAdsGenerateReportTarget(null);
+          }}
+        />
+      )}
+      {isAdsWorkspace && editAdsPeriodGoals && selectedClient && (
+        <ObjectiveKpiModal
+          client={selectedClient}
+          period={editAdsPeriodGoals}
+          onClose={() => setEditAdsPeriodGoals(null)}
+          onReviewObjectives={() => {
+            setCampaignObjectivePeriod(editAdsPeriodGoals);
+            setEditAdsPeriodGoals(null);
+          }}
+          onSave={async (payload) => {
+            await api(`/api/ads/clients/${selectedClient.id}/periods/${editAdsPeriodGoals.id}/configuration`, {
+              method: "PUT",
+              body: JSON.stringify(payload),
+            });
+            await loadAdsClient(selectedClient);
+            setEditAdsPeriodGoals(null);
+            showToast(`${editAdsPeriodGoals.period_label} goals and KPI updated.`);
+          }}
+        />
+      )}
+      {isAdsWorkspace && campaignObjectivePeriod && selectedClient && (
+        <CampaignObjectiveModal
+          client={selectedClient}
+          period={campaignObjectivePeriod}
+          onClose={() => setCampaignObjectivePeriod(null)}
+          onSaved={async () => {
+            await loadAdsClient(selectedClient);
+            showToast("Campaign objectives confirmed.");
+          }}
+        />
+      )}
+      {isAdsWorkspace && showMetricSettings && selectedClient && (
+        <MetricDisplaySettingsModal
+          client={selectedClient}
+          onClose={() => setShowMetricSettings(false)}
+          onSaved={() => {
+            setShowMetricSettings(false);
+            setMetricSettingsVersion((version) => version + 1);
+            showToast("Metric display settings updated.");
+          }}
+        />
+      )}
+      {deleteAdsPeriodTarget && (
+        <DeleteReportMonthModal
+          month={{ ...deleteAdsPeriodTarget, label: deleteAdsPeriodTarget.period_label }}
+          isDeleting={isDeletingAdsPeriod}
+          onClose={() => setDeleteAdsPeriodTarget(null)}
+          onConfirm={() => deleteAdsPeriod(deleteAdsPeriodTarget).catch((err) => { setIsDeletingAdsPeriod(false); setError(err.message); })}
         />
       )}
       {deleteReportMonthTarget && (
@@ -1117,8 +1622,13 @@ export default function App() {
                   (client) => String(client.id) === String(reportJob.client_id),
                 );
                 if (targetClient) {
+                  const jobType = reportJob.report_type
+                    || reportJob.result_metadata?.report_type;
+                  const workspacePrefix = jobType === "meta_ads"
+                    ? "/ads"
+                    : "";
                   navigate(
-                    `/clients/${clientSlug(targetClient)}/report-jobs`,
+                    `${workspacePrefix}/clients/${clientSlug(targetClient)}/report-jobs`,
                   );
                 } else {
                   navigate("/report-jobs");

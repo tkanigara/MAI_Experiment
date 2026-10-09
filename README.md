@@ -1,3 +1,4 @@
+python -m agentic.workflows.ads_workflow.app
 # MAI Social Media Reporting
 
 Web dashboard untuk mengimpor data social media, mengelola KPI, menjalankan
@@ -43,7 +44,7 @@ GitHub main
 Fitur utama:
 
 - kelola client, periode report, KPI, dan data tiap platform;
-- impor CSV Instagram, Facebook, TikTok, dan YouTube;
+- impor CSV organic social serta enam export Meta Ads;
 - edit data report dan menyimpan riwayat perubahan;
 - menghasilkan insight dengan Gemini;
 - membuat report dari template Google Slides.
@@ -98,11 +99,89 @@ npm ci
 npm run build
 ```
 
+## Meta Ads CSV
+
+Dashboard sekarang dimulai dari pilihan workspace `Social Media` atau `Ads`,
+baru kemudian menampilkan client yang aktif untuk produk tersebut. Master client
+tetap dipakai bersama, tetapi keanggotaan produk disimpan di `client_products`.
+Periode, import, dan report Ads tidak memakai periode/report Social Media.
+
+Ads workspace menampilkan empat platform: Instagram Ads, Facebook Ads, YouTube
+Ads, dan TikTok Ads. Instagram/Facebook memakai satu snapshot sumber Meta Ads.
+YouTube dan TikTok sudah memiliki konfigurasi client, route UI, status, serta
+kontrak katalog backend, tetapi ingestion dan tabel performanya sengaja belum
+dibuat sampai contoh export aslinya tersedia. Kode produk internal `meta_ads`
+dipertahankan sementara untuk kompatibilitas data/migration yang sudah ada.
+
+Endpoint utama `POST /api/ads/imports` menerima multipart `client_id`, optional
+Ads `period_id`, dan enam file wajib dengan field `campaign`, `adset`, `ad`,
+`placement`, `demographic`, serta `region`. Alias lama
+`POST /api/import/meta-ads` masih tersedia sementara untuk kompatibilitas.
+Tanggal report dibaca dari CSV dan harus konsisten di keenam file. Setiap import
+disimpan sebagai snapshot append-only. Snapshot CSV dan API dapat hidup
+bersamaan, sedangkan sumber aktif dipilih terpisah untuk Instagram dan Facebook.
+
+Endpoint pendukung workspace:
+
+- `GET /api/clients?product=social_media|meta_ads`
+- `GET /api/client-products/summary`
+- `GET /api/ads/platforms`
+- `GET /api/ads/meta/status`
+- `GET /api/ads/meta/ad-accounts`
+- `POST /api/clients/{client_id}/products/{product}`
+- `DELETE /api/clients/{client_id}/products/{product}`
+- `GET /api/ads/clients/{client_id}/periods`
+- `POST /api/ads/clients/{client_id}/periods/{period_id}/sync`
+- `GET /api/ads/clients/{client_id}/periods/{period_id}/sources`
+- `PUT /api/ads/clients/{client_id}/periods/{period_id}/active-source`
+
+Database yang sudah ada harus menjalankan migration secara berurutan sampai
+`db/migrations/009_meta_ads_api.sql`.
+Audit header, null, relationship, rekonsiliasi, serta keterbatasan export Bourbon
+ada di `docs/meta_ads_csv_audit.md`.
+
+### Ads agent retrieval
+
+`retrieve_ads_data()` melakukan satu request analisis ke dashboard. Untuk
+analisis creative yang membutuhkan placement, age/gender, dan region, panggil
+dengan `include_breakdowns=True`. Payload yang sama kemudian dapat diproyeksikan
+ke bagian analisis melalui helper di
+`agentic/tools/tools_list_ads_creative/dashboard_retrieval.py`:
+
+```python
+from agentic.tools.tools_list_ads_creative.dashboard_retrieval import (
+    retrieve_ads_data,
+    retrieve_ads_sections,
+)
+
+payload = retrieve_ads_data(
+    client_code="jba",
+    period_id="2026-07-01",
+    analysis_type="creative",
+    platform_scope="meta",
+    objective="leads",
+    include_breakdowns=True,
+)
+sections = retrieve_ads_sections(payload)
+overview = sections["performance_overview"]
+content = sections["content_analysis"]
+placements = sections["placement_analysis"]
+demographics = sections["audience_demographic_analysis"]
+regions = sections["region_analysis"]
+```
+
+Helper tersebut hanya memisahkan payload yang sudah diambil; helper tidak
+mengirim request dashboard tambahan. Nilai metric yang memang tidak tersedia
+tetap `null`, bukan diubah menjadi nol.
+
 ## Environment Variables Utama
 
 | Variable                               | Wajib | Keterangan                         |
 | -------------------------------------- | ----: | ---------------------------------- |
 | `DATABASE_URL`                       |    ya | SQLAlchemy URL ke PostgreSQL       |
+| `META_ADS_ACCESS_TOKEN`              |    ya | token backend untuk Meta Ads sync  |
+| `META_API_VERSION`                   | tidak | versi Graph API Meta               |
+| `META_ADS_API_TIMEOUT`               | tidak | timeout request Meta (detik)       |
 | `GEMINI_API_KEY`                     |    ya | credential Gemini                  |
 | `GEMINI_MODEL`                       | tidak | default`gemini-3.1-flash-lite`   |
 | `SLIDES_TEMPLATE_ID`                 |    ya | ID template Google Slides          |

@@ -33,6 +33,7 @@ COPY dashboard/schemas.py ./dashboard/schemas.py
 COPY dashboard/main.py ./dashboard/main.py
 COPY dashboard/server.py ./dashboard/server.py
 COPY dashboard/slides_report.py ./dashboard/slides_report.py
+COPY dashboard/ads_slides_report.py ./dashboard/ads_slides_report.py
 COPY agentic ./agentic
 COPY --from=frontend /app/dashboard/dist ./dashboard/dist
 

@@ -543,6 +543,17 @@ def main():
             """,
             {"metadata": json_dumps({"seed_source": "data_example"})},
         )
+        conn.execute(
+            text(
+                """
+                INSERT INTO client_products (client_id, product)
+                VALUES (:client_id, 'social_media')
+                ON CONFLICT (client_id, product)
+                DO UPDATE SET is_active = TRUE, updated_at = now()
+                """
+            ),
+            {"client_id": client_id},
+        )
 
         first_daily = []
         for folder_name in PLATFORM_DIRS:

@@ -21,6 +21,7 @@ try:
         lock_existing_report_period,
         lock_report_period,
     )
+    from dashboard.services.ads_workspace import ads_product_configuration
 except ModuleNotFoundError:
     from db import create_db_engine
     from repositories.report_data_lock import (
@@ -29,6 +30,7 @@ except ModuleNotFoundError:
         lock_existing_report_period,
         lock_report_period,
     )
+    from services.ads_workspace import ads_product_configuration
 
 PLATFORM_TABLES = {
     "instagram": "instagram_reports",
@@ -844,7 +846,50 @@ class DashboardRepository:
     def __init__(self):
         self.engine = create_db_engine()
 
-    def clients(self):
+    @staticmethod
+    def _sync_meta_ad_accounts(conn, client_id, configuration: dict, payload: dict) -> None:
+        selected = set(configuration.get("meta_ad_account_ids") or [])
+        metadata = {
+            str(item.get("id")): item
+            for item in (payload.get("_meta_ad_accounts") or [])
+            if item.get("id")
+        }
+        conn.execute(
+            text("DELETE FROM client_meta_ad_accounts WHERE client_id=CAST(:client_id AS UUID) AND NOT (ad_account_id = ANY(CAST(:selected AS TEXT[])))"),
+            {"client_id": str(client_id), "selected": list(selected)},
+        )
+        for account_id in selected:
+            account = metadata.get(account_id, {})
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO client_meta_ad_accounts (
+                        client_id, ad_account_id, account_name, account_status,
+                        currency, timezone_name, is_active
+                    ) VALUES (
+                        CAST(:client_id AS UUID), :account_id, :name, :status,
+                        :currency, :timezone, :is_active
+                    )
+                    ON CONFLICT (client_id, ad_account_id) DO UPDATE SET
+                        account_name=EXCLUDED.account_name,
+                        account_status=EXCLUDED.account_status,
+                        currency=EXCLUDED.currency,
+                        timezone_name=EXCLUDED.timezone_name,
+                        is_active=EXCLUDED.is_active,
+                        updated_at=now()
+                    """
+                ),
+                {
+                    "client_id": str(client_id), "account_id": account_id,
+                    "name": account.get("name"), "status": account.get("account_status"),
+                    "currency": account.get("currency"), "timezone": account.get("timezone_name"),
+                    "is_active": account.get("is_active", account.get("account_status") == 1),
+                },
+            )
+
+    def clients(self, product: str | None = None):
+        if product not in {None, "social_media", "meta_ads"}:
+            raise ValueError("Unsupported client product.")
         with self.engine.begin() as conn:
             rows = conn.execute(
                 text(
@@ -860,16 +905,168 @@ class DashboardRepository:
                         c.has_youtube,
                         c.has_linkedin,
                         c.has_threads,
-                        COUNT(p.id) FILTER (WHERE p.is_active) AS connected_profiles
+                        COUNT(DISTINCT p.id) FILTER (WHERE p.is_active) AS connected_profiles,
+                        COALESCE(
+                            ARRAY_AGG(DISTINCT cp.product)
+                                FILTER (WHERE cp.is_active),
+                            ARRAY[]::TEXT[]
+                        ) AS products,
+                        COALESCE(
+                            (
+                                SELECT ads_product.configuration
+                                FROM client_products ads_product
+                                WHERE ads_product.client_id = c.id
+                                  AND ads_product.product = 'meta_ads'
+                                  AND ads_product.is_active
+                            ),
+                            '{}'::JSONB
+                        ) AS ads_configuration,
+                        COALESCE(
+                            (SELECT jsonb_agg(jsonb_build_object(
+                                'id', account.ad_account_id,
+                                'name', account.account_name,
+                                'account_status', account.account_status,
+                                'currency', account.currency,
+                                'timezone_name', account.timezone_name,
+                                'is_active', account.is_active
+                            ) ORDER BY account.account_name)
+                             FROM client_meta_ad_accounts account WHERE account.client_id=c.id),
+                            '[]'::jsonb
+                        ) AS meta_ad_accounts
                     FROM clients c
                     LEFT JOIN client_social_profiles p ON p.client_id = c.id
+                    LEFT JOIN client_products cp ON cp.client_id = c.id
                     WHERE c.is_active
+                      AND (
+                          CAST(:product AS TEXT) IS NULL
+                          OR EXISTS (
+                              SELECT 1
+                              FROM client_products selected_product
+                              WHERE selected_product.client_id = c.id
+                                AND selected_product.product = CAST(:product AS TEXT)
+                                AND selected_product.is_active
+                          )
+                      )
                     GROUP BY c.id
                     ORDER BY c.client_name
                     """
-                )
+                ),
+                {"product": product},
             ).mappings()
             return [row_dict(row) for row in rows]
+
+    def client_product_summary(self):
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT cp.product, COUNT(*) AS clients
+                    FROM client_products cp
+                    JOIN clients c ON c.id = cp.client_id
+                    WHERE cp.is_active AND c.is_active
+                    GROUP BY cp.product
+                    """
+                )
+            ).mappings()
+            counts = {"social_media": 0, "meta_ads": 0}
+            counts.update({row["product"]: row["clients"] for row in rows})
+            return counts
+
+    def activate_client_product(
+        self,
+        client_id: str,
+        product: str,
+        payload: dict | None = None,
+    ):
+        if product not in {"social_media", "meta_ads"}:
+            raise ValueError("Unsupported client product.")
+        with self.engine.begin() as conn:
+            client = conn.execute(
+                text(
+                    "SELECT id, client_code, client_name, industry FROM clients WHERE id = CAST(:client_id AS UUID) AND is_active"
+                ),
+                {"client_id": client_id},
+            ).mappings().first()
+            if not client:
+                raise ValueError("Client not found")
+            configuration = (
+                ads_product_configuration(payload or {})
+                if product == "meta_ads"
+                else {}
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO client_products (client_id, product, configuration)
+                    VALUES (
+                        CAST(:client_id AS UUID), :product,
+                        CAST(:configuration AS JSONB)
+                    )
+                    ON CONFLICT (client_id, product)
+                    DO UPDATE SET
+                        is_active = TRUE,
+                        configuration = EXCLUDED.configuration,
+                        updated_at = now()
+                    """
+                ),
+                {
+                    "client_id": client_id,
+                    "product": product,
+                    "configuration": json.dumps(configuration),
+                },
+            )
+            if product == "meta_ads" and "meta_ad_account_ids" in configuration:
+                self._sync_meta_ad_accounts(conn, client_id, configuration, payload or {})
+            result = row_dict(client)
+            result["product"] = product
+            if product == "meta_ads":
+                result["ads_configuration"] = configuration
+            return result
+
+    def deactivate_client_product(self, client_id: str, product: str):
+        if product not in {"social_media", "meta_ads"}:
+            raise ValueError("Unsupported client product.")
+        with self.engine.begin() as conn:
+            client = conn.execute(
+                text(
+                    "SELECT id, client_code, client_name FROM clients WHERE id = CAST(:client_id AS UUID) AND is_active"
+                ),
+                {"client_id": client_id},
+            ).mappings().first()
+            if not client:
+                raise ValueError("Client not found")
+            active_products = conn.execute(
+                text(
+                    """
+                    SELECT product
+                    FROM client_products
+                    WHERE client_id = CAST(:client_id AS UUID)
+                      AND is_active
+                    """
+                ),
+                {"client_id": client_id},
+            ).scalars().all()
+            if product not in active_products:
+                raise ValueError("Client product is not active.")
+            if len(active_products) == 1:
+                raise ValueError(
+                    "Cannot remove the client's only active product. Delete the client instead."
+                )
+            conn.execute(
+                text(
+                    """
+                    UPDATE client_products
+                    SET is_active = FALSE, updated_at = now()
+                    WHERE client_id = CAST(:client_id AS UUID)
+                      AND product = :product
+                    """
+                ),
+                {"client_id": client_id, "product": product},
+            )
+            result = row_dict(client)
+            result["product"] = product
+            result["is_active"] = False
+            return result
 
     def create_client(self, payload: dict):
         required = ["client_name"]
@@ -877,7 +1074,15 @@ class DashboardRepository:
         if missing:
             raise ValueError(f"Missing fields: {', '.join(missing)}")
         client_name = str(payload["client_name"]).strip()
+        product = str(payload.get("product") or "social_media").strip()
+        if product not in {"social_media", "meta_ads"}:
+            raise ValueError("Unsupported client product.")
         base_code = client_code_base(client_name)
+        product_configuration = (
+            ads_product_configuration(payload)
+            if product == "meta_ads"
+            else {}
+        )
         with self.engine.begin() as conn:
             # Allocate readable client codes safely even when two requests for
             # the same client name arrive concurrently.
@@ -931,7 +1136,31 @@ class DashboardRepository:
                     "has_threads": bool(payload.get("has_threads")),
                 },
             ).mappings().one()
-            return row_dict(row)
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO client_products (client_id, product, configuration)
+                    VALUES (:client_id, :product, CAST(:configuration AS JSONB))
+                    ON CONFLICT (client_id, product)
+                    DO UPDATE SET
+                        is_active = TRUE,
+                        configuration = EXCLUDED.configuration,
+                        updated_at = now()
+                    """
+                ),
+                {
+                    "client_id": row["id"],
+                    "product": product,
+                    "configuration": json.dumps(product_configuration),
+                },
+            )
+            if product == "meta_ads" and "meta_ad_account_ids" in product_configuration:
+                self._sync_meta_ad_accounts(conn, row["id"], product_configuration, payload)
+            result = row_dict(row)
+            result["products"] = [product]
+            if product == "meta_ads":
+                result["ads_configuration"] = product_configuration
+            return result
 
     def update_client(self, client_id: str, payload: dict):
         required = ["client_name"]

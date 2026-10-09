@@ -195,6 +195,7 @@ function JobRow({
 
 export default function ReportJobsPage({
   client,
+  workspace = "social",
   jobs,
   pagination,
   actionJobId,
@@ -206,6 +207,7 @@ export default function ReportJobsPage({
   onOpenReport,
 }) {
   const isGlobal = !client;
+  const workspacePrefix = workspace === "ads" ? "/ads" : "";
   const currentQueue = sortCurrentQueue(jobs.filter(isActiveReportJob));
   const waitingJobs = currentQueue.filter(
     (job) => ["queued", "retrying"].includes(job.status),
@@ -231,10 +233,10 @@ export default function ReportJobsPage({
         items={isGlobal
           ? [{ label: "Report Queue" }]
           : [
-            { label: "Clients", path: "/clients" },
+            { label: "Clients", path: `${workspacePrefix}/clients` },
             {
               label: client.client_name,
-              path: `/clients/${clientSlug(client)}`,
+              path: `${workspacePrefix}/clients/${clientSlug(client)}`,
             },
             { label: "Report history" },
           ]}

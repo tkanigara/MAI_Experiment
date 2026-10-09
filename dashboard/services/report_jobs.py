@@ -101,6 +101,10 @@ def _report_generator_process_entry(
             ),
             existing_presentation_id=options.get("existing_presentation_id"),
             existing_report_name=options.get("existing_report_name"),
+            report_type=options.get("report_type", "social_media"),
+            report_model=options.get("report_model", "jba"),
+            platform_scope=options.get("platform_scope"),
+            objective=options.get("objective"),
         )
         send("result", result)
     except ReportGenerationCancelledError as exc:
@@ -253,6 +257,75 @@ class CloudTasksReportTaskDispatcher:
         return True
 
 
+class QStashReportTaskDispatcher:
+    """FIFO report dispatcher backed by an Upstash QStash queue."""
+
+    def __init__(
+        self,
+        *,
+        token: str,
+        queue: str,
+        worker_base_url: str,
+        retries: int = 2,
+        timeout: str | int = "14m",
+        base_url: str | None = None,
+        client=None,
+    ):
+        self.token = str(token or "").strip()
+        self.queue = str(queue or "").strip()
+        self.worker_base_url = str(worker_base_url or "").strip().rstrip("/")
+        self.retries = max(0, int(retries))
+        self.timeout = timeout
+        self.base_url = str(base_url or "").strip().rstrip("/") or None
+        self.client = client
+
+    @property
+    def configured(self) -> bool:
+        return all((self.token, self.queue, self.worker_base_url))
+
+    def _require_configured(self) -> None:
+        if not self.configured:
+            raise ReportQueueUnavailableError(
+                "QStash report queue configuration is incomplete."
+            )
+
+    def _client(self):
+        self._require_configured()
+        if self.client is None:
+            from qstash import QStash
+
+            self.client = QStash(self.token, base_url=self.base_url)
+        return self.client
+
+    def enqueue(self, job: dict) -> str:
+        job_id = str(job["id"])
+        response = self._client().message.enqueue_json(
+            queue=self.queue,
+            url=(
+                f"{self.worker_base_url}/internal/"
+                f"report-jobs/{job_id}/execute"
+            ),
+            body={"job_id": job_id},
+            retries=self.retries,
+            timeout=self.timeout,
+            label="report-generation",
+        )
+        message_id = str(getattr(response, "message_id", "") or "").strip()
+        if not message_id:
+            raise ReportTaskDispatchError("QStash did not return a message ID.")
+        return message_id
+
+    def activate(self, task_name: str) -> None:
+        return None
+
+    def cancel(self, task_name: str) -> bool:
+        message_id = str(task_name or "").strip()
+        if not message_id:
+            return False
+        self._client().message.cancel(message_id)
+        return True
+
+
 class LocalReportTaskDispatcher:
     """Single-process queue for local development only."""
 
@@ -357,6 +430,15 @@ def build_report_task_dispatcher(
                 os.getenv("REPORT_LOCAL_RETRY_DELAY_SECONDS", "1")
             ),
         )
+    if backend in {"qstash", "upstash", "upstash_qstash"}:
+        return QStashReportTaskDispatcher(
+            token=os.getenv("QSTASH_TOKEN", ""),
+            queue=os.getenv("QSTASH_QUEUE", "mai-report-generation"),
+            worker_base_url=os.getenv("REPORT_WORKER_BASE_URL", ""),
+            retries=int(os.getenv("QSTASH_RETRIES", "2")),
+            timeout=os.getenv("QSTASH_TIMEOUT", "14m"),
+            base_url=os.getenv("QSTASH_URL"),
+        )
     if backend not in {"cloud_tasks", "cloud-tasks"}:
         return UnconfiguredReportTaskDispatcher()
     return CloudTasksReportTaskDispatcher(
@@ -434,6 +516,83 @@ def verify_cloud_tasks_oidc(
     return claims
 
 
+def verify_qstash_signature(
+    signature: str | None,
+    *,
+    body: bytes | str,
+    url: str,
+    current_signing_key: str | None = None,
+    next_signing_key: str | None = None,
+    receiver=None,
+) -> bool:
+    expected_url = str(url or "").strip()
+    current_key = str(
+        current_signing_key or os.getenv("QSTASH_CURRENT_SIGNING_KEY") or ""
+    ).strip()
+    next_key = str(
+        next_signing_key or os.getenv("QSTASH_NEXT_SIGNING_KEY") or ""
+    ).strip()
+    raw_signature = str(signature or "").strip()
+
+    if not expected_url or not current_key or not next_key:
+        raise ReportTaskAuthenticationError(
+            "QStash signature verification is not configured."
+        )
+    if not raw_signature:
+        raise ReportTaskAuthenticationError(
+            "An Upstash-Signature header is required."
+        )
+
+    if receiver is None:
+        from qstash import Receiver
+
+        receiver = Receiver(
+            current_signing_key=current_key,
+            next_signing_key=next_key,
+        )
+
+    raw_body = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+    try:
+        verified = receiver.verify(
+            body=raw_body,
+            signature=raw_signature,
+            url=expected_url,
+        )
+    except Exception as exc:
+        raise ReportTaskAuthenticationError(
+            "QStash request signature is invalid."
+        ) from exc
+    if verified is False:
+        raise ReportTaskAuthenticationError(
+            "QStash request signature is invalid."
+        )
+    return True
+
+
+def verify_report_task_request(
+    *,
+    authorization: str | None,
+    qstash_signature: str | None,
+    body: bytes | str,
+    url: str,
+    backend: str | None = None,
+):
+    selected_backend = str(
+        backend if backend is not None else os.getenv("REPORT_QUEUE_BACKEND", "")
+    ).strip().lower()
+    if selected_backend in {"qstash", "upstash", "upstash_qstash"}:
+        return verify_qstash_signature(
+            qstash_signature,
+            body=body,
+            url=url,
+        )
+    if selected_backend in {"cloud_tasks", "cloud-tasks"}:
+        return verify_cloud_tasks_oidc(authorization)
+    raise ReportTaskAuthenticationError(
+        "Remote report worker authentication is not configured."
+    )
+
+
 class ReportJobService:
     def __init__(
         self,
@@ -451,6 +610,10 @@ class ReportJobService:
         dry_run: bool = False,
         requested_by: str | None = None,
         retry_of_job_id: str | None = None,
+        report_type: str = "social_media",
+        report_model: str = "jba",
+        platform_scope: str | None = None,
+        objective: str | None = None,
     ) -> dict:
         if not self.dispatcher.configured:
             raise ReportQueueUnavailableError(
@@ -463,6 +626,12 @@ class ReportJobService:
             dry_run=dry_run,
             requested_by=requested_by,
             retry_of_job_id=retry_of_job_id,
+            report_options={
+                "report_type": str(report_type or "social_media"),
+                "report_model": str(report_model or "jba"),
+                "platform_scope": platform_scope,
+                "objective": objective,
+            },
         )
         try:
             task_name = self.dispatcher.enqueue(job)
@@ -518,10 +687,12 @@ class ReportJobService:
         client_id: str,
         *,
         limit: int = 100,
+        report_type: str | None = None,
     ) -> list[dict]:
         return self.repository.list_for_client(
             client_id,
             limit=limit,
+            report_type=report_type,
         )
 
     def client_history_page(
@@ -530,25 +701,37 @@ class ReportJobService:
         *,
         page: int = 1,
         page_size: int = 20,
+        report_type: str | None = None,
     ) -> dict:
         return self.repository.list_for_client_paginated(
             client_id,
             page=page,
             page_size=page_size,
+            report_type=report_type,
         )
 
-    def all_history(self, *, limit: int = 100) -> list[dict]:
-        return self.repository.list_all(limit=limit)
+    def all_history(
+        self,
+        *,
+        limit: int = 100,
+        report_type: str | None = None,
+    ) -> list[dict]:
+        return self.repository.list_all(
+            limit=limit,
+            report_type=report_type,
+        )
 
     def all_history_page(
         self,
         *,
         page: int = 1,
         page_size: int = 20,
+        report_type: str | None = None,
     ) -> dict:
         return self.repository.list_all_paginated(
             page=page,
             page_size=page_size,
+            report_type=report_type,
         )
 
     def retry_job(
@@ -566,6 +749,10 @@ class ReportJobService:
             dry_run=bool(previous.get("dry_run")),
             requested_by=requested_by,
             retry_of_job_id=str(previous["id"]),
+            report_type=(previous.get("result_metadata") or {}).get("report_type", "social_media"),
+            report_model=(previous.get("result_metadata") or {}).get("report_model", "jba"),
+            platform_scope=(previous.get("result_metadata") or {}).get("platform_scope"),
+            objective=(previous.get("result_metadata") or {}).get("objective"),
         )
 
     def cancel_job(
@@ -721,6 +908,7 @@ class ReportJobWorker:
         on_stage: Callable[[str], None],
         on_presentation_created: Callable[[dict], None],
     ) -> dict:
+        options = job.get("result_metadata") or {}
         return self.generator(
             str(job["client_id"]),
             str(job["report_period_id"]),
@@ -730,6 +918,10 @@ class ReportJobWorker:
             on_presentation_created=on_presentation_created,
             existing_presentation_id=job.get("presentation_id"),
             existing_report_name=job.get("report_name"),
+            report_type=options.get("report_type", "social_media"),
+            report_model=options.get("report_model", "jba"),
+            platform_scope=options.get("platform_scope"),
+            objective=options.get("objective"),
         )
 
     def _run_generator_in_process(
@@ -763,6 +955,7 @@ class ReportJobWorker:
                     "dry_run": bool(job.get("dry_run")),
                     "existing_presentation_id": job.get("presentation_id"),
                     "existing_report_name": job.get("report_name"),
+                    **(job.get("result_metadata") or {}),
                 },
                 cancel_event,
                 child_connection,
@@ -926,6 +1119,11 @@ class ReportJobWorker:
                 )
 
             result_metadata = {
+                key: (job.get("result_metadata") or {}).get(key)
+                for key in ("report_type", "report_model", "platform_scope", "objective")
+                if (job.get("result_metadata") or {}).get(key) is not None
+            }
+            result_metadata.update({
                 key: result.get(key)
                 for key in (
                     "status",
@@ -934,7 +1132,7 @@ class ReportJobWorker:
                     "total_duration_seconds",
                 )
                 if result.get(key) is not None
-            }
+            })
             return self.repository.complete_job(
                 job_id,
                 presentation_id=result.get("presentation_id"),
