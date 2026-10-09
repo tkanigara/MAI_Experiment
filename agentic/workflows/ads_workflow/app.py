@@ -22,11 +22,12 @@ if __name__ == "__main__":
         "period_id": "2026-08-01",
         "analysis_type": "creative",
         "platform_scope": [
-            "instagram",
+            "instagram","facebook"
         ],
         "objectives": [
             "reach",
-            "profilevisit"
+            "linkclicks",
+            "leads",
         ],
         "campaign_ids": [],
         "adset_ids": [],

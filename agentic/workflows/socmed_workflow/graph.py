@@ -3,10 +3,10 @@ from langgraph.types import Send
 from workflows.socmed_workflow.state import State
 from agents.socmed_agents.retrieval import retrieval_agent
 from agents.socmed_agents.router import router_node
-from agents.socmed_agents.ig_analysis_agent import ig_analysis_agent, ig_analysis_agent_2nd
-from agents.socmed_agents.fb_analysis_agent import fb_analysis_agent, fb_analysis_agent_2nd
-from agents.socmed_agents.tt_analysis_agent import tt_analysis_agent, tt_analysis_agent_2nd
-from agents.socmed_agents.yt_analysis_agent import yt_analysis_agent, yt_analysis_agent_2nd
+from agents.socmed_agents.ig_analysis_agent import ig_analysis_agent_2nd
+from agents.socmed_agents.fb_analysis_agent import fb_analysis_agent_2nd
+from agents.socmed_agents.tt_analysis_agent import  tt_analysis_agent_2nd
+from agents.socmed_agents.yt_analysis_agent import  yt_analysis_agent_2nd
 from agents.socmed_agents.linkedin_analysis import linkedin_analysis_agent
 from agents.socmed_agents.ig_summary_agent import ig_summary_agent
 from agents.socmed_agents.fb_summary_agent import fb_summary_agent
@@ -16,7 +16,7 @@ from agents.socmed_agents.linkedin_summary_agent import linkedin_summary_agent
 from agents.socmed_agents.persist_insights import persist_insights_node
 from agents.socmed_agents.slides_generation import slides_generation_node
 from agents.socmed_agents.cached_insights import cached_insights_node
-from agents.socmed_agents.all_socmed_anlysis import all_socmed_performance_agent_2nd
+from agents.socmed_agents.all_socmed_anlysis import all_socmed_performance_agent
 
 def route_to_agents(state: State):
     return [
@@ -47,7 +47,7 @@ workflow.add_node("tt_analysis_agent", tt_analysis_agent_2nd)
 workflow.add_node("yt_analysis_agent", yt_analysis_agent_2nd)
 workflow.add_node("linkedin_analysis_agent", linkedin_analysis_agent)
 workflow.add_node("linkedin_summary_agent", linkedin_summary_agent)
-workflow.add_node("all_socmed_performance", all_socmed_performance_agent_2nd)
+workflow.add_node("all_socmed_performance", all_socmed_performance_agent)
 workflow.add_node("ig_summary_agent", ig_summary_agent)
 workflow.add_node("fb_summary_agent", fb_summary_agent)
 workflow.add_node("tt_summary_agent", tt_summary_agent)

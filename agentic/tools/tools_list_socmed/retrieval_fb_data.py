@@ -9,6 +9,10 @@ def convert_number(value):
         return int(value) if value % 1 == 0 else float(value)
     return value
 
+def pct(value):
+    """Format angka persen dari DB menjadi string, mis. 0.16 -> '0.16%'."""
+    v = to_number(value)
+    return None if v is None else f"{v:g}%"
 
 @tool
 def retrieve_kpi(client_code: str,report_date: str,platform: str) -> dict:
