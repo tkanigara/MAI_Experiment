@@ -1822,6 +1822,10 @@ label, .field-label {
 .upload-title { font-weight: 850; }
 .upload-desc { color: var(--muted); margin-top: 5px; }
 
+.social-upload-copy { min-width: 0; overflow-wrap: anywhere; }
+.social-upload-copy .upload-desc { font-size: 13px; line-height: 1.5; }
+.social-upload-filename { margin-top: 8px; font-size: 13px; font-weight: 750; }
+
 .upload-actions {
   display: flex;
   flex-direction: column;

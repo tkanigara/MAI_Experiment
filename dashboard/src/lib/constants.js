@@ -61,11 +61,11 @@ export const KPI_METRICS = {
 };
 
 export const CSV_TYPES = [
-  { key: "account", title: "Account Data", description: "General account/profile data for all platforms." },
-  { key: "competitor", title: "Competitor Data", description: "Competitor analysis data per platform in one CSV." },
-  { key: "competitor_content", title: "Competitor Content", description: "Post-level competitor content for best-content analysis.", optional: true },
-  { key: "all_content", title: "All Platform Content", description: "Post data for all connected platforms in one CSV." },
-  { key: "ig_story", title: "Instagram Stories", description: "Instagram story performance data." },
+  { key: "account", title: "Account Data", clientOwned: true, description: "Combine all of this client's social media accounts across platforms in one CSV. Include this client's accounts only." },
+  { key: "all_content", title: "Content Data", clientOwned: true, description: "Combine content from all of this client's social media accounts across platforms in one CSV. Include this client's content only; upload Instagram Stories separately below." },
+  { key: "ig_story", title: "Instagram Stories", clientOwned: true, description: "Upload Instagram Stories performance data for this client's Instagram accounts only, in one CSV." },
+  { key: "competitor", title: "Competitor Account Data", description: "Combine competitor accounts across platforms in one CSV. The CSV may contain competitors only, or both competitor and client accounts." },
+  { key: "competitor_content", title: "Competitor Content Data", description: "Combine competitor content across platforms in one CSV. The CSV may contain competitor content only, or both competitor and client content.", optional: true },
 ];
 
 const MONTH_NAMES = [

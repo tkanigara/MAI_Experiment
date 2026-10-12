@@ -249,7 +249,7 @@ export default function AddReportModal({
               </button>
             </div>
             <div className="upload-list">
-              {CSV_TYPES.map(({ key, title, description, optional }) => {
+              {CSV_TYPES.map(({ key, title, description, optional, clientOwned }) => {
                 const result = importResult?.files?.find((item) => item.slot === key);
                 const hasWarning = (result?.warnings || []).length > 0;
                 const selectedFile = files[key];
@@ -273,12 +273,17 @@ export default function AddReportModal({
                     onDrop={(event) => handleDrop(event, key)}
                   >
                     <div className="upload-icon">{displayedFilename ? "ok" : "csv"}</div>
-                    <div>
-                      <div className="upload-title">{title}</div>
-                      <div className="upload-desc">
-                        {displayedFilename || description}
-                        {result?.rows ? ` - ${result.rows} rows` : ""}
+                    <div className="social-upload-copy">
+                      <div className="upload-title">
+                        {clientOwned ? `${client?.client_name || "Client"} ${title}` : title}
                       </div>
+                      <div className="upload-desc">{description}</div>
+                      {displayedFilename && (
+                        <div className="social-upload-filename">
+                          {displayedFilename}
+                          {result?.rows ? ` - ${result.rows} rows` : ""}
+                        </div>
+                      )}
                       {!displayedFilename && <div className="drop-hint">Drop CSV here or choose a file</div>}
                       {hasStoredFile && (
                         <div className="drop-hint">Choose a new file only if this data needs to be replaced</div>
