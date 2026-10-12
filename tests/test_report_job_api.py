@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -223,18 +224,26 @@ class ReportJobApiTests(unittest.TestCase):
         )
 
     def test_internal_worker_rejects_invalid_task_identity(self):
-        with patch.object(
-            main,
-            "verify_cloud_tasks_oidc",
-            side_effect=ReportTaskAuthenticationError("invalid task token"),
+        for backend, verifier in (
+            ("cloud_tasks", "verify_cloud_tasks_oidc"),
+            ("qstash", "verify_report_task_request"),
         ):
-            response = self.client.post(
-                "/internal/report-jobs/job-1/execute",
-                headers={"Authorization": "Bearer invalid"},
-            )
-
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("invalid task token", response.json()["error"])
+            with (
+                self.subTest(backend=backend),
+                patch.dict(os.environ, {"REPORT_QUEUE_BACKEND": backend}),
+                patch.object(main, "report_job_worker") as worker,
+                patch.object(
+                    main, verifier,
+                    side_effect=ReportTaskAuthenticationError("invalid task token"),
+                ),
+            ):
+                response = self.client.post(
+                    "/internal/report-jobs/job-1/execute",
+                    headers={"Authorization": "Bearer invalid"},
+                )
+                self.assertEqual(response.status_code, 401)
+                self.assertIn("invalid task token", response.json()["error"])
+                worker.execute.assert_not_called()
 
     def test_internal_worker_executes_after_oidc_verification(self):
         worker = Mock()
@@ -244,6 +253,7 @@ class ReportJobApiTests(unittest.TestCase):
         }
 
         with (
+            patch.dict(os.environ, {"REPORT_QUEUE_BACKEND": "cloud_tasks"}),
             patch.object(main, "report_job_worker", worker),
             patch.object(main, "verify_cloud_tasks_oidc") as verify,
         ):
@@ -255,6 +265,38 @@ class ReportJobApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "completed")
         verify.assert_called_once_with("Bearer valid")
+        worker.execute.assert_called_once_with("job-1")
+
+    def test_internal_worker_executes_after_qstash_verification(self):
+        worker = Mock()
+        worker.execute.return_value = {"id": "job-1", "status": "completed"}
+        body = b'{"job_id":"job-1"}'
+        with (
+            patch.dict(os.environ, {
+                "REPORT_QUEUE_BACKEND": "qstash",
+                "REPORT_WORKER_BASE_URL": "https://reports.example.com",
+            }),
+            patch.object(main, "report_job_worker", worker),
+            patch.object(main, "verify_report_task_request") as verify,
+            patch.object(main, "verify_cloud_tasks_oidc") as verify_oidc,
+        ):
+            response = self.client.post(
+                "/internal/report-jobs/job-1/execute",
+                content=body,
+                headers={"Upstash-Signature": "signed-request"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "completed")
+        verify_oidc.assert_not_called()
+        verify.assert_called_once()
+        verification = verify.call_args.kwargs
+        self.assertIsNone(verification["authorization"])
+        self.assertEqual(verification["qstash_signature"], "signed-request")
+        self.assertEqual(verification["body"], body)
+        self.assertEqual(
+            verification["url"],
+            "https://reports.example.com/internal/report-jobs/job-1/execute",
+        )
         worker.execute.assert_called_once_with("job-1")
 
 

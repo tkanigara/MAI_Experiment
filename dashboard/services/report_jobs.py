@@ -527,10 +527,14 @@ def verify_qstash_signature(
 ) -> bool:
     expected_url = str(url or "").strip()
     current_key = str(
-        current_signing_key or os.getenv("QSTASH_CURRENT_SIGNING_KEY") or ""
+        current_signing_key
+        or os.getenv("QSTASH_CURRENT_SIGNING_KEY")
+        or ""
     ).strip()
     next_key = str(
-        next_signing_key or os.getenv("QSTASH_NEXT_SIGNING_KEY") or ""
+        next_signing_key
+        or os.getenv("QSTASH_NEXT_SIGNING_KEY")
+        or ""
     ).strip()
     raw_signature = str(signature or "").strip()
 
@@ -562,6 +566,8 @@ def verify_qstash_signature(
         raise ReportTaskAuthenticationError(
             "QStash request signature is invalid."
         ) from exc
+    # qstash 3.x returns None on success and raises SignatureError on failure.
+    # Accept True as well so injected/test receivers can use a boolean API.
     if verified is False:
         raise ReportTaskAuthenticationError(
             "QStash request signature is invalid."
@@ -578,7 +584,9 @@ def verify_report_task_request(
     backend: str | None = None,
 ):
     selected_backend = str(
-        backend if backend is not None else os.getenv("REPORT_QUEUE_BACKEND", "")
+        backend
+        if backend is not None
+        else os.getenv("REPORT_QUEUE_BACKEND", "")
     ).strip().lower()
     if selected_backend in {"qstash", "upstash", "upstash_qstash"}:
         return verify_qstash_signature(

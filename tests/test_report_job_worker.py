@@ -17,12 +17,14 @@ from report_generator_fixture import (
 )
 from dashboard.services.report_jobs import (
     CloudTasksReportTaskDispatcher,
+    QStashReportTaskDispatcher,
     ReportGenerationCancelledError,
     ReportJobAlreadyRunningError,
     ReportJobWorker,
     ReportTaskAuthenticationError,
     RetryableReportJobError,
     verify_cloud_tasks_oidc,
+    verify_qstash_signature,
 )
 
 
@@ -37,6 +39,36 @@ class FakeTasksClient:
 
     def delete_task(self, request):
         self.deleted.append(request)
+
+
+class FakeQStashMessageApi:
+    def __init__(self):
+        self.enqueued = []
+        self.cancelled = []
+
+    def enqueue_json(self, **request):
+        self.enqueued.append(request)
+        return SimpleNamespace(message_id="msg_report_job_1")
+
+    def cancel(self, message_id):
+        self.cancelled.append(message_id)
+
+
+class FakeQStashClient:
+    def __init__(self):
+        self.message = FakeQStashMessageApi()
+
+
+class FakeQStashReceiver:
+    def __init__(self, *, valid=True):
+        self.valid = valid
+        self.requests = []
+
+    def verify(self, **request):
+        self.requests.append(request)
+        if not self.valid:
+            raise ValueError("invalid signature")
+        return None
 
 
 class FakeJobRepository:
@@ -179,6 +211,94 @@ class CloudTasksDispatcherTests(unittest.TestCase):
                     "email": "other@example.iam.gserviceaccount.com",
                     "email_verified": True,
                 },
+            )
+
+
+class QStashDispatcherTests(unittest.TestCase):
+    def test_enqueue_uses_fifo_queue_and_returns_message_id(self):
+        client = FakeQStashClient()
+        dispatcher = QStashReportTaskDispatcher(
+            token="qstash-token",
+            queue="report-generation-staging",
+            worker_base_url="https://ai-report.example.com/",
+            retries=2,
+            timeout="14m",
+            client=client,
+        )
+
+        message_id = dispatcher.enqueue({"id": "job-1"})
+
+        self.assertEqual(message_id, "msg_report_job_1")
+        self.assertEqual(
+            client.message.enqueued,
+            [
+                {
+                    "queue": "report-generation-staging",
+                    "url": (
+                        "https://ai-report.example.com/internal/"
+                        "report-jobs/job-1/execute"
+                    ),
+                    "body": {"job_id": "job-1"},
+                    "retries": 2,
+                    "timeout": "14m",
+                    "label": "report-generation",
+                }
+            ],
+        )
+
+    def test_cancel_deletes_qstash_message(self):
+        client = FakeQStashClient()
+        dispatcher = QStashReportTaskDispatcher(
+            token="qstash-token",
+            queue="report-generation-staging",
+            worker_base_url="https://ai-report.example.com",
+            client=client,
+        )
+
+        self.assertTrue(dispatcher.cancel("msg_report_job_1"))
+        self.assertEqual(
+            client.message.cancelled,
+            ["msg_report_job_1"],
+        )
+
+    def test_signature_verification_uses_raw_body_and_public_url(self):
+        receiver = FakeQStashReceiver()
+
+        verified = verify_qstash_signature(
+            "signed-request",
+            body=b'{"job_id":"job-1"}',
+            url=(
+                "https://ai-report.example.com/internal/"
+                "report-jobs/job-1/execute"
+            ),
+            current_signing_key="current-key",
+            next_signing_key="next-key",
+            receiver=receiver,
+        )
+
+        self.assertTrue(verified)
+        self.assertEqual(
+            receiver.requests,
+            [
+                {
+                    "body": '{"job_id":"job-1"}',
+                    "signature": "signed-request",
+                    "url": (
+                        "https://ai-report.example.com/internal/"
+                        "report-jobs/job-1/execute"
+                    ),
+                }
+            ],
+        )
+
+        with self.assertRaises(ReportTaskAuthenticationError):
+            verify_qstash_signature(
+                "invalid-request",
+                body="{}",
+                url="https://ai-report.example.com/internal/worker",
+                current_signing_key="current-key",
+                next_signing_key="next-key",
+                receiver=FakeQStashReceiver(valid=False),
             )
 
 

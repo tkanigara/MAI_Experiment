@@ -1222,9 +1222,8 @@ async def execute_internal_report_job(job_id: str, request: Request):
         raise HTTPException(status_code=401, detail=str(exc))
 
     try:
-        return json_response(
-            await run_in_threadpool(report_job_worker.execute, job_id)
-        )
+        result = await run_in_threadpool(report_job_worker.execute, job_id)
+        return json_response(result)
     except ReportJobNotFoundError:
         # A task for a deleted job is a permanent no-op. A 2xx response stops
         # Stop the queue provider retrying an object that no longer exists.
