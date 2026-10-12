@@ -9,7 +9,7 @@ function MenuItem({ title, description, ...props }) {
   );
 }
 
-function HeaderMenu({ label, panelLabel, children }) {
+function HeaderMenu({ label, panelLabel, icon, className = "", children }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -23,8 +23,9 @@ function HeaderMenu({ label, panelLabel, children }) {
       document.removeEventListener("mousedown", close);
     };
   }, []);
-  return <div className="header-menu" ref={ref}>
+  return <div className={`header-menu ${className}`.trim()} ref={ref}>
     <button className="menu-trigger" type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      {icon}
       <span>{label}</span>
       <span className="dropdown-chevron" aria-hidden="true" />
     </button>
@@ -35,7 +36,7 @@ function HeaderMenu({ label, panelLabel, children }) {
   </div>;
 }
 
-export default function Header({ activeSection, workspace, currentClient, onNavigate, onOpenMetricSettings }) {
+export default function Header({ activeSection, workspace, currentClient, onNavigate, onOpenMetricSettings, user, onSignOut }) {
   const isAds = workspace === "ads";
   const homePath = isAds ? "/ads/clients" : "/social/clients";
   const title = workspace
@@ -71,6 +72,20 @@ export default function Header({ activeSection, workspace, currentClient, onNavi
             </HeaderMenu>
           </>
         )}
+        {user && <HeaderMenu
+          className="user-menu"
+          label={user.name?.split(" ")[0] || "Account"}
+          panelLabel="Signed in account"
+          icon={user.picture
+            ? <img className="header-user-avatar" src={user.picture} alt="" referrerPolicy="no-referrer" />
+            : <span className="header-user-avatar fallback" aria-hidden="true">{(user.name || user.email || "M").slice(0, 1).toUpperCase()}</span>}
+        >
+          <div className="user-menu-identity" role="presentation">
+            <strong>{user.name || "MAI User"}</strong>
+            <span>{user.email}</span>
+          </div>
+          <MenuItem title="Sign out" description="End this dashboard session" onClick={onSignOut} />
+        </HeaderMenu>}
       </nav>
     </header>
   );

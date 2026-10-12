@@ -33,6 +33,8 @@ import ReportJobsPage, {
   reportJobStatusLabel,
 } from "./pages/ReportJobsPage";
 import WorkspaceSelectorPage from "./pages/WorkspaceSelectorPage";
+import LoginPage from "./pages/LoginPage";
+import maiLogo from "./assets/logo-mai.svg";
 
 function pathParts() {
   return window.location.pathname.split("/").filter(Boolean);
@@ -108,6 +110,9 @@ export default function App() {
   const [reportElapsed, setReportElapsed] = useState(0);
   const [reportDataLock, setReportDataLock] = useState(null);
   const [error, setError] = useState("");
+  const [authStatus, setAuthStatus] = useState("loading");
+  const [authUser, setAuthUser] = useState(null);
+  const [authMode, setAuthMode] = useState("google");
 
   const industries = useMemo(
     () => [...new Set(clients.map((client) => client.industry).filter(Boolean))],
@@ -238,6 +243,54 @@ export default function App() {
     setToast(message);
     window.setTimeout(() => setToast(""), 2400);
   }
+
+  async function signOut() {
+    try {
+      await api("/api/auth/logout", {
+        method: "POST",
+        body: JSON.stringify({}),
+        skipAuthRedirect: true,
+      });
+    } catch (logoutError) {
+      if (logoutError.status !== 401) {
+        showToast("Sign out failed. Please try again.");
+        return;
+      }
+    }
+    window.location.replace("/login");
+  }
+
+  useEffect(() => {
+    let active = true;
+    api("/api/auth/config", { skipAuthRedirect: true })
+      .then((config) => {
+        if (active) setAuthMode(config.mode || "google");
+      })
+      .catch(() => {
+        // Keep the secure Google default when the public config is unavailable.
+      });
+    api("/api/auth/me", { skipAuthRedirect: true })
+      .then((result) => {
+        if (!active) return;
+        setAuthUser(result.user);
+        setAuthStatus("authenticated");
+      })
+      .catch((authError) => {
+        if (!active) return;
+        setAuthUser(null);
+        setAuthStatus(authError.status === 401 ? "unauthenticated" : "unavailable");
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || window.location.pathname !== "/login") return;
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("next") || "/";
+    const target = requested.startsWith("/") && !requested.startsWith("//") ? requested : "/";
+    navigate(target, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus]);
 
   function formatElapsed(seconds) {
     const safeSeconds = Math.max(0, Number(seconds) || 0);
@@ -763,6 +816,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (authStatus !== "authenticated") return;
     setError("");
     setSelectedClient(null);
     setProfiles([]);
@@ -779,7 +833,7 @@ export default function App() {
       navigate(`/social${window.location.pathname}${window.location.search}`, true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace]);
+  }, [workspace, authStatus]);
 
   useEffect(() => {
     if (!isAdsWorkspace || !selectedClient?.id || !currentAdsPeriod?.id) {
@@ -1235,6 +1289,26 @@ export default function App() {
     );
   }
 
+  if (authStatus === "loading") {
+    return (
+      <main className="auth-loading" aria-live="polite">
+        <img className="auth-loading-logo" src={maiLogo} alt="Mahakarya Adi Indonesia" />
+        <p>Checking your session...</p>
+      </main>
+    );
+  }
+
+  if (authStatus !== "authenticated" || window.location.pathname === "/login") {
+    const params = new URLSearchParams(window.location.search);
+    return (
+      <LoginPage
+        authMode={authMode}
+        errorCode={authStatus === "unavailable" ? "auth_unavailable" : params.get("error")}
+        nextPath={params.get("next") || "/"}
+      />
+    );
+  }
+
   return (
     <>
       <Header
@@ -1243,6 +1317,8 @@ export default function App() {
         currentClient={selectedClient}
         onNavigate={navigate}
         onOpenMetricSettings={() => setShowMetricSettings(true)}
+        user={authUser}
+        onSignOut={signOut}
       />
       <main className="page-shell">
         {error ? <div className="empty">{error}</div> : content}
