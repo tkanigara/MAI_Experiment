@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import requests
 
+from agentic.config.dashboard_auth import dashboard_read_headers
+
 @dataclass(frozen=True)
 class DashboardClientConfig:
     base_url: str = "http://127.0.0.1:8000"
@@ -48,12 +50,15 @@ class AdsDashboardApiClient:
     ) -> Any:
 
         url = f"{self.config.base_url}/{path.lstrip('/')}"
+        headers = dashboard_read_headers(self.config.base_url)
 
         try:
             response = self.session.get(
                 url,
                 params=dict(params or {}),
                 timeout=self.config.timeout_seconds,
+                **({"headers": headers} if headers else {}),
+                allow_redirects=False,
             )
         except requests.RequestException as exc:
             raise AdsDashboardApiClientError(
@@ -68,7 +73,7 @@ class AdsDashboardApiClient:
                 f"(HTTP {response.status_code})."
             ) from exc
 
-        if response.status_code >= 400:
+        if response.status_code >= 300:
             raise AdsDashboardApiClientError(
                 f"Dashboard request failed "
                 f"(HTTP {response.status_code}): "

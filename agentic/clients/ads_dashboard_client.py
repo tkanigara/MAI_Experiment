@@ -15,6 +15,8 @@ from typing import Any, Mapping
 
 import requests
 
+from agentic.config.dashboard_auth import dashboard_read_headers
+
 
 class AdsDashboardClientError(RuntimeError):
     """A safe, user-facing error returned by the dashboard API."""
@@ -54,11 +56,14 @@ class AdsDashboardClient:
 
     def _get(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
         url = f"{self.config.base_url}/{path.lstrip('/')}"
+        headers = dashboard_read_headers(self.config.base_url)
         try:
             response = self.session.get(
                 url,
                 params=dict(params or {}),
                 timeout=self.config.timeout_seconds,
+                **({"headers": headers} if headers else {}),
+                allow_redirects=False,
             )
         except requests.RequestException as exc:
             raise AdsDashboardClientError(
@@ -72,7 +77,7 @@ class AdsDashboardClient:
                 f"The Ads dashboard returned an invalid response (HTTP {response.status_code})."
             ) from exc
 
-        if response.status_code >= 400:
+        if response.status_code >= 300:
             detail = payload.get("detail") if isinstance(payload, dict) else None
             message = str(detail or f"Dashboard request failed (HTTP {response.status_code}).")
             raise AdsDashboardClientError(message[:500])

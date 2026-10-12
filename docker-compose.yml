@@ -52,7 +52,7 @@ services:
       DATABASE_URL: postgresql+psycopg://mai_user:mai_password@postgres:5432/mai_socmed_report
 
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
     volumes:
       - ./credentials.json:/app/credentials.json:ro

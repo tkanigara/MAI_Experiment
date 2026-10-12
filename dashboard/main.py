@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from starlette.concurrency import run_in_threadpool
@@ -32,6 +34,14 @@ try:
     from dashboard.services.csv_import import import_report_csv
     from dashboard.services.ads_workspace import ads_platform_catalog
     from dashboard.services.ads_objectives import objective_catalog
+    from dashboard.services.auth import (
+        CSRF_COOKIE_NAME,
+        OAUTH_STATE_COOKIE_NAME,
+        SESSION_COOKIE_NAME,
+        AuthError,
+        GoogleOAuthService,
+        safe_next_path,
+    )
     from dashboard.services.meta_ads_import import import_meta_ads_csv
     from dashboard.services.meta_ads_api import MetaAdsApiClient, MetaAdsApiError, MetaAdsSyncService
     from dashboard.services.kpi_service import upsert_kpi_target
@@ -70,6 +80,14 @@ except ModuleNotFoundError:
     from services.csv_import import import_report_csv
     from services.ads_workspace import ads_platform_catalog
     from services.ads_objectives import objective_catalog
+    from services.auth import (
+        CSRF_COOKIE_NAME,
+        OAUTH_STATE_COOKIE_NAME,
+        SESSION_COOKIE_NAME,
+        AuthError,
+        GoogleOAuthService,
+        safe_next_path,
+    )
     from services.meta_ads_import import import_meta_ads_csv
     from services.meta_ads_api import MetaAdsApiClient, MetaAdsApiError, MetaAdsSyncService
     from services.kpi_service import upsert_kpi_target
@@ -104,7 +122,126 @@ report_jobs = ReportJobService(
     report_job_repository,
     build_report_task_dispatcher(report_job_worker.execute),
 )
-app = FastAPI(title="MAI Social Media Dashboard API")
+auth_service = GoogleOAuthService(repository.engine)
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    if not getattr(application.state, "auth_test_user", None):
+        auth_service.validate_runtime()
+    yield
+
+
+app = FastAPI(title="MAI Social Media Dashboard API", lifespan=lifespan)
+
+
+def _authentication_required() -> JSONResponse:
+    return JSONResponse(
+        content={
+            "error": "Authentication is required.",
+            "code": "AUTH_REQUIRED",
+        },
+        status_code=401,
+    )
+
+
+def _login_redirect(request: Request) -> RedirectResponse:
+    destination = safe_next_path(
+        request.url.path
+        + (f"?{request.url.query}" if request.url.query else "")
+    )
+    return RedirectResponse(
+        url=f"/login?{urlencode({'next': destination})}",
+        status_code=303,
+    )
+
+
+@app.middleware("http")
+async def dashboard_authentication(request: Request, call_next):
+    path = request.url.path
+    test_user = getattr(request.app.state, "auth_test_user", None)
+    if test_user:
+        request.state.auth_user = test_user
+        request.state.auth_session = {"test_override": True}
+        return await call_next(request)
+
+    if auth_service.auth_mode() in {"local", "disabled"}:
+        if request.url.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            return JSONResponse(
+                {"error": "Local development access requires localhost.", "code": "LOCAL_ONLY"},
+                status_code=403,
+            )
+
+    local_user = auth_service.local_development_user()
+    if local_user:
+        request.state.auth_user = local_user
+        request.state.auth_session = {"local_auth_disabled": True}
+        return await call_next(request)
+
+    if (
+        path == "/healthz"
+        or path == "/favicon.ico"
+        or path.rstrip("/") == "/login"
+        or path.startswith("/assets/")
+        or path.startswith("/internal/")
+        or path in {
+            "/api/auth/config",
+            "/api/auth/google/start",
+            "/api/auth/google/callback",
+            "/api/auth/local/login",
+        }
+    ):
+        return await call_next(request)
+
+    # Service credentials grant only Ads retrieval reads, never browser sessions
+    # or mutations. Internal queue workers retain their own authentication.
+    if (
+        request.method == "GET"
+        and (path == "/api/clients" or path.startswith("/api/ads/clients/"))
+        and auth_service.retrieval_authenticated(request.headers.get("Authorization"))
+    ):
+        request.state.auth_user = {"id": "retrieval-service", "name": "Report retrieval"}
+        request.state.auth_session = {"service_read_only": True}
+        return await call_next(request)
+
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    try:
+        session = auth_service.current_session(session_token)
+    except Exception:
+        return JSONResponse(
+            content={
+                "error": "Authentication service is unavailable.",
+                "code": "AUTH_UNAVAILABLE",
+            },
+            status_code=503,
+        ) if path.startswith("/api/") else _login_redirect(request)
+
+    if not session:
+        return _authentication_required() if path.startswith("/api/") else _login_redirect(request)
+
+    request.state.auth_session = session
+    request.state.auth_user = {
+        "id": str(session["user_id"]),
+        "email": session["email"],
+        "name": session["display_name"],
+        "picture": session.get("avatar_url"),
+    }
+    if (
+        path.startswith("/api/")
+        and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and not auth_service.validate_csrf(
+            session,
+            request.headers.get("X-CSRF-Token"),
+        )
+    ):
+        return JSONResponse(
+            content={
+                "error": "The security token is missing or invalid. Refresh and try again.",
+                "code": "CSRF_INVALID",
+            },
+            status_code=403,
+        )
+    return await call_next(request)
 
 
 @app.exception_handler(HTTPException)
@@ -177,6 +314,146 @@ def hydrate_meta_account_payload(payload: dict | None) -> dict:
         raise ValueError("Inactive Meta Ad Accounts cannot be selected: " + ", ".join(inactive))
     result["_meta_ad_accounts"] = [indexed[item] for item in selected]
     return result
+
+
+def _auth_error_redirect(code: str) -> RedirectResponse:
+    return RedirectResponse(
+        url=f"/login?{urlencode({'error': code.lower()})}",
+        status_code=303,
+    )
+
+
+@app.get("/healthz")
+def healthcheck():
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/config")
+def get_auth_config():
+    return {"mode": auth_service.auth_mode()}
+
+
+@app.post("/api/auth/local/login")
+def local_development_login(request: Request, payload: Optional[dict] = None):
+    try:
+        result = auth_service.create_local_session(
+            (payload or {}).get("next_path"),
+            request.headers.get("User-Agent"),
+        )
+    except AuthError as exc:
+        status_code = 404 if exc.code == "AUTH_MODE_NOT_AVAILABLE" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc))
+    max_age = int(result["session_ttl_days"]) * 24 * 60 * 60
+    response = JSONResponse(content={"next_path": result["next_path"]})
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        result["session_token"],
+        max_age=max_age,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        path="/",
+    )
+    response.set_cookie(
+        CSRF_COOKIE_NAME,
+        result["csrf_token"],
+        max_age=max_age,
+        httponly=False,
+        secure=False,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.get("/api/auth/google/start")
+def start_google_login(next: Optional[str] = None):
+    try:
+        authorization_url, state = auth_service.begin_login(next)
+        config = auth_service.config()
+    except AuthError as exc:
+        return _auth_error_redirect(exc.code)
+    response = RedirectResponse(authorization_url, status_code=303)
+    response.set_cookie(
+        OAUTH_STATE_COOKIE_NAME,
+        state,
+        max_age=600,
+        httponly=True,
+        secure=config.secure_cookie,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.get("/api/auth/google/callback")
+def complete_google_login(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    if error:
+        response = _auth_error_redirect("oauth_cancelled")
+        response.delete_cookie(OAUTH_STATE_COOKIE_NAME, path="/")
+        return response
+    try:
+        result = auth_service.complete_login(
+            code,
+            state,
+            request.cookies.get(OAUTH_STATE_COOKIE_NAME),
+            request.headers.get("User-Agent"),
+        )
+        config = auth_service.config()
+    except AuthError as exc:
+        response = _auth_error_redirect(exc.code)
+        response.delete_cookie(OAUTH_STATE_COOKIE_NAME, path="/")
+        return response
+
+    response = RedirectResponse(result["next_path"], status_code=303)
+    max_age = config.session_ttl_days * 24 * 60 * 60
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        result["session_token"],
+        max_age=max_age,
+        httponly=True,
+        secure=config.secure_cookie,
+        samesite="lax",
+        path="/",
+    )
+    response.set_cookie(
+        CSRF_COOKIE_NAME,
+        result["csrf_token"],
+        max_age=max_age,
+        httponly=False,
+        secure=config.secure_cookie,
+        samesite="lax",
+        path="/",
+    )
+    response.delete_cookie(OAUTH_STATE_COOKIE_NAME, path="/")
+    return response
+
+
+@app.get("/api/auth/me")
+def get_current_user(request: Request):
+    session = request.state.auth_session
+    user = request.state.auth_user
+    expires_at = session.get("expires_at")
+    return json_response(
+        {
+            "user": user,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        }
+    )
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request):
+    auth_service.revoke(request.cookies.get(SESSION_COOKIE_NAME))
+    response = JSONResponse(content={"status": "signed_out"})
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(CSRF_COOKIE_NAME, path="/")
+    return response
 
 
 @app.get("/api/clients")
