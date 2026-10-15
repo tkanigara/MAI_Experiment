@@ -98,9 +98,9 @@ class AgenticLinkedInIntegrationTests(unittest.TestCase):
         fake_gemini = ModuleType("models.gemini")
         fake_gemini.llm = Mock()
         with patch.dict(sys.modules, {"models.gemini": fake_gemini}):
-            sys.modules.pop("agents.linkedin_analysis", None)
-            module = importlib.import_module("agents.linkedin_analysis")
-        self.addCleanup(sys.modules.pop, "agents.linkedin_analysis", None)
+            sys.modules.pop("agents.socmed_agents.linkedin_analysis", None)
+            module = importlib.import_module("agents.socmed_agents.linkedin_analysis")
+        self.addCleanup(sys.modules.pop, "agents.socmed_agents.linkedin_analysis", None)
 
         analysis = {
             "kpi_analysis": "KPI analysis",
@@ -132,7 +132,7 @@ class AgenticLinkedInIntegrationTests(unittest.TestCase):
             patch.object(module, "retrieve_content_by_bucket", generic_tool),
             patch.object(module, "retrieve_competitor_analysis", generic_tool),
         ):
-            state_module = importlib.import_module("CentralArch.state")
+            state_module = importlib.import_module("workflows.socmed_workflow.state")
             state = state_module.State(
                 request=state_module.Request(
                     user_intent="Generate report",
@@ -162,8 +162,8 @@ class AgenticLinkedInIntegrationTests(unittest.TestCase):
         )
 
     def test_router_routes_linkedin_without_unimplemented_threads_agent(self):
-        state_module = importlib.import_module("CentralArch.state")
-        router = importlib.import_module("agents.router")
+        state_module = importlib.import_module("workflows.socmed_workflow.state")
+        router = importlib.import_module("agents.socmed_agents.router")
         state = state_module.State(
             request=state_module.Request(user_intent="Generate report"),
             Metadata=state_module.MetaData(linkedin=True, threads=True),
@@ -174,8 +174,8 @@ class AgenticLinkedInIntegrationTests(unittest.TestCase):
         self.assertEqual(result.routes, ["linkedin_analysis_agent"])
 
     def test_linkedin_insights_are_forwarded_to_slides(self):
-        state_module = importlib.import_module("CentralArch.state")
-        slides = importlib.import_module("agents.slides_generation")
+        state_module = importlib.import_module("workflows.socmed_workflow.state")
+        slides = importlib.import_module("agents.socmed_agents.slides_generation")
         state = state_module.State(
             request=state_module.Request(user_intent="Generate report"),
             Metadata=state_module.MetaData(linkedin=True),
@@ -209,7 +209,7 @@ class AgenticLinkedInIntegrationTests(unittest.TestCase):
         )
 
     def test_linkedin_is_in_cache_and_data_version(self):
-        cached = importlib.import_module("agents.cached_insights")
+        cached = importlib.import_module("agents.socmed_agents.cached_insights")
         repository = importlib.import_module("repositories.report_insights")
         cursor = MagicMock()
         cursor.fetchone.return_value = (1, None)

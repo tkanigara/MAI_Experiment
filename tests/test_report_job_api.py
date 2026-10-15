@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from test_support import OfflineTestCase
+
 import os
 import sys
 import unittest
@@ -18,7 +20,7 @@ from dashboard.services.report_jobs import (
 )
 
 
-class ReportJobApiTests(unittest.TestCase):
+class ReportJobApiTests(OfflineTestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(main.app)

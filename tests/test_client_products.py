@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from test_support import OfflineTestCase
+
 import sys
 import unittest
 from pathlib import Path
@@ -17,7 +19,7 @@ from dashboard.services.ads_workspace import (
 )
 
 
-class ClientProductApiTests(unittest.TestCase):
+class ClientProductApiTests(OfflineTestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(main.app)
@@ -193,7 +195,7 @@ class ClientProductApiTests(unittest.TestCase):
         )
 
 
-class AdsWorkspaceContractTests(unittest.TestCase):
+class AdsWorkspaceContractTests(OfflineTestCase):
     def test_platform_configuration_is_ordered_and_validated(self):
         configuration = ads_product_configuration(
             ["tiktok", "instagram", "youtube"]
@@ -254,7 +256,7 @@ class AdsWorkspaceContractTests(unittest.TestCase):
         )
         self.assertEqual(
             [goal["key"] for goal in rows["youtube"]["goals"]],
-            ["video_views"],
+            ["impressions", "video_views"],
         )
 
     def test_catalog_marks_unconfigured_platforms(self):
@@ -320,7 +322,7 @@ class AdsWorkspaceContractTests(unittest.TestCase):
         self.assertEqual(configuration["goals"]["facebook"][0]["budget_monthly"], 20000000)
 
 
-class ClientProductSchemaTests(unittest.TestCase):
+class ClientProductSchemaTests(OfflineTestCase):
     def test_ads_periods_do_not_reference_social_periods_or_etl_runs(self):
         sql = (
             Path(__file__).resolve().parents[1]

@@ -1,3 +1,4 @@
+from test_support import OfflineTestCase
 import unittest
 from unittest.mock import patch
 
@@ -59,7 +60,7 @@ def payload(objective="leads", platform="instagram"):
     }
 
 
-class AdsSlidesV4Tests(unittest.TestCase):
+class AdsSlidesV4Tests(OfflineTestCase):
     def test_mapping_uses_v4_creative_and_three_content_contract(self):
         mapping = build_ads_mapping(payload())
         self.assertEqual(mapping["{{CREATIVE_ROW_1_NAME}}"], "Creative 1")

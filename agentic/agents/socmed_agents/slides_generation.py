@@ -10,6 +10,7 @@ def state_insight_overrides(state: State) -> list[dict]:
         "facebook": state.facebook_result,
         "tiktok": state.tiktok_result,
         "youtube": state.youtube_result,
+        "linkedin": state.linkedin_result,
     }
     insight_keys = (
         "kpi_analysis",
@@ -38,6 +39,7 @@ def state_insight_overrides(state: State) -> list[dict]:
         "facebook": state.summary_facebook,
         "tiktok": state.summary_tiktok,
         "youtube": state.summary_youtube,
+        "linkedin": state.summary_linkedin,
     }
     for platform, summary in platform_summaries.items():
         if not getattr(state.Metadata, platform, False):

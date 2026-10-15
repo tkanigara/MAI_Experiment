@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from test_support import OfflineTestCase
+
 import unittest
 from datetime import date
 from unittest.mock import MagicMock, Mock, patch
@@ -24,7 +26,7 @@ class FakeMappingResult:
         return self._first
 
 
-class ReportPeriodUpdateTests(unittest.TestCase):
+class ReportPeriodUpdateTests(OfflineTestCase):
     def setUp(self):
         self.repository = object.__new__(DashboardRepository)
         self.connection = MagicMock()
@@ -98,7 +100,7 @@ class ReportPeriodUpdateTests(unittest.TestCase):
             )
 
 
-class ReportPeriodUpdateApiTests(unittest.TestCase):
+class ReportPeriodUpdateApiTests(OfflineTestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(main.app)

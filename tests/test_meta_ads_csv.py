@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from test_support import OfflineTestCase
+
 import io
 import unittest
 from decimal import Decimal
@@ -78,7 +80,7 @@ class SnapshotRepository:
         }
 
 
-class MetaAdsCsvTests(unittest.TestCase):
+class MetaAdsCsvTests(OfflineTestCase):
     @classmethod
     def setUpClass(cls):
         cls.paths = fixture_paths()
@@ -248,7 +250,7 @@ class MetaAdsCsvTests(unittest.TestCase):
             parse_meta_ads_csv(upload, expected_type="campaign")
 
 
-class MetaAdsApiTests(unittest.TestCase):
+class MetaAdsApiTests(OfflineTestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(main.app)
